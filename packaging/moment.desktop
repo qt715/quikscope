@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=moment
+GenericName=Screenshot annotator
+Comment=Open the last screenshot in the moment editor
+Exec=moment open-last
+Icon=camera-photo
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=screenshot;annotate;capture;
+StartupNotify=false
+Actions=region;screen;
+
+[Desktop Action region]
+Name=Capture a region
+Exec=moment capture region
+
+[Desktop Action screen]
+Name=Capture all screens
+Exec=moment capture screen

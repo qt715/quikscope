@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Nothing in CI reads debug info; dropping it keeps caches and links small.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: System dependencies
+        run: scripts/ci-deps-ubuntu.sh
+      - run: cargo fmt --all --check
+      # `e2e` pulls in the test helper binary and suite, so they are linted too.
+      - run: cargo clippy --locked --all-targets --features e2e -- --deny warnings
+
+  test:
+    name: Unit, regression and rendering tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: System dependencies (incl. Mesa lavapipe for offscreen GPUI rendering)
+        run: scripts/ci-deps-ubuntu.sh
+      - name: Tests
+        run: cargo test --locked
+      - name: Upload regression diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-diffs
+          path: /tmp/moment-*.png
+          if-no-files-found: ignore
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read rust-version
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: System dependencies
+        run: scripts/ci-deps-ubuntu.sh
+      - run: cargo check --locked --all-targets
+
+  e2e:
+    name: End-to-end (headless labwc)
+    runs-on: ubuntu-24.04
+    # Arch ships the same labwc/wlroots generation the suite is developed
+    # against; Ubuntu's labwc lags several releases behind.
+    container:
+      image: archlinux:latest
+    steps:
+      - name: System dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git rustup labwc grim dbus \
+            mesa vulkan-swrast wayland libxkbcommon fontconfig
+          rustup default stable
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: End-to-end suite
+        env:
+          MOMENT_E2E: "1"
+          MOMENT_E2E_COMPOSITOR: labwc
+        run: cargo test --locked --features e2e --test e2e -- --test-threads=4
+
+  release:
+    name: Release build
+    runs-on: ubuntu-24.04
+    needs: [lint, test, e2e]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: System dependencies
+        run: scripts/ci-deps-ubuntu.sh
+      - run: cargo build --locked --release
+      - name: Package
+        run: |
+          mkdir -p dist/moment
+          cp target/release/moment packaging/moment.service packaging/moment.desktop \
+            README.md LICENSE-MIT LICENSE-APACHE dist/moment/
+          tar -C dist -czf moment-x86_64-linux.tar.gz moment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moment-x86_64-linux
+          path: moment-x86_64-linux.tar.gz
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: moment-x86_64-linux.tar.gz

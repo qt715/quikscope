@@ -1,0 +1,84 @@
+[package]
+name = "moment"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Fast Wayland screenshot daemon with a GPUI annotation editor"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["screenshot", "wayland", "gpui", "annotation"]
+categories = ["multimedia::images", "gui"]
+default-run = "moment"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "moment"
+path = "src/main.rs"
+
+[features]
+# Builds the end-to-end suite and its Wayland input helper. Off by default so
+# `cargo install` never installs the helper and plain `cargo test` needs no
+# compositor.
+e2e = ["dep:wayland-protocols-misc"]
+
+# Plays the user (virtual pointer/keyboard, clipboard, wallpaper) inside a
+# headless compositor for the e2e suite.
+[[bin]]
+name = "moment-e2e-helper"
+path = "tests/support/e2e_helper.rs"
+required-features = ["e2e"]
+test = false
+doc = false
+
+[[test]]
+name = "e2e"
+path = "tests/e2e.rs"
+required-features = ["e2e"]
+
+[dependencies]
+anyhow = "1"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
+futures = "0.3"
+libc = "0.2"
+gpui = { package = "gpui-pre", version = "=0.3.10" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["wayland"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+log = "0.4"
+lyon = "1"
+memmap2 = "0.9"
+png = "0.18"
+rustix = { version = "1", features = ["event", "fs", "pipe"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+uuid = { version = "1", features = ["v5"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+ttf-parser = "0.25"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
+zbus = "5"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["wayland", "test-support"] }
+tempfile = "3"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = false
+strip = "debuginfo"
+
+# Image paths (crop, pixelate, PNG encode, raster export) dominate test time
+# in debug builds; optimize this crate too so tests resemble release timing.
+[profile.test]
+opt-level = 1

@@ -1,0 +1,813 @@
+//! The long-running daemon: owns the GPUI application (so editor windows
+//! open without GPU start-up cost), the capture/clipboard/notification
+//! threads, recent shots, and the IPC socket.
+
+use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context as _, Result, anyhow, bail};
+use futures::StreamExt as _;
+use futures::channel::{mpsc, oneshot};
+use gpui::{
+    App, AppContext as _, AsyncApp, BorrowAppContext as _, Bounds, Entity, Global, QuitMode,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, layer_shell,
+    point, px, size,
+};
+
+use crate::cache::LastCapture;
+use crate::capture::{Capturer, Composed, Snapshot, hyprland};
+use crate::clipboard::Clipboard;
+use crate::config::{self, Config};
+use crate::document::Document;
+use crate::geom::IRect;
+use crate::ipc::{CaptureOptions, Mode, Request, Response, Switch};
+use crate::notify::Notifier;
+use crate::raster::{Compression, Image};
+use crate::ui::editor::{Editor, EditorServices};
+use crate::ui::overlay::{Overlay, Selection};
+use crate::ui::{self, Assets, Shot};
+
+/// Shots kept in memory (newest last). Older ones remain reachable through
+/// the on-disk cache only for the most recent capture.
+const KEEP_SHOTS: usize = 8;
+
+enum Msg {
+    Request(Request, oneshot::Sender<Response>),
+    /// A notification was clicked.
+    OpenShot(u64),
+}
+
+struct Daemon {
+    config: Arc<Config>,
+    capturer: Option<Capturer>,
+    clipboard: Option<Clipboard>,
+    notifier: Option<Notifier>,
+    /// Sole writer of the `open-last` cache file.
+    cache: LastCapture,
+    shots: VecDeque<Arc<Shot>>,
+    docs: HashMap<u64, Entity<Document>>,
+    editors: HashMap<u64, WindowHandle<Editor>>,
+    next_id: u64,
+    selecting: bool,
+    /// Capture notifications; starts from the config, changed by
+    /// `moment notifications …` (which also persists it).
+    notify: bool,
+}
+
+impl Global for Daemon {}
+
+/// Binds the socket, refusing to replace a live daemon.
+pub fn bind(socket: &Path) -> Result<UnixListener> {
+    if socket.exists() {
+        if UnixStream::connect(socket).is_ok() {
+            bail!(
+                "a moment daemon is already listening on {}",
+                socket.display()
+            );
+        }
+        std::fs::remove_file(socket)
+            .with_context(|| format!("removing stale socket {}", socket.display()))?;
+    }
+    if let Some(dir) = socket.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let listener =
+        UnixListener::bind(socket).with_context(|| format!("binding {}", socket.display()))?;
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
+pub fn run(socket: PathBuf) -> Result<()> {
+    let started = Instant::now();
+    let config = Arc::new(Config::load()?);
+    let listener = bind(&socket)?;
+    let (tx, rx) = mpsc::unbounded::<Msg>();
+    spawn_listener(listener, tx.clone());
+
+    // Background services connect concurrently with GPUI start-up.
+    let services = std::thread::spawn({
+        let tx = tx.clone();
+        move || {
+            let capturer = Capturer::spawn()
+                .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
+                .ok();
+            let clipboard = Clipboard::spawn()
+                .map_err(|e| log::warn!("clipboard unavailable: {e:#}"))
+                .ok();
+            let notifier = Notifier::spawn(move |a| {
+                let _ = tx.unbounded_send(Msg::OpenShot(a.shot));
+            })
+            .map_err(|e| log::warn!("notifications unavailable: {e:#}"))
+            .ok();
+            (capturer, clipboard, notifier)
+        }
+    });
+
+    let socket_for_exit = socket.clone();
+    gpui_platform::application()
+        .with_assets(Assets)
+        .with_quit_mode(QuitMode::Explicit)
+        .run(move |cx: &mut App| {
+            ui::init(cx);
+            let (capturer, clipboard, notifier) = services.join().unwrap_or((None, None, None));
+            cx.set_global(EditorServices {
+                config: config.clone(),
+                clipboard: clipboard.clone(),
+            });
+            cx.set_global(Daemon {
+                notify: config.notify,
+                config,
+                capturer,
+                clipboard,
+                notifier,
+                cache: LastCapture::spawn(config::last_capture_path()),
+                shots: VecDeque::new(),
+                docs: HashMap::new(),
+                editors: HashMap::new(),
+                next_id: 1,
+                selecting: false,
+            });
+            prewarm_gpu(cx);
+            log::info!(
+                "daemon ready on {} in {:.0}ms",
+                socket.display(),
+                started.elapsed().as_secs_f64() * 1e3
+            );
+            cx.spawn(async move |cx| {
+                let mut rx = rx;
+                while let Some(msg) = rx.next().await {
+                    match msg {
+                        Msg::Request(req, reply) => {
+                            cx.spawn(async move |cx| {
+                                let quit = req == Request::Quit;
+                                let response = handle(req, cx).await;
+                                let _ = reply.send(response);
+                                if quit {
+                                    // Give the IPC thread a moment to flush the reply.
+                                    cx.background_executor()
+                                        .timer(Duration::from_millis(20))
+                                        .await;
+                                    cx.update(|cx| cx.quit());
+                                }
+                            })
+                            .detach();
+                        }
+                        Msg::OpenShot(id) => {
+                            cx.update(|cx| {
+                                if let Err(e) = open_editor(id, cx) {
+                                    log::error!("opening editor: {e:#}");
+                                }
+                            });
+                        }
+                    }
+                }
+            })
+            .detach();
+        });
+    let _ = std::fs::remove_file(socket_for_exit);
+    Ok(())
+}
+
+/// Opens and immediately closes an invisible 1×1 layer surface so the GPU
+/// device, swapchain format and shader pipelines exist before the first
+/// capture needs a window.
+fn prewarm_gpu(cx: &mut App) {
+    struct Blank;
+    impl gpui::Render for Blank {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+    let started = Instant::now();
+    let opened = cx.open_window(
+        WindowOptions {
+            titlebar: None,
+            focus: false,
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1.), px(1.)),
+            })),
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(layer_shell::LayerShellOptions {
+                namespace: "moment-prewarm".into(),
+                layer: layer_shell::Layer::Background,
+                anchor: layer_shell::Anchor::TOP | layer_shell::Anchor::LEFT,
+                keyboard_interactivity: layer_shell::KeyboardInteractivity::None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        |_, cx| cx.new(|_| Blank),
+    );
+    match opened {
+        Ok(handle) => {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                log::debug!(
+                    "GPU prewarmed in {:.0}ms",
+                    started.elapsed().as_secs_f64() * 1e3
+                );
+            })
+            .detach();
+        }
+        Err(e) => log::debug!("GPU prewarm skipped: {e:#}"),
+    }
+}
+
+fn spawn_listener(listener: UnixListener, tx: mpsc::UnboundedSender<Msg>) {
+    std::thread::Builder::new()
+        .name("moment-ipc".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let tx = tx.clone();
+                // One thread per connection: an interactive selection must not
+                // block `open-last` or `ping` arriving meanwhile.
+                std::thread::spawn(move || {
+                    if let Err(e) = serve(stream, tx) {
+                        log::debug!("ipc connection: {e:#}");
+                    }
+                });
+            }
+        })
+        .expect("spawning the IPC thread");
+}
+
+fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Msg>) -> Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let mut line = String::new();
+    if BufReader::new(&stream).read_line(&mut line)? == 0 {
+        // Connected and closed without a request (a liveness probe).
+        return Ok(());
+    }
+    let response = match Request::parse(line.trim()) {
+        Err(e) => Response::Error(e),
+        Ok(req) => {
+            log::debug!("request: {req}");
+            let (reply, rx) = oneshot::channel();
+            tx.unbounded_send(Msg::Request(req, reply))
+                .map_err(|_| anyhow!("daemon is shutting down"))?;
+            futures::executor::block_on(rx).unwrap_or(Response::Error("request dropped".into()))
+        }
+    };
+    let mut stream = stream;
+    writeln!(stream, "{response}")?;
+    Ok(())
+}
+
+async fn handle(req: Request, cx: &mut AsyncApp) -> Response {
+    let result = match req {
+        Request::Ping => return Response::Pong,
+        Request::Quit => {
+            // Finish the cache write so `open-last` after a restart sees
+            // the newest capture.
+            let cache = daemon(cx, |d, _| d.cache.clone());
+            cx.background_spawn(async move { cache.flush() }).await;
+            return Response::Pong;
+        }
+        Request::Capture(mode, opts) => capture(mode, opts, cx).await,
+        Request::OpenLast => open_last(cx).await,
+        Request::Notifications(switch) => set_notifications(switch, cx).await,
+        Request::Open(path) => open_path(path, cx).await,
+    };
+    match result {
+        Ok(Some(r)) => r,
+        Ok(None) => Response::Cancelled,
+        Err(e) => {
+            log::error!("{e:#}");
+            Response::Error(format!("{e:#}"))
+        }
+    }
+}
+
+fn daemon<R>(cx: &mut AsyncApp, f: impl FnOnce(&mut Daemon, &mut App) -> R) -> R {
+    cx.update(|cx| cx.update_global::<Daemon, R>(f))
+}
+
+async fn snapshot(
+    capturer: &Capturer,
+    outputs: Option<Vec<String>>,
+    cursor: bool,
+) -> Result<Snapshot> {
+    capturer
+        .capture(outputs, cursor)
+        .await
+        .map_err(|_| anyhow!("the capture thread stopped"))?
+}
+
+async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<Option<Response>> {
+    let started = Instant::now();
+    let (config, capturer) = daemon(cx, |d, _| (d.config.clone(), d.capturer.clone()));
+    let capturer = capturer.context("screen capture is unavailable (see the daemon log)")?;
+    let cursor = opts.cursor.unwrap_or(config.cursor);
+
+    let composed: Composed = if let Some(rect) = opts.geometry {
+        let snap = snapshot(&capturer, None, cursor).await?;
+        snap.compose(rect)
+            .with_context(|| format!("geometry {rect} lies outside every output"))?
+    } else {
+        match mode {
+            Mode::Screen => {
+                let snap = snapshot(&capturer, None, cursor).await?;
+                snap.compose(snap.bounds())
+                    .context("no outputs to capture")?
+            }
+            Mode::Output => {
+                let name = match opts.output.clone() {
+                    Some(n) => Some(n),
+                    None => {
+                        cx.background_spawn(async { hyprland::focused_output() })
+                            .await
+                    }
+                };
+                let snap = snapshot(&capturer, name.clone().map(|n| vec![n]), cursor).await?;
+                let frame = match &name {
+                    Some(n) => snap.output(n),
+                    None => snap.outputs.first(),
+                }
+                .context("no outputs to capture")?;
+                Composed {
+                    scale: frame.scale() as f32,
+                    image: frame.image.clone(),
+                }
+            }
+            Mode::Window => {
+                let rect = cx
+                    .background_spawn(async { hyprland::active_window() })
+                    .await
+                    .context("window capture needs Hyprland and a focused window")?;
+                let snap = snapshot(&capturer, None, cursor).await?;
+                snap.compose(rect)
+                    .context("the active window is not on any output")?
+            }
+            Mode::Region => {
+                let snap = snapshot(&capturer, None, cursor).await?;
+                let Some(rect) = select_region(&snap, cx).await? else {
+                    return Ok(None);
+                };
+                cx.background_spawn(async move { snap.compose(rect) })
+                    .await
+                    .context("the selection lies outside every output")?
+            }
+        }
+    };
+    log::debug!(
+        "captured {}x{} in {:.1}ms",
+        composed.image.width,
+        composed.image.height,
+        started.elapsed().as_secs_f64() * 1e3
+    );
+    let shot = add_shot(composed.image, composed.scale, None, cx);
+    finish_capture(shot, opts, config, cx).await.map(Some)
+}
+
+/// Shows the frozen overlays and waits for a selection in global logical
+/// coordinates. `None` means the user cancelled.
+async fn select_region(snap: &Snapshot, cx: &mut AsyncApp) -> Result<Option<IRect>> {
+    let started = Instant::now();
+    if daemon(cx, |d, _| std::mem::replace(&mut d.selecting, true)) {
+        bail!("a selection is already in progress");
+    }
+    // The window list (Hyprland IPC) and each output's GPU tiles are
+    // prepared in parallel; neither depends on the other.
+    let windows = cx.background_spawn(async { hyprland::visible_windows() });
+    let tile_tasks: Vec<_> = snap
+        .outputs
+        .iter()
+        .map(|o| {
+            let (name, logical, image) = (o.name.clone(), o.logical, o.image.clone());
+            cx.background_spawn(async move {
+                let tiles = ui::make_tiles(&image);
+                (name, logical, image.width, tiles)
+            })
+        })
+        .collect();
+    let mut outputs: Vec<(String, IRect, u32, Arc<[ui::Tile]>)> = Vec::new();
+    for task in tile_tasks {
+        outputs.push(task.await);
+    }
+    let windows = windows.await;
+
+    let (selection, done) = Selection::new(windows);
+    let result: Result<Vec<WindowHandle<Overlay>>> = cx.update(|cx| {
+        let selection = cx.new(|_| selection);
+        let displays = cx.displays();
+        outputs
+            .into_iter()
+            .map(|(name, logical, width, tiles)| {
+                let display_id = displays
+                    .iter()
+                    .find(|d| d.uuid().ok() == Some(display_uuid(&name)))
+                    .map(|d| d.id());
+                let selection = selection.clone();
+                cx.open_window(
+                    WindowOptions {
+                        titlebar: None,
+                        focus: true,
+                        window_bounds: Some(WindowBounds::Windowed(Bounds {
+                            origin: point(px(0.), px(0.)),
+                            size: size(px(logical.w as f32), px(logical.h as f32)),
+                        })),
+                        display_id,
+                        app_id: Some("moment".into()),
+                        window_background: WindowBackgroundAppearance::Opaque,
+                        kind: WindowKind::LayerShell(layer_shell::LayerShellOptions {
+                            namespace: "moment-selection".into(),
+                            layer: layer_shell::Layer::Overlay,
+                            anchor: layer_shell::Anchor::TOP
+                                | layer_shell::Anchor::BOTTOM
+                                | layer_shell::Anchor::LEFT
+                                | layer_shell::Anchor::RIGHT,
+                            exclusive_zone: Some(px(-1.)),
+                            keyboard_interactivity: layer_shell::KeyboardInteractivity::Exclusive,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    move |window, cx| {
+                        cx.new(|cx| Overlay::new(selection, logical, width, tiles, window, cx))
+                    },
+                )
+                .with_context(|| format!("opening the selection overlay on {name}"))
+            })
+            .collect()
+    });
+    let overlays = match result {
+        Ok(o) => o,
+        Err(e) => {
+            daemon(cx, |d, _| d.selecting = false);
+            return Err(e);
+        }
+    };
+    log::debug!(
+        "selection overlays opened {:.1}ms after the snapshot",
+        started.elapsed().as_secs_f64() * 1e3
+    );
+    let rect = done.await.ok().flatten();
+    cx.update(|cx| {
+        for o in overlays {
+            let _ = o.update(cx, |_, window, _| window.remove_window());
+        }
+        cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
+    });
+    Ok(rect.filter(|r| !r.is_empty()))
+}
+
+/// GPUI names Wayland displays by a v5 UUID of the output name.
+fn display_uuid(name: &str) -> uuid::Uuid {
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes())
+}
+
+fn add_shot(
+    image: Arc<Image>,
+    scale: f32,
+    source: Option<PathBuf>,
+    cx: &mut AsyncApp,
+) -> Arc<Shot> {
+    daemon(cx, |d, cx| {
+        let id = d.next_id;
+        d.next_id += 1;
+        let shot = Arc::new(Shot::new(id, image, scale, source));
+        d.shots.push_back(shot.clone());
+        while d.shots.len() > KEEP_SHOTS {
+            if let Some(old) = d.shots.pop_front() {
+                d.docs.remove(&old.id);
+            }
+        }
+        // GPU tiles are built off the main thread so a later "open editor"
+        // only uploads them.
+        let warm = shot.clone();
+        cx.background_spawn(async move {
+            warm.tiles();
+        })
+        .detach();
+        shot
+    })
+}
+
+async fn finish_capture(
+    shot: Arc<Shot>,
+    opts: CaptureOptions,
+    config: Arc<Config>,
+    cx: &mut AsyncApp,
+) -> Result<Response> {
+    let (clipboard, notifier) = daemon(cx, |d, _| (d.clipboard.clone(), d.notifier.clone()));
+
+    if opts.clipboard.unwrap_or(config.copy_to_clipboard) {
+        match &clipboard {
+            Some(c) => {
+                c.set_image(shot.image.clone());
+            }
+            None => log::warn!("clipboard unavailable; capture not copied"),
+        }
+    }
+
+    // Cache for `open-last` across daemon restarts. Queued before the first
+    // await, so queue order is shot-id order.
+    daemon(cx, |d, _| d.cache.store(shot.image.clone(), shot.scale));
+
+    let saved = if opts.save {
+        let image = shot.image.clone();
+        let path = config.new_save_path(shot.taken);
+        Some(
+            cx.background_spawn(async move {
+                image.save_png(&path, Compression::Balanced).map(|_| path)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    if opts.notify.unwrap_or(daemon(cx, |d, _| d.notify)) {
+        match notifier {
+            Some(n) => {
+                let (id, image) = (shot.id, shot.image.clone());
+                let body = match &saved {
+                    Some(p) => format!("Saved to {}", ui::editor::tilde(p)),
+                    None => format!("{}×{} — click to annotate", image.width, image.height),
+                };
+                let timeout = config.notification_timeout_ms;
+                cx.background_spawn(async move {
+                    if let Err(e) = n.shot_captured(id, &image, &body, timeout) {
+                        log::warn!("notification failed: {e:#}");
+                    }
+                })
+                .detach();
+            }
+            None => log::warn!("notifications unavailable"),
+        }
+    }
+
+    if opts.edit.unwrap_or(config.open_editor) {
+        let id = shot.id;
+        cx.update(|cx| open_editor(id, cx))?;
+    }
+
+    Ok(Response::Shot {
+        id: shot.id,
+        width: shot.image.width,
+        height: shot.image.height,
+        saved,
+    })
+}
+
+/// `moment notifications on|off|toggle|status`. Changes are written to the
+/// config file first, so the daemon never reports a state that a restart
+/// would lose.
+async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<Response>> {
+    let (current, notifier) = daemon(cx, |d, _| (d.notify, d.notifier.clone()));
+    let on = switch.apply(current);
+    if switch != Switch::Status {
+        cx.background_spawn(
+            async move { config::persist_bool(&config::config_path(), "notify", on) },
+        )
+        .await?;
+        daemon(cx, |d, _| d.notify = on);
+        log::info!("capture notifications {}", if on { "on" } else { "off" });
+        // Feedback for keybind users; shown even when turning them off.
+        if on != current
+            && let Some(n) = notifier
+        {
+            let summary = if on {
+                "Screenshot notifications on"
+            } else {
+                "Screenshot notifications off"
+            };
+            cx.background_spawn(async move {
+                if let Err(e) = n.message(summary, "") {
+                    log::warn!("notification failed: {e:#}");
+                }
+            })
+            .detach();
+        }
+    }
+    Ok(Some(Response::Notifications(on)))
+}
+
+fn shot_response(shot: &Shot) -> Response {
+    Response::Shot {
+        id: shot.id,
+        width: shot.image.width,
+        height: shot.image.height,
+        saved: None,
+    }
+}
+
+async fn open_last(cx: &mut AsyncApp) -> Result<Option<Response>> {
+    if let Some(shot) = daemon(cx, |d, _| d.shots.back().cloned()) {
+        cx.update(|cx| open_editor(shot.id, cx))?;
+        return Ok(Some(shot_response(&shot)));
+    }
+    // Nothing captured since the daemon started: fall back to the cache,
+    // then to the newest saved screenshot.
+    let save_dir = daemon(cx, |d, _| d.config.save_dir());
+    let loaded = cx
+        .background_spawn(async move {
+            match Image::read_raw(&config::last_capture_path()) {
+                Ok((img, scale)) => Ok((img, scale, None)),
+                Err(_) => {
+                    let newest =
+                        newest_image(&save_dir).context("no previous screenshot to open")?;
+                    Image::load(&newest).map(|img| (img, 1.0, Some(newest)))
+                }
+            }
+        })
+        .await?;
+    let (image, scale, source) = loaded;
+    let shot = add_shot(Arc::new(image), scale, source, cx);
+    cx.update(|cx| open_editor(shot.id, cx))?;
+    Ok(Some(shot_response(&shot)))
+}
+
+async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>> {
+    let p = path.clone();
+    let image = cx.background_spawn(async move { Image::load(&p) }).await?;
+    let shot = add_shot(Arc::new(image), 1.0, Some(path), cx);
+    cx.update(|cx| open_editor(shot.id, cx))?;
+    Ok(Some(shot_response(&shot)))
+}
+
+fn newest_image(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| {
+                    matches!(
+                        x.to_ascii_lowercase().as_str(),
+                        "png" | "jpg" | "jpeg" | "webp"
+                    )
+                })
+        })
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, p)| p)
+}
+
+/// Logical size for a new editor window: the image at 1:1 plus toolbar and
+/// margins, at least 960×480 (one toolbar row) where the screen allows,
+/// never more than 90% of the screen. Unlike `clamp`, the preferred minimum
+/// yields to the screen limit, so small or HiDPI-scaled displays (1024 px,
+/// 1920 px at 2×) get a smaller window instead of a panic; the toolbar then
+/// wraps.
+fn editor_window_size(image_w: f32, image_h: f32, screen_w: f32, screen_h: f32) -> (f32, f32) {
+    let max_w = (screen_w * 0.9).max(1.0);
+    let max_h = (screen_h * 0.9).max(1.0);
+    (
+        (image_w + 48.0).max(960.0).min(max_w),
+        (image_h + 112.0).max(480.0).min(max_h),
+    )
+}
+
+/// Opens (or focuses) the editor for shot `id`, keeping annotations from a
+/// previous editor session of the same shot.
+fn open_editor(id: u64, cx: &mut App) -> Result<()> {
+    let started = Instant::now();
+    let (shot, existing) = cx.read_global::<Daemon, _>(|d, _| {
+        (
+            d.shots.iter().find(|s| s.id == id).cloned(),
+            d.editors.get(&id).copied(),
+        )
+    });
+    let shot = shot.with_context(|| format!("shot {id} is no longer in memory"))?;
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        return Ok(());
+    }
+
+    let doc = cx.update_global::<Daemon, _>(|d, cx| {
+        d.docs
+            .entry(id)
+            .or_insert_with(|| cx.new(|_| Document::new(shot.image.clone(), shot.scale)))
+            .clone()
+    });
+
+    // Size the window to the screenshot at 1:1 (logical), within the screen.
+    let screen = cx
+        .displays()
+        .iter()
+        .map(|d| d.bounds().size)
+        .max_by_key(|s| (f32::from(s.width) * f32::from(s.height)) as i64)
+        .unwrap_or(size(px(1920.), px(1080.)));
+    let (w, h) = editor_window_size(
+        shot.image.width as f32 / shot.scale,
+        shot.image.height as f32 / shot.scale,
+        f32::from(screen.width),
+        f32::from(screen.height),
+    );
+    let title = match &shot.source {
+        Some(p) => format!(
+            "moment — {}",
+            p.file_name().unwrap_or_default().to_string_lossy()
+        ),
+        None => format!("moment — {}×{}", shot.image.width, shot.image.height),
+    };
+
+    let handle = cx.open_window(
+        WindowOptions {
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some(title.into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::centered(size(px(w), px(h)), cx)),
+            app_id: Some("moment".into()),
+            focus: true,
+            show: true,
+            window_min_size: Some(size(px(480.), px(320.))),
+            ..Default::default()
+        },
+        move |window, cx| {
+            let editor = cx.new(|cx| Editor::new(shot, doc, window, cx));
+            window.activate_window();
+            editor
+        },
+    )?;
+    cx.update_global::<Daemon, _>(|d, _| {
+        d.editors.insert(id, handle);
+    });
+    log::debug!(
+        "editor window opened in {:.1}ms",
+        started.elapsed().as_secs_f64() * 1e3
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_replaces_stale_socket_but_not_live_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("d.sock");
+        {
+            let _stale = UnixListener::bind(&path).unwrap();
+        }
+        assert!(path.exists(), "dropping a listener leaves the file behind");
+        let live = bind(&path).expect("stale socket is replaced");
+        let err = bind(&path).unwrap_err();
+        assert!(err.to_string().contains("already listening"), "{err}");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        drop(live);
+    }
+
+    #[test]
+    fn editor_window_size_fits_small_and_scaled_displays() {
+        // 1024 px wide, and a 1920×1080 panel at 2× (960×540 logical).
+        for (sw, sh) in [(1024.0, 768.0), (960.0, 540.0), (640.0, 360.0), (0.0, 0.0)] {
+            let (w, h) = editor_window_size(2000.0, 1500.0, sw, sh);
+            assert!(w >= 1.0 && w <= (sw * 0.9f32).max(1.0), "{sw}: width {w}");
+            assert!(h >= 1.0 && h <= (sh * 0.9f32).max(1.0), "{sh}: height {h}");
+        }
+        let (w, h) = editor_window_size(100.0, 50.0, 960.0, 540.0);
+        assert_eq!((w, h), (864.0, 480.0), "minimum yields to the screen");
+    }
+
+    #[test]
+    fn editor_window_size_prefers_one_to_one_with_a_toolbar_row() {
+        assert_eq!(
+            editor_window_size(100.0, 50.0, 2560.0, 1440.0),
+            (960.0, 480.0)
+        );
+        assert_eq!(
+            editor_window_size(1200.0, 700.0, 2560.0, 1440.0),
+            (1248.0, 812.0)
+        );
+        assert_eq!(
+            editor_window_size(5120.0, 1440.0, 2560.0, 1440.0),
+            (2304.0, 1296.0)
+        );
+    }
+
+    #[test]
+    fn newest_image_ignores_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(newest_image(dir.path()), None);
+        std::fs::write(dir.path().join("a.png"), b"").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(dir.path().join("b.JPG"), b"").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(dir.path().join("notes.txt"), b"").unwrap();
+        assert_eq!(newest_image(dir.path()), Some(dir.path().join("b.JPG")));
+    }
+}
