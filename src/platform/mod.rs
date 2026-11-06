@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use gpui::{App, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions};
+use gpui::{App, DisplayId, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions};
 #[cfg(not(windows))]
-use gpui::{Bounds, DisplayId, point, px, size};
+use gpui::{Bounds, point, px, size};
 
 use crate::capture::Snapshot;
 use crate::clipboard::PendingPng;
@@ -243,6 +243,8 @@ impl Platform {
     /// `size` is the display's logical size: anchored to every edge the
     /// compositor stretches the surface anyway, but GPUI sizes its first
     /// buffer from it, and its default would leave a centred window.
+    // Windows has no layer-shell, so it never uses the arguments.
+    #[cfg_attr(windows, allow(unused_variables))]
     pub fn early_overlay_options(
         &self,
         display: DisplayId,
@@ -393,7 +395,6 @@ impl Platform {
 /// GPUI's display for an output: Wayland displays are named by a v5 UUID
 /// of the output name; elsewhere the display whose bounds start at the
 /// output's logical origin.
-#[cfg(not(windows))]
 pub(crate) fn display_for(name: &str, logical: IRect, cx: &App) -> Option<DisplayId> {
     let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes());
     let displays = cx.displays();
