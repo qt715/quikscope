@@ -724,4 +724,12 @@ fn shortcut_help_toggles_and_escape_keeps_editor_open() {
     assert!(ui.editor(|e, _| e.help_open));
     ui.key("f1", None, Modifiers::default());
     assert!(!ui.editor(|e, _| e.help_open));
+    ui.typ("t");
+    let at = ui.screen(Pt::new(100., 100.));
+    ui.click(at);
+    ui.typ("Still editing");
+    ui.key("f1", None, Modifiers::default());
+    assert!(ui.editor(|e, _| e.help_open));
+    ui.key("escape", None, Modifiers::default());
+    assert!(ui.editor(|e, _| e.text.is_some()));
 }

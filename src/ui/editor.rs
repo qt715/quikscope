@@ -781,8 +781,8 @@ impl Editor {
             cx.stop_propagation();
             return;
         }
-        if self.text.is_none()
-            && (matches!(key, "?" | "f1") || (key == "/" && ev.keystroke.modifiers.shift))
+        if key == "f1"
+            || (self.text.is_none() && (key == "?" || (key == "/" && ev.keystroke.modifiers.shift)))
         {
             self.toggle_help(cx);
             cx.stop_propagation();
