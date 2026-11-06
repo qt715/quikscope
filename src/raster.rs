@@ -79,7 +79,7 @@ pub enum Compression {
     Balanced,
 }
 
-const RAW_MAGIC: &[u8; 8] = b"MOMENT01";
+const RAW_MAGIC: &[u8; 8] = b"QSCOPE01";
 
 impl Image {
     pub fn new(width: u32, height: u32) -> Image {
@@ -452,7 +452,7 @@ impl Image {
         let mut header = [0u8; 20];
         f.read_exact(&mut header)?;
         if &header[..8] != RAW_MAGIC {
-            bail!("{} is not a moment cache file", path.display());
+            bail!("{} is not a quickscope cache file", path.display());
         }
         let w = u32::from_le_bytes(header[8..12].try_into().unwrap());
         let h = u32::from_le_bytes(header[12..16].try_into().unwrap());

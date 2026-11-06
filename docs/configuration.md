@@ -1,8 +1,8 @@
 # Configuration
 
-`$XDG_CONFIG_HOME/moment/config.toml` (usually `~/.config/moment/config.toml`).
+`$XDG_CONFIG_HOME/quickscope/config.toml` (usually `~/.config/quickscope/config.toml`).
 Every key is optional; unknown keys are rejected so typos do not pass
-silently. The daemon reads the file at start-up (`moment quit` to reload).
+silently. The daemon reads the file at start-up (`quickscope quit` to reload).
 
 ```toml
 # Where Ctrl+S in the editor (and `capture --save`) writes. `~` expands to $HOME.
@@ -16,7 +16,7 @@ filename = "screenshot_%Y%m%d_%H%M%S.png"
 copy_to_clipboard = true
 
 # Show a notification after each capture; clicking it opens the editor.
-# `moment notifications on|off|toggle` changes this at runtime and saves it here.
+# `quickscope notifications on|off|toggle` changes this at runtime and saves it here.
 notify = true
 
 # Open the editor right after capturing instead of waiting for a click.
@@ -52,7 +52,7 @@ languages = []
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,
 `--cursor`) override these defaults for one request.
 
-`moment notifications on|off|toggle` is the one setting that changes
+`quickscope notifications on|off|toggle` is the one setting that changes
 without a restart: the daemon applies it immediately and rewrites only the
 `notify` key in this file (comments and other keys are preserved; a file the
 change would make invalid is left untouched and the command fails).
@@ -61,7 +61,7 @@ change would make invalid is left untouched and the command fails).
 
 | Variable | Effect |
 | --- | --- |
-| `MOMENT_SOCKET` | IPC socket path. |
-| `MOMENT_LOG` | Log filter (`env_logger` syntax), e.g. `moment=debug` for per-step timings. |
+| `QUICKSCOPE_SOCKET` | IPC socket path. |
+| `QUICKSCOPE_LOG` | Log filter (`env_logger` syntax), e.g. `quickscope=debug` for per-step timings. |
 | `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | Standard locations. |
 | `HYPRLAND_INSTANCE_SIGNATURE` | Hyprland instance to query; when unset, a single running instance is found automatically. |

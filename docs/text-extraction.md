@@ -1,6 +1,6 @@
 # Text extraction
 
-`moment capture … --text` and `Ctrl+Shift+C` in the editor read the text in
+`quickscope capture … --text` and `Ctrl+Shift+C` in the editor read the text in
 a screenshot and copy it as plain text. English is the main target; other
 European languages, Chinese, Japanese, Korean, Vietnamese, Thai and Arabic
 (and anything else Tesseract has a model for) work too, including
@@ -9,7 +9,7 @@ screenshots that mix them line by line.
 ## Requirements
 
 [Tesseract](https://github.com/tesseract-ocr/tesseract) 4 or 5 and one model
-per language. moment opens `libtesseract.so.5` when text is first extracted,
+per language. quickscope opens `libtesseract.so.5` when text is first extracted,
 so it builds and runs without it; until it is installed, extraction reports
 what to install.
 

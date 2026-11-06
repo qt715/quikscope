@@ -2,7 +2,7 @@
 //!
 //! Each test gets a private compositor, D-Bus and daemon (see
 //! `support/session.rs`). They are skipped when no headless compositor is
-//! installed unless `MOMENT_E2E=1`, which CI sets.
+//! installed unless `QUICKSCOPE_E2E=1`, which CI sets.
 
 #[path = "support/session.rs"]
 mod session;
@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use moment::raster::Image;
+use quickscope::raster::Image;
 use session::{OUTPUT_H, OUTPUT_W, Session, decode_png, pattern_pixel};
 
 fn stdout(out: &std::process::Output) -> String {
@@ -47,7 +47,7 @@ fn screen_capture_notifies_caches_and_fills_the_clipboard() {
     };
     s.start_daemon();
 
-    let out = s.moment(&["capture", "screen"]);
+    let out = s.quickscope(&["capture", "screen"]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
 
@@ -94,7 +94,7 @@ fn geometry_capture_crops_exactly_and_saves() {
         return;
     };
     s.start_daemon();
-    let out = s.moment(&[
+    let out = s.quickscope(&[
         "capture",
         "-g",
         "70,40 100x50",
@@ -109,7 +109,7 @@ fn geometry_capture_crops_exactly_and_saves() {
     assert_matches_pattern(&img, 70, 40);
     assert!(s.notifications().is_empty(), "--no-notify");
 
-    let out = s.moment(&["capture", "-g", "5000,5000 10x10", "--no-notify"]);
+    let out = s.quickscope(&["capture", "-g", "5000,5000 10x10", "--no-notify"]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("outside every output"));
 }
@@ -120,7 +120,7 @@ fn region_drag_selects_a_rectangle() {
         return;
     };
     s.start_daemon();
-    let child = s.spawn_moment(&["capture", "region", "--save", "--no-notify"]);
+    let child = s.spawn_quickscope(&["capture", "region", "--save", "--no-notify"]);
     s.wait_overlay(1);
     s.helper(&["drag", "100", "100", "420", "330"]);
     let out = s.finish(child, Duration::from_secs(15));
@@ -137,21 +137,21 @@ fn region_click_takes_the_whole_output_and_right_click_cancels() {
     };
     s.start_daemon();
 
-    let child = s.spawn_moment(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
     s.helper(&["click", "640", "360"]);
     let out = s.finish(child, Duration::from_secs(15));
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
 
-    let child = s.spawn_moment(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(2);
     s.helper(&["click", "200", "200", "right"]);
     let out = s.finish(child, Duration::from_secs(15));
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("cancelled"));
 
-    let child = s.spawn_moment(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(3);
     s.keys(&["escape"]);
     let out = s.finish(child, Duration::from_secs(15));
@@ -164,9 +164,9 @@ fn concurrent_region_selection_is_refused() {
         return;
     };
     s.start_daemon();
-    let first = s.spawn_moment(&["capture", "region", "--no-notify"]);
+    let first = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
-    let second = s.moment(&["capture", "region", "--no-notify"]);
+    let second = s.quickscope(&["capture", "region", "--no-notify"]);
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("already in progress"));
     s.helper(&["click", "10", "10", "right"]);
@@ -182,9 +182,9 @@ fn editor_draws_copies_saves_and_undo_reaches_disk() {
         return;
     };
     s.start_daemon();
-    let out = s.moment(&["capture", "screen", "--edit", "--no-notify"]);
+    let out = s.quickscope(&["capture", "screen", "--edit", "--no-notify"]);
     assert!(out.status.success());
-    s.wait_for_window("moment");
+    s.wait_for_window("quickscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
 
@@ -245,7 +245,7 @@ fn editor_draws_copies_saves_and_undo_reaches_disk() {
     // Escape with nothing selected closes the editor.
     s.keys(&["escape"]);
     std::thread::sleep(Duration::from_millis(300));
-    assert!(!s.toplevels().iter().any(|l| l.starts_with("moment")));
+    assert!(!s.toplevels().iter().any(|l| l.starts_with("quickscope")));
 }
 
 #[test]
@@ -254,11 +254,11 @@ fn notification_click_opens_the_editor() {
         return;
     };
     s.start_daemon();
-    assert!(s.moment(&["capture", "screen"]).status.success());
+    assert!(s.quickscope(&["capture", "screen"]).status.success());
     let n = s.wait_notification();
     assert!(s.toplevels().is_empty(), "no editor before the click");
     s.click_notification(n.id, "default");
-    s.wait_for_window("moment");
+    s.wait_for_window("quickscope");
 
     // Clicking again focuses the same editor instead of opening another.
     s.click_notification(n.id, "edit");
@@ -266,7 +266,7 @@ fn notification_click_opens_the_editor() {
     let editors = s
         .toplevels()
         .iter()
-        .filter(|l| l.starts_with("moment"))
+        .filter(|l| l.starts_with("quickscope"))
         .count();
     assert_eq!(editors, 1);
 }
@@ -278,7 +278,7 @@ fn open_last_starts_the_daemon_and_restores_the_cached_capture() {
     };
     s.start_daemon();
     assert!(
-        s.moment(&["capture", "screen", "--no-notify"])
+        s.quickscope(&["capture", "screen", "--no-notify"])
             .status
             .success()
     );
@@ -287,10 +287,10 @@ fn open_last_starts_the_daemon_and_restores_the_cached_capture() {
     assert!(!s.socket().exists(), "daemon removes its socket on quit");
 
     // No daemon running: the client starts one, which loads the cache.
-    let out = s.moment(&["open-last"]);
+    let out = s.quickscope(&["open-last"]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
-    s.wait_for_window("moment");
+    s.wait_for_window("quickscope");
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn malformed_requests_get_an_error_line() {
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line).unwrap();
     assert!(line.starts_with("err unknown command"), "{line}");
-    assert_eq!(stdout(&s.moment(&["ping"])), "ok");
+    assert_eq!(stdout(&s.quickscope(&["ping"])), "ok");
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn rotated_and_scaled_outputs_match_grim() {
     }
     s.start_daemon();
     // 1280x720 rotated 90° at scale 2 is a 360x640 logical output.
-    let out = s.moment(&["capture", "screen", "--save", "--no-notify"]);
+    let out = s.quickscope(&["capture", "screen", "--save", "--no-notify"]);
     let ours = decode_png(&saved_path(&out));
     assert_eq!((ours.width, ours.height), (720, 1280));
 
@@ -340,7 +340,7 @@ fn rotated_and_scaled_outputs_match_grim() {
         "same orientation and pixels as grim"
     );
 
-    let out = s.moment(&["capture", "-g", "10,20 100x50", "--save", "--no-notify"]);
+    let out = s.quickscope(&["capture", "-g", "10,20 100x50", "--save", "--no-notify"]);
     let ours = decode_png(&saved_path(&out));
     assert_eq!(
         (ours.width, ours.height),
@@ -367,7 +367,7 @@ fn two_outputs_compose_and_a_drag_can_cross_them() {
     s.start_daemon();
 
     // Both outputs side by side; each shows the pattern in its own coordinates.
-    let out = s.moment(&["capture", "screen", "--save", "--no-notify"]);
+    let out = s.quickscope(&["capture", "screen", "--save", "--no-notify"]);
     let screen = decode_png(&saved_path(&out));
     assert_eq!((screen.width, screen.height), (2 * OUTPUT_W, OUTPUT_H));
     assert_eq!(
@@ -388,7 +388,7 @@ fn two_outputs_compose_and_a_drag_can_cross_them() {
     }
 
     // The overlay on the first output keeps the pointer grab across the edge.
-    let child = s.spawn_moment(&["capture", "region", "--save", "--no-notify"]);
+    let child = s.spawn_quickscope(&["capture", "region", "--save", "--no-notify"]);
     s.wait_overlay(1);
     let x0 = OUTPUT_W - 100;
     s.helper(&[
@@ -409,10 +409,10 @@ fn two_outputs_compose_and_a_drag_can_cross_them() {
     );
 
     // `output` mode without Hyprland takes the first output.
-    let out = s.moment(&["capture", "output", "--save", "--no-notify"]);
+    let out = s.quickscope(&["capture", "output", "--save", "--no-notify"]);
     let first = decode_png(&saved_path(&out));
     assert_eq!((first.width, first.height), (OUTPUT_W, OUTPUT_H));
-    let out = s.moment(&[
+    let out = s.quickscope(&[
         "capture",
         "output",
         "-o",
@@ -437,7 +437,7 @@ fn rapid_captures_then_restart_open_the_newest() {
         .iter()
         .map(|(w, h)| {
             let g = format!("0,0 {w}x{h}");
-            s.spawn_moment(&["capture", "-g", &g, "--no-notify", "--no-clipboard"])
+            s.spawn_quickscope(&["capture", "-g", &g, "--no-notify", "--no-clipboard"])
         })
         .collect();
     for child in racing {
@@ -445,7 +445,7 @@ fn rapid_captures_then_restart_open_the_newest() {
     }
     // …then back-to-back ones; the last capture taken must win.
     for g in ["0,0 900x500", "0,0 1200x700", "10,10 333x111"] {
-        let out = s.moment(&["capture", "-g", g, "--no-notify", "--no-clipboard"]);
+        let out = s.quickscope(&["capture", "-g", g, "--no-notify", "--no-clipboard"]);
         assert!(out.status.success());
     }
     // `quit` returns only after the cache holds the newest capture.
@@ -460,7 +460,7 @@ fn rapid_captures_then_restart_open_the_newest() {
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 
-    let out = s.moment(&["open-last"]);
+    let out = s.quickscope(&["open-last"]);
     assert_eq!(stdout(&out), "shot 1: 333x111");
 }
 
@@ -478,23 +478,23 @@ fn notification_toggle_applies_immediately_and_persists() {
     };
 
     assert_eq!(
-        stdout(&s.moment(&["notifications", "status"])),
+        stdout(&s.quickscope(&["notifications", "status"])),
         "notifications on"
     );
     assert_eq!(
-        stdout(&s.moment(&["notifications", "toggle"])),
+        stdout(&s.quickscope(&["notifications", "toggle"])),
         "notifications off"
     );
-    let config = std::fs::read_to_string(s.root().join("config/moment/config.toml")).unwrap();
+    let config = std::fs::read_to_string(s.root().join("config/quickscope/config.toml")).unwrap();
     assert!(config.contains("notify = false"), "{config}");
     assert!(config.contains("save_dir"), "other settings kept: {config}");
 
-    assert!(s.moment(&["capture", "screen"]).status.success());
+    assert!(s.quickscope(&["capture", "screen"]).status.success());
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(captured(&s), 0, "no capture notification while off");
     // An explicit flag still wins for one capture.
     assert!(
-        s.moment(&["capture", "screen", "--notify"])
+        s.quickscope(&["capture", "screen", "--notify"])
             .status
             .success()
     );
@@ -505,18 +505,18 @@ fn notification_toggle_applies_immediately_and_persists() {
     s.stop_daemon();
     s.start_daemon();
     assert_eq!(
-        stdout(&s.moment(&["notifications", "status"])),
+        stdout(&s.quickscope(&["notifications", "status"])),
         "notifications off"
     );
     assert_eq!(
-        stdout(&s.moment(&["notifications", "on"])),
+        stdout(&s.quickscope(&["notifications", "on"])),
         "notifications on"
     );
-    assert!(s.moment(&["capture", "screen"]).status.success());
+    assert!(s.quickscope(&["capture", "screen"]).status.success());
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(captured(&s), 2);
 
-    let bad = s.moment(&["notifications", "maybe"]);
+    let bad = s.quickscope(&["notifications", "maybe"]);
     assert!(!bad.status.success());
 }
 
@@ -532,12 +532,12 @@ fn editor_opens_on_a_small_hidpi_display() {
         return;
     };
     s.start_daemon();
-    let out = s.moment(&["capture", "screen", "--edit", "--no-notify"]);
+    let out = s.quickscope(&["capture", "screen", "--edit", "--no-notify"]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
-    s.wait_for_window("moment");
+    s.wait_for_window("quickscope");
     s.wait_log("editor first frame", Duration::from_secs(10));
-    assert_eq!(stdout(&s.moment(&["ping"])), "ok", "daemon still alive");
+    assert_eq!(stdout(&s.quickscope(&["ping"])), "ok", "daemon still alive");
 }
 
 #[test]
@@ -548,9 +548,9 @@ fn input_method_composes_and_commits_into_editor_text() {
     s.start_daemon();
     // The input method runs before the editor exists, like fcitx5 does.
     let mut ime = s.input_method();
-    let out = s.moment(&["capture", "screen", "--edit", "--no-notify"]);
+    let out = s.quickscope(&["capture", "screen", "--edit", "--no-notify"]);
     assert!(out.status.success());
-    s.wait_for_window("moment");
+    s.wait_for_window("quickscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
 
     // Focused but not typing text: the editor is no text input, so the
@@ -619,8 +619,8 @@ fn input_method_composes_and_commits_into_editor_text() {
         .collect();
     assert!(!xs.is_empty(), "no text in the saved image");
     let ink = (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1) as f32;
-    let layout = moment::text::layout("A日本語!", &moment::fonts::FontSpec::default());
-    let expected = moment::text::ink(&layout, moment::geom::Pt::new(0.0, 0.0))
+    let layout = quickscope::text::layout("A日本語!", &quickscope::fonts::FontSpec::default());
+    let expected = quickscope::text::ink(&layout, quickscope::geom::Pt::new(0.0, 0.0))
         .path
         .unwrap()
         .bounds()
@@ -638,19 +638,19 @@ fn open_last_keeps_the_last_used_tool() {
     };
     s.start_daemon();
     assert!(
-        s.moment(&["capture", "screen", "--edit", "--no-notify"])
+        s.quickscope(&["capture", "screen", "--edit", "--no-notify"])
             .status
             .success()
     );
-    s.wait_for_window("moment");
+    s.wait_for_window("quickscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
     // Pick the rectangle, then close the editor without drawing.
     s.keys(&["r", "escape"]);
     std::thread::sleep(Duration::from_millis(300));
-    assert!(!s.toplevels().iter().any(|l| l.starts_with("moment")));
+    assert!(!s.toplevels().iter().any(|l| l.starts_with("quickscope")));
 
-    assert!(s.moment(&["open-last"]).status.success());
+    assert!(s.quickscope(&["open-last"]).status.success());
     s.wait_log_count("editor window opened", 2, Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
     // No tool key: the drag draws with whatever tool the editor opened with.
@@ -678,12 +678,12 @@ fn open_last_keeps_the_last_used_tool() {
 }
 
 /// Whether text extraction can run; without Tesseract the OCR tests skip
-/// unless `MOMENT_REQUIRE_OCR=1`.
+/// unless `QUICKSCOPE_REQUIRE_OCR=1`.
 fn ocr_available() -> bool {
-    let ok = moment::ocr::tess::version().is_ok() && moment::ocr::tessdata_dir().is_some();
+    let ok = quickscope::ocr::tess::version().is_ok() && quickscope::ocr::tessdata_dir().is_some();
     if !ok {
         assert!(
-            std::env::var_os("MOMENT_REQUIRE_OCR").is_none(),
+            std::env::var_os("QUICKSCOPE_REQUIRE_OCR").is_none(),
             "Tesseract or its language data is missing"
         );
         eprintln!("skipped: Tesseract is not installed");
@@ -694,7 +694,7 @@ fn ocr_available() -> bool {
 /// A small light-theme "screenshot" with two lines of 16 px text, shown
 /// at 100% in the editor.
 fn text_image(path: &std::path::Path) {
-    use moment::document::{Document, Rgba, ShapeKind, Style};
+    use quickscope::document::{Document, Rgba, ShapeKind, Style};
     let mut d = Document::new(
         std::sync::Arc::new(Image::filled(560, 90, [250, 250, 250, 255])),
         1.0,
@@ -708,9 +708,9 @@ fn text_image(path: &std::path::Path) {
     {
         let s = d.make_shape(
             ShapeKind::Text {
-                origin: moment::geom::Pt::new(14.0, 14.0 + i as f32 * 34.0),
+                origin: quickscope::geom::Pt::new(14.0, 14.0 + i as f32 * 34.0),
                 text: (*line).into(),
-                font: moment::fonts::FontSpec {
+                font: quickscope::fonts::FontSpec {
                     weight: 400,
                     ..Default::default()
                 }
@@ -724,8 +724,8 @@ fn text_image(path: &std::path::Path) {
         );
         d.add(s);
     }
-    moment::export::render(&d.snapshot())
-        .save_png(path, moment::raster::Compression::Fast)
+    quickscope::export::render(&d.snapshot())
+        .save_png(path, quickscope::raster::Compression::Fast)
         .unwrap();
 }
 
@@ -740,8 +740,12 @@ fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
     s.start_daemon();
     let png = s.root().join("text.png");
     text_image(&png);
-    assert!(s.moment(&["open", png.to_str().unwrap()]).status.success());
-    s.wait_for_window("moment");
+    assert!(
+        s.quickscope(&["open", png.to_str().unwrap()])
+            .status
+            .success()
+    );
+    s.wait_for_window("quickscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
 
@@ -757,7 +761,7 @@ fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
 
     // `capture --text` reads the screen (the editor showing that image):
     // printed, on the clipboard, and summarised in the notification.
-    let out = s.moment(&["capture", "screen", "--text"]);
+    let out = s.quickscope(&["capture", "screen", "--text"]);
     assert!(
         out.status.success(),
         "{}",

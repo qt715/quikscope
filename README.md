@@ -1,11 +1,11 @@
-# moment
+# quickscope
 
 A fast screenshot tool for wlroots-based Wayland compositors (Hyprland, sway,
 labwc, river, …) with a built-in annotation editor written in
 [GPUI](https://gpui.rs).
 
 ```text
-keybind ─▶ moment capture region ─▶ frozen-screen selection ─▶ clipboard + notification
+keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
                                                                      │ click / --edit
                                                                      ▼
                                       editor (arrows, boxes, text, pen, pixelate, crop…)
@@ -40,13 +40,13 @@ with a notification server, and Rust ≥ 1.95 to build.
 ```sh
 cargo install --locked --path .
 # optional: start the daemon with the graphical session
-install -Dm644 packaging/moment.service ~/.config/systemd/user/moment.service
-systemctl --user enable --now moment.service
+install -Dm644 packaging/quickscope.service ~/.config/systemd/user/quickscope.service
+systemctl --user enable --now quickscope.service
 # optional: launcher entry ("Open last screenshot") and notification icon
-install -Dm644 packaging/moment.desktop ~/.local/share/applications/moment.desktop
+install -Dm644 packaging/quickscope.desktop ~/.local/share/applications/quickscope.desktop
 ```
 
-The daemon is optional at login: any `moment` command starts it on demand
+The daemon is optional at login: any `quickscope` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
 
 Text extraction additionally needs Tesseract and a model per language,
@@ -66,41 +66,41 @@ sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-jpn tesseract-ocr
 `hyprland.lua`:
 
 ```lua
-hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("moment capture region"), { description = "Screenshot region" })
-hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("moment capture output"), { description = "Screenshot monitor" })
-hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("moment capture region --edit"), { description = "Annotate region" })
-hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("moment open-last"), { description = "Edit last screenshot" })
-hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("moment capture region --text"), { description = "Copy text from region" })
+hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("quickscope capture region"), { description = "Screenshot region" })
+hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("quickscope capture output"), { description = "Screenshot monitor" })
+hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quickscope capture region --edit"), { description = "Annotate region" })
+hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quickscope open-last"), { description = "Edit last screenshot" })
+hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quickscope capture region --text"), { description = "Copy text from region" })
 
-hl.window_rule({ match = { class = "^(moment)$" }, float = true, center = true })
-hl.layer_rule({ match = { namespace = "^(moment-selection)$" }, no_anim = true })
+hl.window_rule({ match = { class = "^(quickscope)$" }, float = true, center = true })
+hl.layer_rule({ match = { namespace = "^(quickscope-selection)$" }, no_anim = true })
 ```
 
 `hyprland.conf`:
 
 ```ini
-bind = $mainMod SHIFT, S, exec, moment capture region
-bind = $mainMod SHIFT CTRL, S, exec, moment capture output
-bind = $mainMod SHIFT ALT, S, exec, moment capture region --edit
-bind = $mainMod SHIFT, E, exec, moment open-last
-bind = $mainMod SHIFT, X, exec, moment capture region --text
-windowrule = float on, match:class ^(moment)$
-windowrule = center on, match:class ^(moment)$
-layerrule = no_anim on, match:namespace ^(moment-selection)$
+bind = $mainMod SHIFT, S, exec, quickscope capture region
+bind = $mainMod SHIFT CTRL, S, exec, quickscope capture output
+bind = $mainMod SHIFT ALT, S, exec, quickscope capture region --edit
+bind = $mainMod SHIFT, E, exec, quickscope open-last
+bind = $mainMod SHIFT, X, exec, quickscope capture region --text
+windowrule = float on, match:class ^(quickscope)$
+windowrule = center on, match:class ^(quickscope)$
+layerrule = no_anim on, match:namespace ^(quickscope-selection)$
 ```
 
 `no_anim` on the selection layer makes the frozen overlay appear instantly
-instead of fading in. On sway, add `for_window [app_id="moment"] floating enable`.
+instead of fading in. On sway, add `for_window [app_id="quickscope"] floating enable`.
 
 ## Usage
 
 ```text
-moment capture <region|output|window|screen> [options]
-moment open-last          open the latest capture in the editor, with the tool you used last
-moment open <FILE>        annotate any PNG/JPEG/WebP
-moment notifications <on|off|toggle|status>
-moment daemon             run the daemon in the foreground
-moment ping | quit
+quickscope capture <region|output|window|screen> [options]
+quickscope open-last          open the latest capture in the editor, with the tool you used last
+quickscope open <FILE>        annotate any PNG/JPEG/WebP
+quickscope notifications <on|off|toggle|status>
+quickscope daemon             run the daemon in the foreground
+quickscope ping | quit
 ```
 
 | Mode | Captures |
@@ -127,13 +127,13 @@ occurred. Defaults come from the [configuration](docs/configuration.md).
 ### Notifications on/off
 
 `notify = false` in the config file turns capture notifications off.
-`moment notifications toggle` (or `on`/`off`) flips the setting in the
+`quickscope notifications toggle` (or `on`/`off`) flips the setting in the
 running daemon at once and writes it back to the config file, keeping your
 other settings and comments, so it survives restarts; `status` prints it.
 Bind it to a key to switch notifications off while gaming or presenting:
 
 ```lua
-hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("moment notifications toggle"), { description = "Toggle screenshot notifications" })
+hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quickscope notifications toggle"), { description = "Toggle screenshot notifications" })
 ```
 
 `--notify` / `--no-notify` still override the setting for a single capture.
@@ -168,7 +168,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("moment notifications toggle"
 | Close | `Esc` (when nothing is selected), `Ctrl+W` |
 
 Style changes (color, size, fill, font) apply to the selected shape. Closing the
-editor keeps its annotations in the daemon: `moment open-last` or another
+editor keeps its annotations in the daemon: `quickscope open-last` or another
 notification click brings them back.
 
 **Drawing past the edges.** Annotations may extend beyond the screenshot,
@@ -205,8 +205,8 @@ build); a real GPU and a high-refresh compositor are faster still.
 
 | Step | Time |
 | --- | --- |
-| `moment ping` round trip (client start-up + IPC) | ~1 ms |
-| `moment capture screen` round trip | ~15 ms (13 ms is the compositor delivering the next frame) |
+| `quickscope ping` round trip (client start-up + IPC) | ~1 ms |
+| `quickscope capture screen` round trip | ~15 ms (13 ms is the compositor delivering the next frame) |
 | Clipboard PNG ready (encoded in the background) | ~22 ms after capture |
 | Region overlay windows open after the freeze | ~15 ms |
 | Editor first frame after its window is created | ~5 ms |
@@ -230,7 +230,7 @@ Details in [docs/architecture.md](docs/architecture.md).
 ```sh
 cargo test                                   # unit, golden-image and GPU parity tests
 cargo test --features e2e --test e2e         # end-to-end, in a private headless labwc/sway
-MOMENT_BLESS=1 cargo test --test render_regression   # regenerate golden images
+QUICKSCOPE_BLESS=1 cargo test --test render_regression   # regenerate golden images
 ```
 
 See [docs/testing.md](docs/testing.md), [docs/ipc.md](docs/ipc.md) and

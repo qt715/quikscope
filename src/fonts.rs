@@ -207,7 +207,7 @@ static RESOLVED: LazyLock<Mutex<HashMap<Key, Arc<Face>>>> = LazyLock::new(Defaul
 /// without the scan (which can take a few hundred milliseconds).
 pub fn warm() {
     std::thread::Builder::new()
-        .name("moment-fonts".into())
+        .name("quickscope-fonts".into())
         .spawn(|| {
             LazyLock::force(&FAMILIES);
             LazyLock::force(&CANDIDATES);

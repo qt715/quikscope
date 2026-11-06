@@ -1,4 +1,4 @@
-//! moment: a Wayland screenshot daemon with a GPUI annotation editor.
+//! quickscope: a Wayland screenshot daemon with a GPUI annotation editor.
 
 pub mod cache;
 pub mod capture;

@@ -1,10 +1,10 @@
 [Unit]
-Description=moment screenshot daemon
+Description=quickscope screenshot daemon
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-ExecStart=%h/.cargo/bin/moment daemon
+ExecStart=%h/.cargo/bin/quickscope daemon
 Restart=on-failure
 # The daemon owns the clipboard and editor windows; stop with the session.
 KillMode=mixed

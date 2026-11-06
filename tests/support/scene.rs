@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use moment::document::{Document, PALETTE, ShapeKind, Style};
-use moment::fonts::FontSpec;
-use moment::geom::{Pt, RectF};
-use moment::raster::Image;
+use quickscope::document::{Document, PALETTE, ShapeKind, Style};
+use quickscope::fonts::FontSpec;
+use quickscope::geom::{Pt, RectF};
+use quickscope::raster::Image;
 
 pub const W: u32 = 480;
 pub const H: u32 = 320;
@@ -97,7 +97,7 @@ pub fn populate(doc: &mut Document) {
         (
             ShapeKind::Text {
                 origin: p(220.0, 225.0),
-                text: "Hello, moment!\nSecond line".into(),
+                text: "Hello, quickscope!\nSecond line".into(),
                 font: FontSpec::default(),
             },
             style(7, 1, false),

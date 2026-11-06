@@ -1,4 +1,4 @@
-//! User configuration (`$XDG_CONFIG_HOME/moment/config.toml`) and the
+//! User configuration (`$XDG_CONFIG_HOME/quickscope/config.toml`) and the
 //! filesystem locations derived from it.
 
 use std::path::{Path, PathBuf};
@@ -210,11 +210,11 @@ fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
 }
 
 pub fn config_path() -> PathBuf {
-    xdg_dir("XDG_CONFIG_HOME", ".config").join("moment/config.toml")
+    xdg_dir("XDG_CONFIG_HOME", ".config").join("quickscope/config.toml")
 }
 
 pub fn cache_dir() -> PathBuf {
-    xdg_dir("XDG_CACHE_HOME", ".cache").join("moment")
+    xdg_dir("XDG_CACHE_HOME", ".cache").join("quickscope")
 }
 
 /// Uncompressed copy of the latest capture, read by `open-last` after a
@@ -229,10 +229,10 @@ pub fn runtime_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// IPC socket. `MOMENT_SOCKET` overrides it (used by tests and to run
+/// IPC socket. `QUICKSCOPE_SOCKET` overrides it (used by tests and to run
 /// several instances side by side).
 pub fn socket_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("MOMENT_SOCKET") {
+    if let Some(p) = std::env::var_os("QUICKSCOPE_SOCKET") {
         return PathBuf::from(p);
     }
     let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
@@ -241,7 +241,7 @@ pub fn socket_path() -> PathBuf {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or(display);
-    runtime_dir().join(format!("moment-{display}.sock"))
+    runtime_dir().join(format!("quickscope-{display}.sock"))
 }
 
 /// Local broken-down time via libc, so filenames follow the user's timezone
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn persisting_a_toggle_keeps_comments_and_other_keys() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("moment/config.toml");
+        let path = dir.path().join("quickscope/config.toml");
         persist_bool(&path, "notify", false).unwrap();
         assert!(
             !Config::parse(&std::fs::read_to_string(&path).unwrap())

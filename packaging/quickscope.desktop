@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=moment
+Name=quickscope
 GenericName=Screenshot annotator
-Comment=Open the last screenshot in the moment editor
-Exec=moment open-last
+Comment=Open the last screenshot in the quickscope editor
+Exec=quickscope open-last
 Icon=camera-photo
 Terminal=false
 Categories=Graphics;Utility;
@@ -13,8 +13,8 @@ Actions=region;screen;
 
 [Desktop Action region]
 Name=Capture a region
-Exec=moment capture region
+Exec=quickscope capture region
 
 [Desktop Action screen]
 Name=Capture all screens
-Exec=moment capture screen
+Exec=quickscope capture screen

@@ -9,12 +9,12 @@ use gpui::{
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Point,
     WindowHandle, point, px, size,
 };
-use moment::document::{Document, PALETTE, ShapeKind, Style};
-use moment::geom::Pt;
-use moment::raster::Image;
-use moment::ui::color_picker::WHEEL;
-use moment::ui::editor::Editor;
-use moment::ui::{Assets, Shot};
+use quickscope::document::{Document, PALETTE, ShapeKind, Style};
+use quickscope::geom::Pt;
+use quickscope::raster::Image;
+use quickscope::ui::color_picker::WHEEL;
+use quickscope::ui::editor::Editor;
+use quickscope::ui::{Assets, Shot};
 
 struct Ui {
     cx: HeadlessAppContext,
@@ -30,7 +30,7 @@ impl Ui {
             Arc::new(Assets),
             gpui_platform::current_headless_renderer,
         );
-        cx.update(moment::ui::init);
+        cx.update(quickscope::ui::init);
         let (base, scale) = (doc.base.clone(), doc.scale);
         let doc = cx.update(|cx| cx.new(|_| doc));
         let shot = Arc::new(Shot::new(1, base, scale, None));
@@ -170,7 +170,7 @@ fn blank() -> Document {
     Document::new(Arc::new(Image::filled(600, 400, [40, 40, 40, 255])), 1.0)
 }
 
-fn text_font(doc: &Document) -> moment::fonts::FontSpec {
+fn text_font(doc: &Document) -> quickscope::fonts::FontSpec {
     match &doc.shapes().last().expect("a text shape").kind {
         ShapeKind::Text { font, .. } => font.clone(),
         other => panic!("expected text, got {other:?}"),
@@ -246,7 +246,7 @@ fn formatting_shortcuts_apply_while_typing_and_to_selected_text() {
     // Select the text and un-bold it; that is one undo step.
     let id = ui.doc(|d| d.shapes()[0].id);
     ui.editor(|e, cx| {
-        e.set_tool(moment::ui::editor::Tool::Select, cx);
+        e.set_tool(quickscope::ui::editor::Tool::Select, cx);
         e.selected = Some(id);
     });
     ui.ctrl("b", false);
@@ -270,7 +270,7 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     let id = doc.add(rect);
     let mut ui = Ui::new(doc);
     ui.editor(|e, cx| {
-        e.set_tool(moment::ui::editor::Tool::Select, cx);
+        e.set_tool(quickscope::ui::editor::Tool::Select, cx);
         e.selected = Some(id);
         e.toggle_picker(px(500.), cx);
     });
@@ -313,7 +313,7 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
 /// pointing past its shortened text, and the next render panicked slicing it.
 #[test]
 fn field_key_edits_end_ime_composition() {
-    use moment::ui::field::{Field, FieldKind};
+    use quickscope::ui::field::{Field, FieldKind};
 
     let text = gpui_platform::current_platform(true).text_system();
     let mut cx = HeadlessAppContext::with_platform(
@@ -321,7 +321,7 @@ fn field_key_edits_end_ime_composition() {
         Arc::new(Assets),
         gpui_platform::current_headless_renderer,
     );
-    cx.update(moment::ui::init);
+    cx.update(quickscope::ui::init);
     let window = cx
         .open_window(size(px(300.), px(60.)), |window, cx| {
             cx.new(|cx| Field::new(FieldKind::Text, 0.0, window, cx))
@@ -453,7 +453,7 @@ fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
         ShapeKind::Text {
             origin: Pt::new(40.0, 40.0),
             text: "Move me".into(),
-            font: moment::fonts::FontSpec::default(),
+            font: quickscope::fonts::FontSpec::default(),
         },
         Style::default(),
     );
@@ -471,7 +471,7 @@ fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
         ShapeKind::Text {
             origin: Pt::new(330.0, 250.0),
             text: "inside".into(),
-            font: moment::fonts::FontSpec::default(),
+            font: quickscope::fonts::FontSpec::default(),
         },
         Style::default(),
     );

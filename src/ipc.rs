@@ -1,4 +1,4 @@
-//! Line-based IPC between `moment` commands and the daemon.
+//! Line-based IPC between `quickscope` commands and the daemon.
 //!
 //! One request line per connection, one response line back. The format is
 //! plain text so the socket can be driven with `socat` too:
@@ -400,7 +400,7 @@ fn exchange(mut stream: UnixStream, req: &Request, timeout: Option<Duration>) ->
 /// Starts a detached daemon and returns the first successful connection to it.
 fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     use std::os::unix::process::CommandExt as _;
-    let exe = std::env::current_exe().context("locating the moment executable")?;
+    let exe = std::env::current_exe().context("locating the quickscope executable")?;
     let log = crate::config::cache_dir().join("daemon.log");
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir).ok();
@@ -408,7 +408,7 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     let log_file = std::fs::File::create(&log).ok();
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("daemon")
-        .env("MOMENT_SOCKET", socket)
+        .env("QUICKSCOPE_SOCKET", socket)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     match log_file {

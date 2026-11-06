@@ -1,12 +1,12 @@
 # IPC protocol
 
-The daemon listens on `$XDG_RUNTIME_DIR/moment-$WAYLAND_DISPLAY.sock`
-(mode 0600). `MOMENT_SOCKET` overrides the path for both sides. Each
+The daemon listens on `$XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock`
+(mode 0600). `QUICKSCOPE_SOCKET` overrides the path for both sides. Each
 connection carries exactly one request line and one response line, UTF-8,
 `\n`-terminated.
 
 ```sh
-echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/moment-$WAYLAND_DISPLAY.sock
+echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock
 ```
 
 ## Requests
@@ -53,9 +53,9 @@ escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
 
 ## Lifecycle
 
-- `moment` commands other than `daemon` and `quit` start a detached daemon
+- `quickscope` commands other than `daemon` and `quit` start a detached daemon
   (`setsid`) when nothing listens on the socket, logging to
-  `$XDG_CACHE_HOME/moment/daemon.log`, and wait up to 5 s for it.
+  `$XDG_CACHE_HOME/quickscope/daemon.log`, and wait up to 5 s for it.
 - A daemon refuses to start while another one answers on the socket; a stale
   socket file left by a crash is replaced.
 - `quit` replies, then exits the daemon and removes the socket.

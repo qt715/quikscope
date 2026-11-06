@@ -1,21 +1,21 @@
 //! Text extraction against the real Tesseract, on screenshots rendered
-//! with moment's own text engine (English, European, CJK, Arabic, Thai,
+//! with quickscope's own text engine (English, European, CJK, Arabic, Thai,
 //! Vietnamese; dark and light themes).
 //!
 //! Needs `libtesseract` and its language data. Without them (or without a
 //! language's model) the affected checks are skipped and say so, unless
-//! `MOMENT_REQUIRE_OCR=1`, which CI sets.
+//! `QUICKSCOPE_REQUIRE_OCR=1`, which CI sets.
 
 use std::sync::Arc;
 
-use moment::document::{Document, Rgba, ShapeKind, Style};
-use moment::fonts::FontSpec;
-use moment::geom::{IRect, Pt};
-use moment::ocr;
-use moment::raster::Image;
+use quickscope::document::{Document, Rgba, ShapeKind, Style};
+use quickscope::fonts::FontSpec;
+use quickscope::geom::{IRect, Pt};
+use quickscope::ocr;
+use quickscope::raster::Image;
 
 fn required() -> bool {
-    std::env::var_os("MOMENT_REQUIRE_OCR").is_some()
+    std::env::var_os("QUICKSCOPE_REQUIRE_OCR").is_some()
 }
 
 /// The installed models, or `None` (test skipped) without Tesseract.
@@ -63,7 +63,7 @@ fn screenshot(lines: &[&str], dark: bool) -> Image {
         );
         d.add(s);
     }
-    moment::export::render(&d.snapshot())
+    quickscope::export::render(&d.snapshot())
 }
 
 /// (text, model that should read it). English is the primary model.

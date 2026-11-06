@@ -1,5 +1,5 @@
 [package]
-name = "moment"
+name = "quickscope"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -8,13 +8,13 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["screenshot", "wayland", "gpui", "annotation"]
 categories = ["multimedia::images", "gui"]
-default-run = "moment"
+default-run = "quickscope"
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "moment"
+name = "quickscope"
 path = "src/main.rs"
 
 [features]
@@ -26,7 +26,7 @@ e2e = ["dep:wayland-protocols-misc"]
 # Plays the user (virtual pointer/keyboard, clipboard, wallpaper) inside a
 # headless compositor for the e2e suite.
 [[bin]]
-name = "moment-e2e-helper"
+name = "quickscope-e2e-helper"
 path = "tests/support/e2e_helper.rs"
 required-features = ["e2e"]
 test = false

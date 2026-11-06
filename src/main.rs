@@ -2,19 +2,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use moment::config;
-use moment::ipc::{self, CaptureOptions, Mode, Request, Response, Switch};
+use quickscope::config;
+use quickscope::ipc::{self, CaptureOptions, Mode, Request, Response, Switch};
 
 const USAGE: &str = "\
-moment — screenshot daemon and annotation editor
+quickscope — screenshot daemon and annotation editor
 
 USAGE:
-    moment capture <region|output|window|screen> [OPTIONS]
-    moment open-last
-    moment open <FILE>
-    moment notifications <on|off|toggle|status>
-    moment daemon
-    moment ping | quit
+    quickscope capture <region|output|window|screen> [OPTIONS]
+    quickscope open-last
+    quickscope open <FILE>
+    quickscope notifications <on|off|toggle|status>
+    quickscope daemon
+    quickscope ping | quit
 
 CAPTURE OPTIONS:
     --edit / --no-edit           Open the editor right away (default: on notification click)
@@ -26,25 +26,25 @@ CAPTURE OPTIONS:
     -o, --output <NAME>          Output for `output` mode (default: focused output)
     -g, --geometry <\"X,Y WxH\">   Capture this logical rectangle (slurp format), no selection
 
-Commands talk to the daemon over $XDG_RUNTIME_DIR/moment-$WAYLAND_DISPLAY.sock
-(override with MOMENT_SOCKET) and start it on demand.
+Commands talk to the daemon over $XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock
+(override with QUICKSCOPE_SOCKET) and start it on demand.
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let level = if args.first().map(String::as_str) == Some("daemon") {
-        "moment=info,warn"
+        "quickscope=info,warn"
     } else {
         "warn"
     };
-    env_logger::Builder::from_env(env_logger::Env::new().filter_or("MOMENT_LOG", level))
+    env_logger::Builder::from_env(env_logger::Env::new().filter_or("QUICKSCOPE_LOG", level))
         .format_timestamp_millis()
         .init();
 
     match run(args) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("moment: {e:#}");
+            eprintln!("quickscope: {e:#}");
             ExitCode::FAILURE
         }
     }
@@ -64,12 +64,12 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         "-V" | "--version" => {
-            println!("moment {}", env!("CARGO_PKG_VERSION"));
+            println!("quickscope {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
         "daemon" => {
             no_extra(&rest)?;
-            moment::daemon::run(socket)?;
+            quickscope::daemon::run(socket)?;
             return Ok(ExitCode::SUCCESS);
         }
         "capture" => parse_capture(&rest)?,
@@ -81,13 +81,13 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             [path] => {
                 Request::Open(std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             }
-            _ => anyhow::bail!("usage: moment open <FILE>"),
+            _ => anyhow::bail!("usage: quickscope open <FILE>"),
         },
         "notifications" | "notify" => match rest.as_slice() {
             [s] => Request::Notifications(Switch::parse(s).ok_or_else(|| {
-                anyhow::anyhow!("usage: moment notifications <on|off|toggle|status>")
+                anyhow::anyhow!("usage: quickscope notifications <on|off|toggle|status>")
             })?),
-            _ => anyhow::bail!("usage: moment notifications <on|off|toggle|status>"),
+            _ => anyhow::bail!("usage: quickscope notifications <on|off|toggle|status>"),
         },
         "ping" => {
             no_extra(&rest)?;
@@ -102,7 +102,7 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
                 Some(Duration::from_secs(5)),
             ));
         }
-        other => anyhow::bail!("unknown command {other:?}; see `moment --help`"),
+        other => anyhow::bail!("unknown command {other:?}; see `quickscope --help`"),
     };
     // Interactive selection waits on the user; everything else is quick.
     let timeout = match &request {
@@ -127,7 +127,7 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Response::Text { text, .. } if text.is_empty() => {
-            eprintln!("moment: no text found");
+            eprintln!("quickscope: no text found");
             Ok(ExitCode::from(1))
         }
         Response::Text { text, .. } => {
@@ -143,7 +143,7 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Response::Cancelled => {
-            eprintln!("moment: cancelled");
+            eprintln!("quickscope: cancelled");
             Ok(ExitCode::from(1))
         }
         Response::Error(e) => anyhow::bail!(e),
@@ -203,7 +203,7 @@ fn parse_capture(args: &[String]) -> anyhow::Result<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moment::geom::IRect;
+    use quickscope::geom::IRect;
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()

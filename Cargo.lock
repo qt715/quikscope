@@ -3065,44 +3065,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "moment"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "env_logger",
- "fontdb",
- "futures",
- "gpui-pre",
- "gpui-pre-platform",
- "image",
- "libc",
- "libloading",
- "log",
- "lyon",
- "memmap2",
- "png 0.18.1",
- "rustix",
- "rustybuzz",
- "serde",
- "serde_json",
- "smallvec",
- "tempfile",
- "tiny-skia",
- "toml 0.9.12+spec-1.1.0",
- "toml_edit 0.25.18+spec-1.1.0",
- "ttf-parser",
- "unicode-bidi",
- "unicode-script",
- "unicode-segmentation",
- "uuid",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-misc",
- "wayland-protocols-wlr",
- "zbus",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4132,6 +4094,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "quickscope"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "fontdb",
+ "futures",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "image",
+ "libc",
+ "libloading",
+ "log",
+ "lyon",
+ "memmap2",
+ "png 0.18.1",
+ "rustix",
+ "rustybuzz",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "tempfile",
+ "tiny-skia",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit 0.25.18+spec-1.1.0",
+ "ttf-parser",
+ "unicode-bidi",
+ "unicode-script",
+ "unicode-segmentation",
+ "uuid",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
+ "zbus",
 ]
 
 [[package]]

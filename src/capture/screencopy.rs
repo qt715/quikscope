@@ -55,7 +55,7 @@ impl Capturer {
         let (tx, rx) = mpsc::channel::<Job>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
         std::thread::Builder::new()
-            .name("moment-capture".into())
+            .name("quickscope-capture".into())
             .spawn(move || {
                 let mut client = match Client::connect() {
                     Ok(c) => {
@@ -368,7 +368,7 @@ fn alloc_buffer(
 ) -> Result<ShmBuffer> {
     use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
     let size = spec.stride as u64 * spec.height as u64;
-    let fd = memfd_create("moment-screencopy", MemfdFlags::CLOEXEC)?;
+    let fd = memfd_create("quickscope-screencopy", MemfdFlags::CLOEXEC)?;
     ftruncate(&fd, size)?;
     let file = File::from(fd);
     // SAFETY: the memfd is private to this process and the compositor; the

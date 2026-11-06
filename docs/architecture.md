@@ -1,14 +1,14 @@
 # Architecture
 
-One binary, two roles: a thin **client** (`moment capture …`) that sends one
-line over a Unix socket, and a resident **daemon** (`moment daemon`) that does
+One binary, two roles: a thin **client** (`quickscope capture …`) that sends one
+line over a Unix socket, and a resident **daemon** (`quickscope daemon`) that does
 the work. Keeping the daemon alive is the main latency win: the Wayland
 connections, bound globals, shared-memory buffers, GPU device and shader
 pipelines all exist before the keybind is pressed.
 
 ```mermaid
 flowchart LR
-    key[keybind] --> client[moment client]
+    key[keybind] --> client[quickscope client]
     client -- "capture region\n(Unix socket)" --> ipc[IPC thread]
     ipc --> main[GPUI main thread]
     main -- job --> cap[capture thread\nwlr-screencopy]
@@ -27,11 +27,11 @@ flowchart LR
 | Thread | Owns | Notes |
 | --- | --- | --- |
 | GPUI main | windows, shots, documents | All UI state; never blocks. |
-| `moment-ipc` | the listening socket | One short-lived thread per connection, so an interactive selection never blocks `open-last` or `ping`. |
-| `moment-capture` | its own Wayland connection, outputs, `wl_shm` buffers | Captures every requested output concurrently; buffers are reused while an output's mode is unchanged. Waits are bounded (3 s) so a wedged compositor cannot hang it. |
-| `moment-clipboard` | a second Wayland connection, the data-control selection | Claims the selection immediately; a paste blocks only until the background PNG encoder finishes. |
-| `moment-notify` | D-Bus signal subscriptions | Maps notification ids to shots; a click opens the editor. |
-| `moment-ocr-<lang>` | one Tesseract instance (`libtesseract`, opened with `dlopen`) | One thread per language model; the primary stays loaded, others unload after 2 idle minutes. See [text extraction](text-extraction.md). |
+| `quickscope-ipc` | the listening socket | One short-lived thread per connection, so an interactive selection never blocks `open-last` or `ping`. |
+| `quickscope-capture` | its own Wayland connection, outputs, `wl_shm` buffers | Captures every requested output concurrently; buffers are reused while an output's mode is unchanged. Waits are bounded (3 s) so a wedged compositor cannot hang it. |
+| `quickscope-clipboard` | a second Wayland connection, the data-control selection | Claims the selection immediately; a paste blocks only until the background PNG encoder finishes. |
+| `quickscope-notify` | D-Bus signal subscriptions | Maps notification ids to shots; a click opens the editor. |
+| `quickscope-ocr-<lang>` | one Tesseract instance (`libtesseract`, opened with `dlopen`) | One thread per language model; the primary stays loaded, others unload after 2 idle minutes. See [text extraction](text-extraction.md). |
 | GPUI background pool | PNG encoding, tile building, composition, export | |
 
 The capture and clipboard threads use their own connections rather than
@@ -125,7 +125,7 @@ swapped, so there is no conversion pass in either direction.
 ## Persistence
 
 - The latest capture is written uncompressed to
-  `$XDG_CACHE_HOME/moment/last.raw` (20-byte header + BGRA) in the
+  `$XDG_CACHE_HOME/quickscope/last.raw` (20-byte header + BGRA) in the
   background; `open-last` after a daemon restart reads it in one `read`
   without decoding. Without it, the newest image in the screenshots folder
   is opened.

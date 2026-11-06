@@ -1,6 +1,6 @@
 //! A private headless desktop for end-to-end tests: a wlroots compositor
 //! (labwc or sway) with the pixman renderer, a private D-Bus session with a
-//! fake notification server, and a `moment` daemon — all in a temporary
+//! fake notification server, and a `quickscope` daemon — all in a temporary
 //! directory, never touching the developer's real session.
 
 #![allow(dead_code)]
@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use zbus::zvariant::OwnedValue;
 
-pub const MOMENT: &str = env!("CARGO_BIN_EXE_moment");
-pub const HELPER: &str = env!("CARGO_BIN_EXE_moment-e2e-helper");
+pub const QUICKSCOPE: &str = env!("CARGO_BIN_EXE_quickscope");
+pub const HELPER: &str = env!("CARGO_BIN_EXE_quickscope-e2e-helper");
 
 /// Default headless output size of wlroots.
 pub const OUTPUT_W: u32 = 1280;
@@ -30,7 +30,7 @@ pub struct Notified {
     pub hints: Vec<String>,
 }
 
-/// A running `moment-e2e-helper ime`; see [`Session::input_method`].
+/// A running `quickscope-e2e-helper ime`; see [`Session::input_method`].
 pub struct InputMethod {
     child: Child,
     lines: std::sync::mpsc::Receiver<String>,
@@ -113,7 +113,7 @@ impl FakeNotifications {
     fn get_server_information(&self) -> (String, String, String, String) {
         (
             "fake".into(),
-            "moment-tests".into(),
+            "quickscope-tests".into(),
             "1".into(),
             "1.2".into(),
         )
@@ -150,7 +150,7 @@ fn wait_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
 
 impl Session {
     /// Starts a session, or returns `None` (test skipped) when no headless
-    /// compositor is installed and `MOMENT_E2E=1` is not set.
+    /// compositor is installed and `QUICKSCOPE_E2E=1` is not set.
     pub fn start() -> Option<Session> {
         Self::start_with(1, |_| {})
     }
@@ -159,8 +159,8 @@ impl Session {
     /// to right); `before_pattern` runs after the compositor is up but before
     /// the test wallpaper is drawn (to reconfigure outputs).
     pub fn start_with(outputs: usize, before_pattern: impl FnOnce(&Session)) -> Option<Session> {
-        let required = std::env::var("MOMENT_E2E").is_ok_and(|v| v == "1");
-        let compositor = std::env::var("MOMENT_E2E_COMPOSITOR").ok().or_else(|| {
+        let required = std::env::var("QUICKSCOPE_E2E").is_ok_and(|v| v == "1");
+        let compositor = std::env::var("QUICKSCOPE_E2E_COMPOSITOR").ok().or_else(|| {
             ["labwc", "sway"]
                 .into_iter()
                 .find(|c| which(c))
@@ -169,7 +169,7 @@ impl Session {
         let Some(compositor) = compositor.filter(|c| which(c)) else {
             assert!(
                 !required,
-                "MOMENT_E2E=1 but neither labwc nor sway is installed"
+                "QUICKSCOPE_E2E=1 but neither labwc nor sway is installed"
             );
             eprintln!("skipping: no headless compositor (install labwc or sway)");
             return None;
@@ -180,18 +180,18 @@ impl Session {
         );
 
         let dir = tempfile::Builder::new()
-            .prefix("moment-e2e")
+            .prefix("quickscope-e2e")
             .tempdir()
             .unwrap();
         let root = dir.path();
-        for sub in ["run", "config/moment", "cache", "home", "shots"] {
+        for sub in ["run", "config/quickscope", "cache", "home", "shots"] {
             std::fs::create_dir_all(root.join(sub)).unwrap();
         }
         let run = root.join("run");
         std::fs::set_permissions(&run, std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .unwrap();
         std::fs::write(
-            root.join("config/moment/config.toml"),
+            root.join("config/quickscope/config.toml"),
             format!("save_dir = \"{}\"\n", root.join("shots").display()),
         )
         .unwrap();
@@ -234,10 +234,10 @@ impl Session {
             ("WAYLAND_DISPLAY".into(), "wayland-0".into()),
             ("DBUS_SESSION_BUS_ADDRESS".into(), bus_addr.clone()),
             (
-                "MOMENT_SOCKET".into(),
-                run.join("moment.sock").display().to_string(),
+                "QUICKSCOPE_SOCKET".into(),
+                run.join("quickscope.sock").display().to_string(),
             ),
-            ("MOMENT_LOG".into(), "moment=debug,warn".into()),
+            ("QUICKSCOPE_LOG".into(), "quickscope=debug,warn".into()),
             ("WLR_BACKENDS".into(), "headless".into()),
             ("WLR_RENDERER".into(), "pixman".into()),
             ("WLR_LIBINPUT_NO_DEVICES".into(), "1".into()),
@@ -348,11 +348,11 @@ impl Session {
     }
 
     pub fn cache_file(&self) -> PathBuf {
-        self.root().join("cache/moment/last.raw")
+        self.root().join("cache/quickscope/last.raw")
     }
 
     pub fn socket(&self) -> PathBuf {
-        self.root().join("run/moment.sock")
+        self.root().join("run/quickscope.sock")
     }
 
     fn daemon_log_path(&self) -> PathBuf {
@@ -377,7 +377,7 @@ impl Session {
 
     pub fn start_daemon(&mut self) {
         let log = std::fs::File::create(self.daemon_log_path()).unwrap();
-        let mut cmd = self.command(MOMENT);
+        let mut cmd = self.command(QUICKSCOPE);
         cmd.arg("daemon").stdout(Stdio::null()).stderr(log);
         self.daemon = Some(cmd.spawn().unwrap());
         self.wait_log("daemon ready", Duration::from_secs(20));
@@ -406,10 +406,10 @@ impl Session {
         self.wait_log_count(needle, 1, timeout);
     }
 
-    pub fn moment(&self, args: &[&str]) -> Output {
-        let out = self.command(MOMENT).args(args).output().unwrap();
+    pub fn quickscope(&self, args: &[&str]) -> Output {
+        let out = self.command(QUICKSCOPE).args(args).output().unwrap();
         eprintln!(
-            "$ moment {} -> {}\n{}{}",
+            "$ quickscope {} -> {}\n{}{}",
             args.join(" "),
             out.status,
             String::from_utf8_lossy(&out.stdout),
@@ -418,8 +418,8 @@ impl Session {
         out
     }
 
-    pub fn spawn_moment(&self, args: &[&str]) -> Child {
-        self.command(MOMENT)
+    pub fn spawn_quickscope(&self, args: &[&str]) -> Child {
+        self.command(QUICKSCOPE)
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -427,7 +427,7 @@ impl Session {
             .unwrap()
     }
 
-    /// Waits for a client spawned with [`Session::spawn_moment`], killing it
+    /// Waits for a client spawned with [`Session::spawn_quickscope`], killing it
     /// (and failing) if it outlives `timeout`.
     pub fn finish(&self, mut child: Child, timeout: Duration) -> Output {
         let deadline = Instant::now() + timeout;
@@ -548,7 +548,7 @@ impl Session {
 
     pub fn stop_daemon(&mut self) {
         if let Some(mut d) = self.daemon.take() {
-            let _ = self.moment(&["quit"]);
+            let _ = self.quickscope(&["quit"]);
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
                 if let Ok(Some(_)) = d.try_wait() {
@@ -569,12 +569,12 @@ impl Drop for Session {
             let _ = d.wait();
         }
         // A daemon auto-started by the client is not our child; stop it by socket.
-        let _ = self.command(MOMENT).arg("quit").output();
+        let _ = self.command(QUICKSCOPE).arg("quit").output();
         for c in self.children.iter_mut().rev() {
             let _ = c.kill();
             let _ = c.wait();
         }
-        if std::env::var_os("MOMENT_E2E_KEEP").is_some() {
+        if std::env::var_os("QUICKSCOPE_E2E_KEEP").is_some() {
             let kept = self.dir.path().to_path_buf();
             eprintln!("keeping {}", kept.display());
             std::mem::forget(std::mem::replace(
@@ -631,6 +631,6 @@ pub fn pattern_pixel(x: u32, y: u32) -> [u8; 4] {
     [b, (y % 256) as u8, (x % 256) as u8, 255]
 }
 
-pub fn decode_png(path: &Path) -> moment::raster::Image {
-    moment::raster::Image::load(path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
+pub fn decode_png(path: &Path) -> quickscope::raster::Image {
+    quickscope::raster::Image::load(path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
 }

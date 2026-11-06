@@ -260,7 +260,7 @@ impl Pool {
         let pool = self.clone();
         let lang = lang.to_string();
         std::thread::Builder::new()
-            .name(format!("moment-ocr-{lang}"))
+            .name(format!("quickscope-ocr-{lang}"))
             .spawn(move || {
                 let mut engine: Option<Engine> = None;
                 let mut pinned = false;

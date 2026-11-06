@@ -55,7 +55,7 @@ struct Daemon {
     next_id: u64,
     selecting: bool,
     /// Capture notifications; starts from the config, changed by
-    /// `moment notifications …` (which also persists it).
+    /// `quickscope notifications …` (which also persists it).
     notify: bool,
 }
 
@@ -66,7 +66,7 @@ pub fn bind(socket: &Path) -> Result<UnixListener> {
     if socket.exists() {
         if UnixStream::connect(socket).is_ok() {
             bail!(
-                "a moment daemon is already listening on {}",
+                "a quickscope daemon is already listening on {}",
                 socket.display()
             );
         }
@@ -203,7 +203,7 @@ fn prewarm_gpu(cx: &mut App) {
             })),
             window_background: WindowBackgroundAppearance::Transparent,
             kind: WindowKind::LayerShell(layer_shell::LayerShellOptions {
-                namespace: "moment-prewarm".into(),
+                namespace: "quickscope-prewarm".into(),
                 layer: layer_shell::Layer::Background,
                 anchor: layer_shell::Anchor::TOP | layer_shell::Anchor::LEFT,
                 keyboard_interactivity: layer_shell::KeyboardInteractivity::None,
@@ -233,7 +233,7 @@ fn prewarm_gpu(cx: &mut App) {
 
 fn spawn_listener(listener: UnixListener, tx: mpsc::UnboundedSender<Msg>) {
     std::thread::Builder::new()
-        .name("moment-ipc".into())
+        .name("quickscope-ipc".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
@@ -426,10 +426,10 @@ async fn select_region(snap: &Snapshot, cx: &mut AsyncApp) -> Result<Option<IRec
                             size: size(px(logical.w as f32), px(logical.h as f32)),
                         })),
                         display_id,
-                        app_id: Some("moment".into()),
+                        app_id: Some("quickscope".into()),
                         window_background: WindowBackgroundAppearance::Opaque,
                         kind: WindowKind::LayerShell(layer_shell::LayerShellOptions {
-                            namespace: "moment-selection".into(),
+                            namespace: "quickscope-selection".into(),
                             layer: layer_shell::Layer::Overlay,
                             anchor: layer_shell::Anchor::TOP
                                 | layer_shell::Anchor::BOTTOM
@@ -657,7 +657,7 @@ fn preview(text: &str) -> String {
     out
 }
 
-/// `moment notifications on|off|toggle|status`. Changes are written to the
+/// `quickscope notifications on|off|toggle|status`. Changes are written to the
 /// config file first, so the daemon never reports a state that a restart
 /// would lose.
 async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<Response>> {
@@ -819,10 +819,10 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
     );
     let title = match &shot.source {
         Some(p) => format!(
-            "moment — {}",
+            "quickscope — {}",
             p.file_name().unwrap_or_default().to_string_lossy()
         ),
-        None => format!("moment — {}×{}", shot.image.width, shot.image.height),
+        None => format!("quickscope — {}×{}", shot.image.width, shot.image.height),
     };
 
     let handle = cx.open_window(
@@ -832,7 +832,7 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::centered(size(px(w), px(h)), cx)),
-            app_id: Some("moment".into()),
+            app_id: Some("quickscope".into()),
             focus: true,
             show: true,
             window_min_size: Some(size(px(480.), px(320.))),

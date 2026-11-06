@@ -2,16 +2,16 @@
 //! headless wlroots compositor:
 //!
 //! ```text
-//! moment-e2e-helper pattern                      # wallpaper + keep a keyboard attached (stays running)
-//! moment-e2e-helper drag X1 Y1 X2 Y2 [right]     # press, move, release (virtual pointer)
-//! moment-e2e-helper click X Y [right]
-//! moment-e2e-helper move X Y
-//! moment-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
-//! moment-e2e-helper type TEXT                    # type ASCII text
-//! moment-e2e-helper ime                          # resident input method: steps on stdin, reports activation
-//! moment-e2e-helper toplevels                    # print "app_id\ttitle" per window
-//! moment-e2e-helper paste MIME                   # write the clipboard contents to stdout
-//! moment-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
+//! quickscope-e2e-helper pattern                      # wallpaper + keep a keyboard attached (stays running)
+//! quickscope-e2e-helper drag X1 Y1 X2 Y2 [right]     # press, move, release (virtual pointer)
+//! quickscope-e2e-helper click X Y [right]
+//! quickscope-e2e-helper move X Y
+//! quickscope-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
+//! quickscope-e2e-helper type TEXT                    # type ASCII text
+//! quickscope-e2e-helper ime                          # resident input method: steps on stdin, reports activation
+//! quickscope-e2e-helper toplevels                    # print "app_id\ttitle" per window
+//! quickscope-e2e-helper paste MIME                   # write the clipboard contents to stdout
+//! quickscope-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
 //! ```
 //!
 //! Coordinates are global logical pixels.
@@ -522,7 +522,7 @@ fn run_pattern(
             &surface,
             Some(o),
             zwlr_layer_shell_v1::Layer::Background,
-            "moment-e2e-pattern".into(),
+            "quickscope-e2e-pattern".into(),
             &qh,
             i,
         );

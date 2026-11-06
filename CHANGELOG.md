@@ -17,7 +17,7 @@ First release.
 - `open-last` and `open <file>`; annotations survive closing the editor. The
   last-capture cache has a single ordered writer, so rapid or overlapping
   captures always leave the newest one, and `quit` waits for it.
-- `moment notifications on|off|toggle|status`: switch capture notifications
+- `quickscope notifications on|off|toggle|status`: switch capture notifications
   at runtime; the change is saved to the config file.
 - Color picker (hue/saturation wheel, value and alpha sliders, hex and RGBA
   fields) behind the palette button; live recoloring of the selection as one

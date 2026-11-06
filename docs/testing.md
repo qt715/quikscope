@@ -13,12 +13,12 @@
 ```sh
 cargo test                                    # everything but e2e
 cargo test --features e2e --test e2e          # e2e (skips without a compositor)
-MOMENT_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
+QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
 ```
 
 The text-shaping unit tests (Japanese, Arabic, Hebrew, Devanagari, emoji)
 need a font for each script, which they find among installed fonts; without
-one a test prints `skipped:` and passes. `MOMENT_REQUIRE_FONTS=1` (set in CI,
+one a test prints `skipped:` and passes. `QUICKSCOPE_REQUIRE_FONTS=1` (set in CI,
 which installs `fonts-noto-core`, `fonts-noto-cjk` and
 `fonts-noto-color-emoji`) turns a missing font into a failure.
 
@@ -27,7 +27,7 @@ lines in English, Japanese, Chinese, Korean, Arabic, Thai, Vietnamese and
 German, extracts them with the real Tesseract, and checks every line's text
 and the model that read it, region extraction and its coordinates, and
 `ocr.languages`. A missing Tesseract or language model skips the affected
-checks; `MOMENT_REQUIRE_OCR=1` (set in CI) makes it a failure. CI installs
+checks; `QUICKSCOPE_REQUIRE_OCR=1` (set in CI) makes it a failure. CI installs
 Debian's "fast" models without `chi_tra`, see
 [text extraction](text-extraction.md#limits).
 
@@ -39,11 +39,11 @@ Debian's "fast" models without `chi_tra`, see
 intentional rendering change:
 
 ```sh
-MOMENT_BLESS=1 cargo test --test render_regression
+QUICKSCOPE_BLESS=1 cargo test --test render_regression
 ```
 
 and review the changed PNGs in the diff. On failure the actual image is
-written to `$TMPDIR/moment-<name>-actual.png`.
+written to `$TMPDIR/quickscope-<name>-actual.png`.
 
 ## GPU/CPU parity
 
@@ -51,7 +51,7 @@ written to `$TMPDIR/moment-<name>-actual.png`.
 with the WGPU offscreen renderer, screenshots it, and compares the image area
 with the exporter's output for the same document. A 3-pixel offset in the
 editor's transform already fails it. On failure both images are written to
-`$TMPDIR/moment-parity-{gpu,cpu}.png`.
+`$TMPDIR/quickscope-parity-{gpu,cpu}.png`.
 
 ## Editor interaction
 
@@ -75,13 +75,13 @@ touches the developer's session:
 - a private D-Bus with no service directories and an in-process fake
   `org.freedesktop.Notifications` that records notifications and can emit
   clicks;
-- `moment-e2e-helper` (built with the `e2e` feature), which paints a known
+- `quickscope-e2e-helper` (built with the `e2e` feature), which paints a known
   test pattern as wallpaper, keeps a virtual keyboard attached, drives a
   virtual pointer and keyboard, lists toplevels, reads the clipboard through
   data-control, reconfigures outputs, and plays a resident input method
   (`zwp_input_method_v2`, the protocol fcitx5 and IBus use) that reports
   when the compositor activates it and sends pre-edit and commit strings;
-- the real `moment daemon` and `moment` client binaries.
+- the real `quickscope daemon` and `quickscope` client binaries.
 
 The suite covers: screen capture → notification, cache and clipboard
 (pixel-identical to `grim`); exact geometry crops; region drag, click,
@@ -97,8 +97,8 @@ replacing it, and the saved text measuring exactly the committed string;
 `Ctrl+Shift+C` in the editor pasted back as `text/plain`, and
 `capture screen --text` printing, copying and notifying the text.
 
-Set `MOMENT_E2E_KEEP=1` to keep a session's directory (compositor and daemon
-logs) after the test, and `MOMENT_E2E_COMPOSITOR=sway` to pick the
+Set `QUICKSCOPE_E2E_KEEP=1` to keep a session's directory (compositor and daemon
+logs) after the test, and `QUICKSCOPE_E2E_COMPOSITOR=sway` to pick the
 compositor.
 
 ## CI
