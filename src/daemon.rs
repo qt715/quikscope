@@ -28,7 +28,7 @@ use crate::geom::IRect;
 use crate::ipc::{CaptureOptions, Mode, Request, Response, Switch};
 use crate::notify::Notifier;
 use crate::raster::{Compression, Image};
-use crate::ui::editor::{Editor, EditorServices};
+use crate::ui::editor::{Editor, EditorServices, LastTool};
 use crate::ui::overlay::{Overlay, Selection};
 use crate::ui::{self, Assets, Shot};
 
@@ -161,7 +161,7 @@ pub fn run(socket: PathBuf) -> Result<()> {
                         }
                         Msg::OpenShot(id) => {
                             cx.update(|cx| {
-                                if let Err(e) = open_editor(id, cx) {
+                                if let Err(e) = open_editor(id, EditorTool::Default, cx) {
                                     log::error!("opening editor: {e:#}");
                                 }
                             });
@@ -555,7 +555,7 @@ async fn finish_capture(
 
     if opts.edit.unwrap_or(config.open_editor) {
         let id = shot.id;
-        cx.update(|cx| open_editor(id, cx))?;
+        cx.update(|cx| open_editor(id, EditorTool::Default, cx))?;
     }
 
     Ok(Response::Shot {
@@ -610,7 +610,7 @@ fn shot_response(shot: &Shot) -> Response {
 
 async fn open_last(cx: &mut AsyncApp) -> Result<Option<Response>> {
     if let Some(shot) = daemon(cx, |d, _| d.shots.back().cloned()) {
-        cx.update(|cx| open_editor(shot.id, cx))?;
+        cx.update(|cx| open_editor(shot.id, EditorTool::Last, cx))?;
         return Ok(Some(shot_response(&shot)));
     }
     // Nothing captured since the daemon started: fall back to the cache,
@@ -630,7 +630,7 @@ async fn open_last(cx: &mut AsyncApp) -> Result<Option<Response>> {
         .await?;
     let (image, scale, source) = loaded;
     let shot = add_shot(Arc::new(image), scale, source, cx);
-    cx.update(|cx| open_editor(shot.id, cx))?;
+    cx.update(|cx| open_editor(shot.id, EditorTool::Last, cx))?;
     Ok(Some(shot_response(&shot)))
 }
 
@@ -638,7 +638,7 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
     let p = path.clone();
     let image = cx.background_spawn(async move { Image::load(&p) }).await?;
     let shot = add_shot(Arc::new(image), 1.0, Some(path), cx);
-    cx.update(|cx| open_editor(shot.id, cx))?;
+    cx.update(|cx| open_editor(shot.id, EditorTool::Default, cx))?;
     Ok(Some(shot_response(&shot)))
 }
 
@@ -677,9 +677,19 @@ fn editor_window_size(image_w: f32, image_h: f32, screen_w: f32, screen_h: f32) 
     )
 }
 
+/// Which tool a newly opened editor starts with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorTool {
+    /// The editor's default (arrow).
+    Default,
+    /// The tool last chosen in any editor (`open-last`), so reopening the
+    /// last screenshot continues where the previous session stopped.
+    Last,
+}
+
 /// Opens (or focuses) the editor for shot `id`, keeping annotations from a
 /// previous editor session of the same shot.
-fn open_editor(id: u64, cx: &mut App) -> Result<()> {
+fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
     let started = Instant::now();
     let (shot, existing) = cx.read_global::<Daemon, _>(|d, _| {
         (
@@ -738,7 +748,17 @@ fn open_editor(id: u64, cx: &mut App) -> Result<()> {
             ..Default::default()
         },
         move |window, cx| {
-            let editor = cx.new(|cx| Editor::new(shot, doc, window, cx));
+            let last = match tool {
+                EditorTool::Last => cx.try_global::<LastTool>().map(|t| t.0),
+                EditorTool::Default => None,
+            };
+            let editor = cx.new(|cx| {
+                let mut editor = Editor::new(shot, doc, window, cx);
+                if let Some(tool) = last {
+                    editor.tool = tool;
+                }
+                editor
+            });
             window.activate_window();
             editor
         },

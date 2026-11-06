@@ -630,3 +630,49 @@ fn input_method_composes_and_commits_into_editor_text() {
         "text ink {ink}px wide, \"A日本語!\" lays out {expected}px"
     );
 }
+
+#[test]
+fn open_last_keeps_the_last_used_tool() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+    assert!(
+        s.moment(&["capture", "screen", "--edit", "--no-notify"])
+            .status
+            .success()
+    );
+    s.wait_for_window("moment");
+    s.wait_log("editor window opened", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    // Pick the rectangle, then close the editor without drawing.
+    s.keys(&["r", "escape"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!s.toplevels().iter().any(|l| l.starts_with("moment")));
+
+    assert!(s.moment(&["open-last"]).status.success());
+    s.wait_log_count("editor window opened", 2, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    // No tool key: the drag draws with whatever tool the editor opened with.
+    s.helper(&["drag", "520", "300", "760", "460"]);
+    s.keys(&["ctrl+s"]);
+    s.wait_log("saved ", Duration::from_secs(10));
+    let saved = std::fs::read_dir(s.shots_dir())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let img = decode_png(&saved);
+    // A rectangle has a long horizontal edge; the default arrow drawn by
+    // the same drag is diagonal and never fills 150 px of one row.
+    let red = [0x31, 0x31, 0xe0, 0xff];
+    let longest_row = (0..img.height)
+        .map(|y| img.row(y).chunks_exact(4).filter(|p| *p == red).count())
+        .max()
+        .unwrap();
+    assert!(
+        longest_row > 150,
+        "no rectangle edge: longest red row {longest_row} px"
+    );
+}

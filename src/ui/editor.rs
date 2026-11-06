@@ -37,6 +37,13 @@ pub struct EditorServices {
 
 impl Global for EditorServices {}
 
+/// The tool most recently chosen in any editor; `moment open-last` opens
+/// with it so you can carry on where you left off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastTool(pub Tool);
+
+impl Global for LastTool {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Select,
@@ -411,6 +418,7 @@ impl Editor {
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.commit_text(cx);
         self.tool = tool;
+        cx.set_global(LastTool(tool));
         if tool != Tool::Select {
             self.selected = None;
         }
