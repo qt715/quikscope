@@ -99,6 +99,9 @@ pub struct Overlay {
     focus: FocusHandle,
     /// Set until the first frame, for latency logging.
     opened: Option<std::time::Instant>,
+    /// Logged once, when the first pointer motion arrives: until then
+    /// clicks may still land on whatever was under the overlay.
+    pointer_seen: bool,
 }
 
 impl Overlay {
@@ -121,6 +124,7 @@ impl Overlay {
             image_width,
             focus,
             opened: Some(std::time::Instant::now()),
+            pointer_seen: false,
         }
     }
 
@@ -241,7 +245,12 @@ impl Render for Overlay {
                             if phase != DispatchPhase::Bubble {
                                 return;
                             }
-                            let (x, y) = overlay.read(cx).global(ev.position, window);
+                            let (x, y) = overlay.update(cx, |o, _| {
+                                if !std::mem::replace(&mut o.pointer_seen, true) {
+                                    log::debug!("overlay has the pointer");
+                                }
+                                o.global(ev.position, window)
+                            });
                             sel.update(cx, |s, cx| {
                                 s.motion(x, y);
                                 cx.notify();

@@ -448,10 +448,22 @@ impl Session {
 
     /// Waits until the `n`th selection overlay is on screen and has the
     /// pointer, so synthetic input lands on it rather than the wallpaper.
+    /// Under load the surface can map well after it is created, so the
+    /// pointer is nudged until the overlay reports motion.
     pub fn wait_overlay(&self, n: usize) {
         self.wait_log_count("selection overlays opened", n, Duration::from_secs(10));
-        std::thread::sleep(Duration::from_millis(300));
-        self.helper(&["move", "1", "1"]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut nudge = 1;
+        while self.daemon_log().matches("overlay has the pointer").count() < n {
+            assert!(
+                Instant::now() < deadline,
+                "overlay {n} never received the pointer; daemon log:\n{}",
+                self.daemon_log()
+            );
+            nudge = 3 - nudge;
+            self.helper(&["move", &nudge.to_string(), "1"]);
+            std::thread::sleep(Duration::from_millis(30));
+        }
     }
 
     pub fn helper(&self, args: &[&str]) -> Output {
