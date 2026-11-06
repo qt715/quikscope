@@ -7,7 +7,8 @@
 | Golden-image regression | `tests/render_regression.rs`, `tests/golden/` | nothing |
 | GPU/CPU parity | `tests/editor_render.rs` | Vulkan or GL (Mesa lavapipe/llvmpipe is enough) |
 | Editor interaction | `tests/editor_ui.rs` | Vulkan or GL, as above |
-| End to end | `tests/e2e.rs` (feature `e2e`) | `labwc` or `sway`, `dbus-daemon`; `grim` for reference comparisons; `bwrap` optional |
+| Text extraction | `tests/ocr.rs` | Tesseract and its language models; skips without them |
+| End to end | `tests/e2e.rs` (feature `e2e`) | `labwc` or `sway`, `dbus-daemon`; `grim` for reference comparisons; `bwrap` optional; Tesseract for the text extraction test |
 
 ```sh
 cargo test                                    # everything but e2e
@@ -20,6 +21,15 @@ need a font for each script, which they find among installed fonts; without
 one a test prints `skipped:` and passes. `MOMENT_REQUIRE_FONTS=1` (set in CI,
 which installs `fonts-noto-core`, `fonts-noto-cjk` and
 `fonts-noto-color-emoji`) turns a missing font into a failure.
+
+`tests/ocr.rs` renders chat-like screenshots (dark and light themes) with
+lines in English, Japanese, Chinese, Korean, Arabic, Thai, Vietnamese and
+German, extracts them with the real Tesseract, and checks every line's text
+and the model that read it, region extraction and its coordinates, and
+`ocr.languages`. A missing Tesseract or language model skips the affected
+checks; `MOMENT_REQUIRE_OCR=1` (set in CI) makes it a failure. CI installs
+Debian's "fast" models without `chi_tra`, see
+[text extraction](text-extraction.md#limits).
 
 ## Golden images
 
@@ -83,7 +93,9 @@ two outputs, including a selection dragged across them; and input methods:
 inactive while the editor is focused but no text is being typed, active
 with the text tool, pre-edit drawn in place, commits (CJK and single-byte)
 replacing it, and the saved text measuring exactly the committed string;
-and `open-last` reopening with the last tool used.
+`open-last` reopening with the last tool used; and text extraction:
+`Ctrl+Shift+C` in the editor pasted back as `text/plain`, and
+`capture screen --text` printing, copying and notifying the text.
 
 Set `MOMENT_E2E_KEEP=1` to keep a session's directory (compositor and daemon
 logs) after the test, and `MOMENT_E2E_COMPOSITOR=sway` to pick the
@@ -92,6 +104,6 @@ compositor.
 ## CI
 
 `.github/workflows/ci.yml` runs formatting and clippy (`-D warnings`), the
-test suite with Mesa lavapipe and Noto fonts on Ubuntu, an MSRV check, the
-e2e suite in an Arch Linux container with labwc, and a release build that is
-attached to `v*` tags.
+test suite with Mesa lavapipe, Noto fonts and Tesseract on Ubuntu, an MSRV
+check, the e2e suite in an Arch Linux container with labwc and Tesseract,
+and a release build that is attached to `v*` tags.

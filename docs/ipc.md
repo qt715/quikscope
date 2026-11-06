@@ -25,6 +25,8 @@ quit
 
 Flags override the configuration for one request: `edit`, `notify`,
 `clipboard`, `cursor`, each optionally prefixed with `no-`, and `save`.
+`text` extracts the capture's text instead of copying the image (see
+[text extraction](text-extraction.md)).
 
 Requests are rejected with an `err` response when malformed: unknown
 commands, modes or flags, extra arguments, or invalid geometry.
@@ -35,6 +37,7 @@ commands, modes or flags, extra arguments, or invalid geometry.
 ok <shot-id> <width>x<height>          # capture/open succeeded
 ok <shot-id> <width>x<height> <path>   # … and `save` wrote <path>
 ok pong                                # ping, quit
+ok text <shot-id> <text>               # capture … text: the text read (empty: none)
 ok notifications <on|off>             # notifications: the setting now in effect
 cancelled                              # the user cancelled the selection
 err <message>                          # single line
@@ -44,6 +47,9 @@ err <message>                          # single line
 selecting; clients should not apply a read timeout to it. A second
 interactive selection while one is open is refused with
 `err a selection is already in progress`.
+
+In `ok text` replies `\`, line feeds and carriage returns in the text are
+escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
 
 ## Lifecycle
 

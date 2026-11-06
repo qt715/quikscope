@@ -24,6 +24,10 @@ keybind ─▶ moment capture region ─▶ frozen-screen selection ─▶ clipb
   highlighter, text, numbered steps, pixelate (redaction) and crop, with
   undo/redo, zoom and pan. What you see is exactly what gets saved — the
   editor and the PNG exporter fill the same geometry.
+- **Text extraction**: copy the text out of a region or a screenshot, in
+  English and other European languages, Chinese, Japanese, Korean,
+  Vietnamese, Thai and Arabic, each line read in its own language
+  ([details](docs/text-extraction.md)).
 - **Plain IPC**: one text line over a Unix socket; usable from keybinds,
   scripts or `socat`.
 
@@ -45,6 +49,18 @@ install -Dm644 packaging/moment.desktop ~/.local/share/applications/moment.deskt
 The daemon is optional at login: any `moment` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
 
+Text extraction additionally needs Tesseract and a model per language,
+loaded at run time (nothing extra to build):
+
+```sh
+# Arch
+sudo pacman -S tesseract tesseract-data-eng tesseract-data-jpn tesseract-data-chi_sim \
+  tesseract-data-kor tesseract-data-vie tesseract-data-tha tesseract-data-ara
+# Debian/Ubuntu
+sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-jpn tesseract-ocr-chi-sim \
+  tesseract-ocr-kor tesseract-ocr-vie tesseract-ocr-tha tesseract-ocr-ara
+```
+
 ## Hyprland
 
 `hyprland.lua`:
@@ -54,6 +70,7 @@ hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("moment capture region"), { d
 hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("moment capture output"), { description = "Screenshot monitor" })
 hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("moment capture region --edit"), { description = "Annotate region" })
 hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("moment open-last"), { description = "Edit last screenshot" })
+hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("moment capture region --text"), { description = "Copy text from region" })
 
 hl.window_rule({ match = { class = "^(moment)$" }, float = true, center = true })
 hl.layer_rule({ match = { namespace = "^(moment-selection)$" }, no_anim = true })
@@ -66,6 +83,7 @@ bind = $mainMod SHIFT, S, exec, moment capture region
 bind = $mainMod SHIFT CTRL, S, exec, moment capture output
 bind = $mainMod SHIFT ALT, S, exec, moment capture region --edit
 bind = $mainMod SHIFT, E, exec, moment open-last
+bind = $mainMod SHIFT, X, exec, moment capture region --text
 windowrule = float on, match:class ^(moment)$
 windowrule = center on, match:class ^(moment)$
 layerrule = no_anim on, match:namespace ^(moment-selection)$
@@ -99,6 +117,7 @@ moment ping | quit
 | `--clipboard` / `--no-clipboard` | Put the capture on the clipboard as `image/png`. |
 | `--cursor` / `--no-cursor` | Include the pointer. |
 | `--save` | Also write the raw capture to the screenshots folder (prints the path). |
+| `--text` | Extract the capture's text: copy it as plain text (instead of the image), print it, and show it in the notification. Exit status 1 when no text was found. |
 | `-o, --output NAME` | Output for `output` mode. |
 | `-g, --geometry "X,Y WxH"` | Capture a logical rectangle without interaction (`slurp` format). |
 
@@ -140,6 +159,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("moment notifications toggle"
 | --- | --- |
 | Save to `~/Pictures/Screenshots` | `Ctrl+S` (repeat saves update the same file); `Ctrl+Shift+S` always writes a new file |
 | Copy annotated image | `Ctrl+C` |
+| Copy text (from the crop, else the whole screenshot; annotations are not read) | `Ctrl+Shift+C` or the scan button; the lines read light up briefly |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
 | Fill shapes | `F` |
 | Stroke / text size | `[` `]` or the toolbar dots |

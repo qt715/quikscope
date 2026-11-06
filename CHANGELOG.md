@@ -32,6 +32,11 @@ First release.
   ligatures, Arabic joining, Indic conjuncts), bidirectional text, per-grapheme
   fallback to installed fonts (CJK variant chosen from the text or locale),
   colour emoji, and caret movement and deletion by grapheme.
+- Text extraction (Tesseract, loaded at run time): `capture … --text` and
+  `Ctrl+Shift+C` / the scan button in the editor copy a screenshot's text.
+  Each line is read in its own language (English first, then every
+  installed model re-reads doubtful lines in parallel); CJK and Thai
+  spacing, mixed dark/light layouts, `[ocr] languages` in the config.
 - Drawings that extend past the screenshot grow the saved image, with a
   transparent margin; the editor refits to show them and crops may include
   them.
@@ -39,5 +44,5 @@ First release.
   actual pixels), one level per wheel notch, still eased; fitting snaps to
   a level.
 - `open-last` opens the editor with the tool used last.
-- Unit, golden-image, GPU/CPU parity, editor interaction and headless
-  end-to-end test suites; CI.
+- Unit, golden-image, GPU/CPU parity, editor interaction, text extraction
+  and headless end-to-end test suites; CI.

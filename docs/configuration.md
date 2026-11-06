@@ -41,6 +41,12 @@ font_family = "Inter"
 font_weight = 600
 font_size = 28
 font_italic = false
+
+[ocr]
+# Tesseract models for text extraction, e.g. ["eng", "jpn"]: the first reads
+# everything, the others re-read lines it is unsure of. Empty (the default):
+# English first, then every installed model.
+languages = []
 ```
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,

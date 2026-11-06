@@ -31,6 +31,7 @@ flowchart LR
 | `moment-capture` | its own Wayland connection, outputs, `wl_shm` buffers | Captures every requested output concurrently; buffers are reused while an output's mode is unchanged. Waits are bounded (3 s) so a wedged compositor cannot hang it. |
 | `moment-clipboard` | a second Wayland connection, the data-control selection | Claims the selection immediately; a paste blocks only until the background PNG encoder finishes. |
 | `moment-notify` | D-Bus signal subscriptions | Maps notification ids to shots; a click opens the editor. |
+| `moment-ocr-<lang>` | one Tesseract instance (`libtesseract`, opened with `dlopen`) | One thread per language model; the primary stays loaded, others unload after 2 idle minutes. See [text extraction](text-extraction.md). |
 | GPUI background pool | PNG encoding, tile building, composition, export | |
 
 The capture and clipboard threads use their own connections rather than
