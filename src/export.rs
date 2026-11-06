@@ -17,21 +17,26 @@ use crate::render::Prim;
 pub fn render(job: &RenderJob) -> Image {
     let started = Instant::now();
     let base = &*job.base;
-    let crop = job
-        .crop
-        .and_then(|c| c.to_pixel_rect(base.width, base.height))
-        .unwrap_or(base.bounds());
+    let area = job.area();
 
     if job.shapes.is_empty() {
-        return if crop == base.bounds() {
+        return if area == base.bounds() {
             base.clone()
         } else {
-            base.crop(crop)
+            base.crop(area)
         };
     }
 
-    // Only the cropped area is rendered: shapes are translated into it.
-    let mut out = base.crop(crop);
+    // Only the output area is rendered: shapes are translated into it. Where
+    // drawings reach past the screenshot the area is larger than it, and
+    // that margin starts out transparent.
+    let mut out = if area.intersect(&base.bounds()) == Some(area) {
+        base.crop(area)
+    } else {
+        let mut out = Image::new(area.w as u32, area.h as u32);
+        out.blit(base, -area.x, -area.y);
+        out
+    };
     let opaque = out.is_opaque();
     if !opaque {
         premultiply(&mut out.data);
@@ -40,7 +45,7 @@ pub fn render(job: &RenderJob) -> Image {
         let (w, h) = (out.width, out.height);
         let mut pixmap =
             PixmapMut::from_bytes(&mut out.data, w, h).expect("image size matches buffer");
-        let tf = Transform::from_translate(-crop.x as f32, -crop.y as f32);
+        let tf = Transform::from_translate(-area.x as f32, -area.y as f32);
         for shape in &job.shapes {
             for prim in shape.prims(base).iter() {
                 match prim {
@@ -51,7 +56,7 @@ pub fn render(job: &RenderJob) -> Image {
                         pixmap.fill_path(path, &paint, FillRule::Winding, tf, None);
                     }
                     Prim::Pixels { x, y, image } => {
-                        blit_premultiplied(&mut pixmap, image, x - crop.x, y - crop.y);
+                        blit_premultiplied(&mut pixmap, image, x - area.x, y - area.y);
                     }
                     Prim::Image { rect, image } => {
                         draw_image(&mut pixmap, *rect, image, tf);
@@ -155,7 +160,7 @@ mod tests {
 
     use super::*;
     use crate::document::{Document, ShapeKind, Style};
-    use crate::geom::{Pt, RectF};
+    use crate::geom::{IRect, Pt, RectF};
 
     #[test]
     fn untouched_document_exports_the_original() {
@@ -232,5 +237,55 @@ mod tests {
         let out = render(&d.snapshot());
         assert_eq!(out.pixel(0, 0)[3], 0);
         assert_eq!(out.pixel(9, 0), [9, 9, 9, 255]);
+    }
+
+    fn filled_rect(d: &mut Document, a: Pt, b: Pt) {
+        let s = d.make_shape(
+            ShapeKind::Rect { a, b },
+            Style {
+                color: Rgba::rgb(0xff0000),
+                size: 0,
+                fill: true,
+            },
+        );
+        d.add(s);
+    }
+
+    #[test]
+    fn drawings_past_the_edges_grow_the_export_with_a_transparent_margin() {
+        let base = Arc::new(Image::filled(20, 10, [9, 9, 9, 255]));
+        let mut d = Document::new(base, 1.0);
+        // Hangs 10 px off the left and 5 px off the top.
+        filled_rect(&mut d, Pt::new(-10.0, -5.0), Pt::new(4.0, 3.0));
+        // And one below the screenshot.
+        filled_rect(&mut d, Pt::new(12.0, 14.0), Pt::new(16.0, 18.0));
+        assert_eq!(d.canvas(), IRect::new(-10, -5, 30, 23));
+        let out = render(&d.snapshot());
+        assert_eq!((out.width, out.height), (30, 23));
+        let red = [0, 0, 255, 255];
+        assert_eq!(out.pixel(3, 3), red, "the overhang is drawn");
+        assert_eq!(out.pixel(29, 0)[3], 0, "the margin is transparent");
+        assert_eq!(out.pixel(0, 22)[3], 0);
+        assert_eq!(out.pixel(29, 14), [9, 9, 9, 255], "the screenshot, shifted");
+        assert_eq!(out.pixel(24, 21), red, "the shape below it");
+    }
+
+    #[test]
+    fn crops_reach_into_the_margin_but_not_past_it() {
+        let base = Arc::new(Image::filled(20, 10, [9, 9, 9, 255]));
+        let mut d = Document::new(base, 1.0);
+        filled_rect(&mut d, Pt::new(-10.0, 0.0), Pt::new(0.0, 10.0));
+        d.set_crop(Some(RectF::new(-50.0, 2.0, 55.0, 4.0)));
+        assert_eq!(d.crop(), Some(RectF::new(-10.0, 2.0, 15.0, 4.0)));
+        let out = render(&d.snapshot());
+        assert_eq!((out.width, out.height), (15, 4));
+        assert_eq!(out.pixel(4, 1), [0, 0, 255, 255]);
+        assert_eq!(out.pixel(14, 0), [9, 9, 9, 255]);
+        // Deleting the drawing leaves the crop pointing at an area that no
+        // longer exists; the export keeps to what does.
+        let id = d.shapes()[0].id;
+        d.remove(id);
+        let out = render(&d.snapshot());
+        assert_eq!((out.width, out.height), (5, 4));
     }
 }

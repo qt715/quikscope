@@ -200,6 +200,13 @@ impl RectF {
         let y1 = (self.bottom().ceil() as i32).min(h as i32);
         (x1 > x0 && y1 > y0).then(|| IRect::new(x0, y0, x1 - x0, y1 - y0))
     }
+
+    /// Smallest pixel-aligned rectangle covering this one, unclamped.
+    pub fn round_out(&self) -> IRect {
+        let (x0, y0) = (self.x.floor() as i32, self.y.floor() as i32);
+        let (x1, y1) = (self.right().ceil() as i32, self.bottom().ceil() as i32);
+        IRect::new(x0, y0, x1 - x0, y1 - y0)
+    }
 }
 
 /// Distance from `p` to the segment `a`–`b`.

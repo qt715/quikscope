@@ -380,3 +380,39 @@ fn field_key_edits_end_ime_composition() {
         .unwrap();
     assert_eq!((text.as_str(), marked), ("", None));
 }
+
+/// The editor's zoom on screen once transitions settle, in device pixels per
+/// image pixel (what the zoom label shows).
+fn settled_zoom(ui: &mut Ui) -> f32 {
+    std::thread::sleep(std::time::Duration::from_millis(320));
+    ui.frame();
+    ui.ime(|e, w, _| e.zoom() * w.scale_factor())
+}
+
+#[test]
+fn drawing_past_the_edge_refits_the_view_to_the_contents() {
+    // Fits at actual pixels in the 1000x700 (scale 2) test window.
+    let doc = Document::new(Arc::new(Image::filled(1600, 1000, [40, 40, 40, 255])), 1.0);
+    let mut ui = Ui::new(doc);
+    assert_eq!((settled_zoom(&mut ui) * 100.0).round() as u32, 100);
+    // A rectangle 1200 px off the left edge of the screenshot.
+    let doc = ui.doc.clone();
+    ui.cx.update(|cx| {
+        doc.update(cx, |d, _| {
+            let s = d.make_shape(
+                ShapeKind::Rect {
+                    a: Pt::new(-1200.0, 100.0),
+                    b: Pt::new(-1000.0, 200.0),
+                },
+                Style::default(),
+            );
+            d.add(s);
+        })
+    });
+    ui.frame();
+    // 2800+ px of content now fits at a smaller zoom, all of it on screen.
+    assert!(settled_zoom(&mut ui) < 0.75);
+    let left = ui.screen(Pt::new(-1205.0, 100.0));
+    let right = ui.screen(Pt::new(1600.0, 1000.0));
+    assert!(left.x > px(0.) && right.x < px(1000.), "{left:?} {right:?}");
+}

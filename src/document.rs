@@ -7,7 +7,7 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::fonts::FontSpec;
-use crate::geom::{Pt, RectF, dist_to_segment};
+use crate::geom::{IRect, Pt, RectF, dist_to_segment};
 use crate::raster::Image;
 use crate::render::{self, Prim};
 use crate::text::{self, TextLayout};
@@ -197,6 +197,27 @@ impl Shape {
     pub fn prims(&self, base: &Image) -> &Arc<[Prim]> {
         self.prims
             .get_or_init(|| render::shape_prims(self, base).into())
+    }
+
+    /// What the shape actually paints (outlines, colour glyphs, patches), in
+    /// image space; `None` when it paints nothing.
+    pub fn ink_bounds(&self, base: &Image) -> Option<RectF> {
+        self.prims(base)
+            .iter()
+            .map(|p| match p {
+                Prim::Fill { path, .. } => {
+                    let b = path.bounds();
+                    RectF::new(b.x(), b.y(), b.width(), b.height())
+                }
+                Prim::Pixels { x, y, image } => RectF::new(
+                    *x as f32,
+                    *y as f32,
+                    image.width as f32,
+                    image.height as f32,
+                ),
+                Prim::Image { rect, .. } => *rect,
+            })
+            .reduce(|a, b| a.union(&b))
     }
 
     /// Axis-aligned bounds in image space, including stroke width.
@@ -470,7 +491,9 @@ impl Document {
     }
 
     pub fn set_crop(&mut self, crop: Option<RectF>) {
-        let full = RectF::new(0.0, 0.0, self.width() as f32, self.height() as f32);
+        // Crops may include drawings outside the screenshot, but no more.
+        let c = self.canvas();
+        let full = RectF::new(c.x as f32, c.y as f32, c.w as f32, c.h as f32);
         let crop = crop
             .and_then(|c| c.intersect(&full))
             .map(|c| {
@@ -543,14 +566,10 @@ impl Document {
             + 1
     }
 
-    /// The region that will be exported.
-    pub fn output_rect(&self) -> RectF {
-        self.state.crop.unwrap_or(RectF::new(
-            0.0,
-            0.0,
-            self.width() as f32,
-            self.height() as f32,
-        ))
+    /// The image grown to every drawing that paints outside it; see
+    /// [`canvas_area`].
+    pub fn canvas(&self) -> IRect {
+        canvas_area(&self.base, &self.state.shapes)
     }
 
     /// Everything the exporter needs, detached from the document so it can be
@@ -564,12 +583,33 @@ impl Document {
     }
 }
 
+/// The pixel area a document covers: the screenshot plus whatever its
+/// shapes paint beyond it. The exporter fills the part outside the
+/// screenshot with transparency.
+pub fn canvas_area(base: &Image, shapes: &[Arc<Shape>]) -> IRect {
+    shapes
+        .iter()
+        .filter_map(|s| s.ink_bounds(base))
+        .fold(base.bounds(), |area, ink| area.union(&ink.round_out()))
+}
+
 /// Immutable inputs for [`crate::export::render`].
 #[derive(Clone)]
 pub struct RenderJob {
     pub base: Arc<Image>,
     pub shapes: Vec<Arc<Shape>>,
     pub crop: Option<RectF>,
+}
+
+impl RenderJob {
+    /// The pixel area the export covers: the crop when set (within the
+    /// canvas), otherwise the whole canvas.
+    pub fn area(&self) -> IRect {
+        let canvas = canvas_area(&self.base, &self.shapes);
+        self.crop
+            .and_then(|c| c.round_out().intersect(&canvas))
+            .unwrap_or(canvas)
+    }
 }
 
 #[cfg(test)]

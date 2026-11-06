@@ -23,7 +23,7 @@ use crate::clipboard::Clipboard;
 use crate::config::Config;
 use crate::document::{Document, PALETTE, Rgba, Shape, ShapeId, ShapeKind, Style};
 use crate::fonts::FontSpec;
-use crate::geom::{Pt, RectF};
+use crate::geom::{IRect, Pt, RectF};
 use crate::raster::Compression;
 use crate::text::TextLayout;
 
@@ -194,10 +194,11 @@ pub struct Editor {
     /// Where the view is heading; [`Editor::current_view`] is what is shown.
     view: View,
     transition: Option<Transition>,
-    /// Refit on resize until the user zooms or pans by hand.
+    /// Refit on resize, and when drawings grow the canvas, until the user
+    /// zooms or pans by hand.
     auto_fit: bool,
-    /// Canvas size the current fit was computed for.
-    fitted_for: Size<Pixels>,
+    /// Window canvas size and document canvas the current fit was for.
+    fitted_for: (Size<Pixels>, IRect),
     canvas: Bounds<Pixels>,
     drag: Drag,
     draft: Option<Shape>,
@@ -273,7 +274,7 @@ impl Editor {
             },
             transition: None,
             auto_fit: true,
-            fitted_for: Size::default(),
+            fitted_for: Default::default(),
             canvas: Bounds::default(),
             drag: Drag::None,
             draft: None,
@@ -335,8 +336,10 @@ impl Editor {
         });
     }
 
-    fn fitted_view(&self, window: &Window) -> Option<View> {
-        let (w, h) = (self.shot.image.width as f32, self.shot.image.height as f32);
+    /// The view that fits `area` (image pixels) into the window, never
+    /// magnifying past one image pixel per device pixel.
+    fn fitted_view(&self, area: IRect, window: &Window) -> Option<View> {
+        let (w, h) = (area.w as f32, area.h as f32);
         let cw = f32::from(self.canvas.size.width) - 2.0 * MARGIN;
         let ch = f32::from(self.canvas.size.height) - TOOLBAR_SPACE - MARGIN;
         if cw <= 0.0 || ch <= 0.0 || w <= 0.0 || h <= 0.0 {
@@ -347,19 +350,21 @@ impl Editor {
         Some(View {
             zoom,
             pan: point(
-                px((f32::from(self.canvas.size.width) - w * zoom) / 2.0),
-                px(TOOLBAR_SPACE + (ch - h * zoom) / 2.0),
+                px((f32::from(self.canvas.size.width) - w * zoom) / 2.0 - area.x as f32 * zoom),
+                px(TOOLBAR_SPACE + (ch - h * zoom) / 2.0 - area.y as f32 * zoom),
             ),
         })
     }
 
-    /// Fits the image into the canvas, never magnifying past one image
-    /// pixel per device pixel, and keeps it fitted across window resizes.
-    pub fn fit(&mut self, window: &Window) {
-        if let Some(v) = self.fitted_view(window) {
+    /// Fits the screenshot and everything drawn around it into the window,
+    /// never magnifying past actual pixels, and keeps it fitted across
+    /// window resizes and drawings that grow the canvas.
+    pub fn fit(&mut self, window: &Window, cx: &App) {
+        let area = self.doc.read(cx).canvas();
+        if let Some(v) = self.fitted_view(area, window) {
             self.animate_to(v, STEP_ZOOM);
             self.auto_fit = true;
-            self.fitted_for = self.canvas.size;
+            self.fitted_for = (self.canvas.size, area);
         }
     }
 
@@ -732,7 +737,7 @@ impl Editor {
                 ("z", true) | ("y", _) => self.redo(cx),
                 ("w", _) | ("q", _) => window.remove_window(),
                 ("0", _) => {
-                    self.fit(window);
+                    self.fit(window, cx);
                     cx.notify();
                 }
                 ("1", _) => {
@@ -981,8 +986,10 @@ impl Editor {
                 };
             }
             Drag::Crop { start } => {
-                let (w, h) = (self.shot.image.width as f32, self.shot.image.height as f32);
-                let clamp = |q: Pt| Pt::new(q.x.clamp(0.0, w), q.y.clamp(0.0, h));
+                let c = self.doc.read(cx).canvas();
+                let (x0, y0) = (c.x as f32, c.y as f32);
+                let (x1, y1) = (c.right() as f32, c.bottom() as f32);
+                let clamp = |q: Pt| Pt::new(q.x.clamp(x0, x1), q.y.clamp(y0, y1));
                 self.crop_draft = Some(RectF::from_points(clamp(start), clamp(p)));
             }
         }
@@ -1148,15 +1155,21 @@ impl Editor {
                 opened.elapsed().as_secs_f64() * 1e3
             );
         }
-        // Fit on the first frame and whenever the window is resized, until
-        // the user takes over the view. No transition: the window itself is
-        // already changing size.
+        // Fit on the first frame, whenever the window is resized and whenever
+        // drawings grow the canvas, until the user takes over the view. A
+        // resize jumps (the window itself is already changing size); a
+        // grown canvas eases to the new fit.
+        let area = self.doc.read(cx).canvas();
         if self.auto_fit
-            && bounds.size != self.fitted_for
-            && let Some(v) = self.fitted_view(window)
+            && (bounds.size, area) != self.fitted_for
+            && let Some(v) = self.fitted_view(area, window)
         {
-            self.set_view(v);
-            self.fitted_for = bounds.size;
+            if bounds.size == self.fitted_for.0 {
+                self.animate_to(v, STEP_ZOOM);
+            } else {
+                self.set_view(v);
+            }
+            self.fitted_for = (bounds.size, area);
         }
         if let Some(t) = self.transition {
             if t.progress(Instant::now()).is_some() {
@@ -1168,16 +1181,14 @@ impl Editor {
         let xf = self.transform();
         let zoom = xf.zoom;
         let doc = self.doc.read(cx);
-        let image_rect = RectF::new(
-            0.0,
-            0.0,
-            self.shot.image.width as f32,
-            self.shot.image.height as f32,
-        );
+        // What gets exported: the image plus drawings past its edges, whose
+        // margin is transparent in the saved PNG.
+        let canvas_rect = RectF::new(area.x as f32, area.y as f32, area.w as f32, area.h as f32);
 
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-            // Drop shadow-ish frame so the image edge reads against the canvas.
-            let frame = xf.rect_to_screen(image_rect.inflate(1.0 / zoom));
+            // A light backing marks the export area against the window; past
+            // the screenshot it is all that shows.
+            let frame = xf.rect_to_screen(canvas_rect.inflate(1.0 / zoom));
             window.paint_quad(fill(frame, gpui::rgba(0xffffff18)));
             paint_tiles(window, self.shot.tiles(), xf, bounds);
 
@@ -1274,7 +1285,7 @@ impl Editor {
 
             let crop = self.crop_draft.or(doc.crop());
             if let Some(c) = crop {
-                paint_crop(window, xf.rect_to_screen(image_rect), xf.rect_to_screen(c));
+                paint_crop(window, xf.rect_to_screen(canvas_rect), xf.rect_to_screen(c));
             }
         });
         self.patches.end_frame(window);
@@ -1608,7 +1619,7 @@ impl Render for Editor {
                         .text_color(theme::muted())
                         .hover(|s| s.bg(theme::hover()))
                         .on_click(cx.listener(|e, _, window, cx| {
-                            e.fit(window);
+                            e.fit(window, cx);
                             cx.notify();
                         }))
                         .child(zoom_label),
