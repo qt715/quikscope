@@ -235,12 +235,16 @@ pub fn socket_path() -> PathBuf {
     if let Some(p) = std::env::var_os("QUICKSCOPE_SOCKET") {
         return PathBuf::from(p);
     }
-    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
-    // Keyed by display so a nested compositor gets its own daemon.
-    let display = Path::new(&display)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or(display);
+    // Keyed by display so a nested compositor or X server gets its own
+    // daemon.
+    let display = match (std::env::var("WAYLAND_DISPLAY"), std::env::var("DISPLAY")) {
+        (Ok(w), _) if !w.is_empty() => Path::new(&w)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(w),
+        (_, Ok(x)) if !x.is_empty() => format!("x11-{}", x.replace([':', '/'], "")),
+        _ => "wayland-0".into(),
+    };
     runtime_dir().join(format!("quickscope-{display}.sock"))
 }
 
