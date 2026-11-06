@@ -139,17 +139,27 @@ compositor.
 
 ### Portal fallback
 
-`QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e portal_capture_fullscreen_selection_and_denial -- --nocapture`
+`QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e portal_ -- --nocapture`
 runs the real daemon forced to `QUICKSCOPE_BACKEND=portal` in that same
 private labwc desktop. A fake Screenshot service on the private D-Bus
 captures real pixels with `grim`, writes a percent-escaped local file URI,
 and emits Response **before** returning the method reply (catching late
-subscription races). The test compares screen pixels with grim, drags a
-region through fullscreen normal windows, checks Esc cancellation and
-Enter capture, and checks both permission-denial response codes. Five
-screen captures print end-to-end latency samples. Missing grim skips unless
-`QUICKSCOPE_E2E=1`. Unit tests cover negative origins, fractional scales,
-layout gaps, output filters, incompatible raster dimensions and responses.
+subscription races). Tests compare screen pixels with grim; drag through
+fullscreen normal windows; check Esc, Enter and both denial response
+codes; and cross outputs through layer-shell overlays. A two-output test
+forces `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` with a rotated, distinct second
+output: only the landed-on output is overlaid, its visible dimmed pixels
+match that output's frozen frame, and Enter returns that exact output.
+Five screen captures print end-to-end latency samples. Missing grim skips
+unless `QUICKSCOPE_E2E=1`. Unit tests cover negative origins, fractional
+scales, layout gaps, filters, incompatible raster dimensions and responses.
+
+`QUICKSCOPE_E2E=1 cargo test --features e2e --test x11_e2e portal_`
+exercises the clipboard fallback on a private Xvfb: a subprocess forced to
+portal mode has no Wayland/data-control connection but has DISPLAY, offers
+a PNG through the platform clipboard, and an independent X client reads
+it back pixel-for-pixel. This tests X selection transport and fallback
+choice, not GNOME's own Xwayland-to-Wayland bridge.
 
 This fake exercises transport and real compositor pixels, not GNOME/KDE's
 permission UI or their multi-monitor raster conventions. Real desktop

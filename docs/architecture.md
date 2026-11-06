@@ -55,6 +55,7 @@ socket.
 | `wlroots` | `wlr-screencopy` | `wlr-data-control` | layer-shell | Hyprland IPC when present |
 | `x11` | MIT-SHM GetImage, core GetImage fallback | CLIPBOARD selection, PNG/text, INCR | override-redirect PopUp | EWMH |
 | `windows` | resident DXGI Desktop Duplication, reusable GDI fallback | delayed PNG + DIBV5/DIB/Unicode | borderless topmost GPUI popup | DWM foreground bounds and filtered top-level Z order |
+| `portal` | Screenshot portal → PNG | data-control, Xwayland CLIPBOARD fallback | layer-shell when offered; otherwise one fullscreen xdg-toplevel | none |
 
 X11 keeps separate persistent connections for capture, EWMH queries and
 clipboard ownership. The capture thread reuses a SysV shared-memory segment;
@@ -65,7 +66,6 @@ the same encoded bytes; large transfers advance only when the requestor deletes
 the previous INCR property. Popups bypass the window manager, so region selection
 sets native keyboard focus after they map and restores the prior focus on exit.
 There is no X11 GPU prewarm window because it could flash on the desktop.
-| `portal` | Screenshot portal → PNG | data-control if offered, otherwise unavailable | fullscreen xdg-toplevel | none |
 
 ### Screenshot portal
 
@@ -86,11 +86,28 @@ mixed-scale rasters whose aspect ratio differs from the logical desktop
 are rejected. The desktop controls pointer inclusion (the Screenshot
 interface has no cursor option), permission dialogs and capture flashes.
 
-Portal overlays are fullscreen normal windows, with the frozen image
-prepared before opening. They do not request layer-shell or GPU prewarming
-windows. Compositor animations and fullscreen focus/output placement policy
-cannot be overridden by the application. Esc/Enter use the same selection
-handlers as the native backend.
+Overlay protocol selection is independent of capture: use layer-shell when
+the compositor advertises `zwlr_layer_shell_v1` (including supported KDE
+versions). Each output then gets its own frozen overlay, with cross-output
+dragging. Without layer-shell, open just one fullscreen xdg-toplevel.
+GPUI 0.3.10 does not forward the requested output to `set_fullscreen`, so
+the compositor chooses its placement. `Window::display()` tracks the
+actual surface-enter output; the overlay switches to that output's
+already-prepared frozen frame and maps input in that output's coordinates.
+Selection is confined to that output. This is the GNOME multi-monitor
+limitation, not a silent crop of the first output.
+
+Compositor animations and fullscreen focus policy cannot be overridden.
+Esc/Enter use the same selection handlers as native capture. No GPU
+prewarm window is opened on the fullscreen path, avoiding a visible flash.
+`QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` forces this path for diagnostics/tests.
+Screen/geometry capture still covers every output, independent of overlay
+placement.
+
+Clipboard prefers Wayland data-control. When it is unavailable but DISPLAY
+is set, the existing X11 SelectionOwner serves CLIPBOARD over Xwayland;
+GNOME normally bridges this selection to Wayland clients. With neither
+protocol, clipboard is unavailable and the reason is logged.
 
 Files are deliberately retained, even under `/tmp`: the portal does not
 grant ownership or specify cleanup. [KDE's implementation][kde-screenshot]

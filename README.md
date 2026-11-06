@@ -154,17 +154,23 @@ its permission dialog to capture. Cancelling or denying returns a clear error.
 
 Portal capture decodes a PNG file and is slower than native screencopy.
 The portal controls cursor inclusion: `--cursor` / `--no-cursor` cannot
-override it. Fullscreen normal windows show the frozen region-selection
-image; desktop fullscreen/focus animations can delay its appearance, and
-the compositor decides which output receives keyboard focus. Disable
-fullscreen animations in desktop settings if needed. There is no window
-list/snapping or active-window capture; `output` defaults to the first output.
-The portal raster must cover the logical desktop at a uniform scale;
-incompatible mixed-scale rasters are rejected rather than cropped incorrectly.
+override it. On KDE and other desktops offering layer-shell, region
+selection spans all outputs. Without layer-shell (normally GNOME), a
+single fullscreen normal window shows the frozen frame of the output
+where the compositor places it; selection is confined to that output.
+`screen` and fixed geometry captures can still span outputs. Desktop
+fullscreen/focus animations can delay appearance; disable them in desktop
+settings if needed. There is no window list/snapping or active-window
+capture; `output` defaults to the first output. The portal raster must
+cover the logical desktop at a uniform scale; incompatible mixed-scale
+rasters are rejected rather than cropped incorrectly.
 
 Clipboard uses data-control where available (including supported KDE
-versions); GNOME normally lacks it. Without a clipboard backend, use
+versions), otherwise Xwayland CLIPBOARD when DISPLAY is set. GNOME normally
+bridges that selection to native Wayland apps. Without either backend, use
 `--no-clipboard --save` (or edit/save). Notifications still work.
+For diagnostics, `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
+the single-output fullscreen path, even on a layer-shell compositor.
 Portal PNGs are not deleted: the API does not transfer ownership, and
 GNOME/KDE may save into Pictures rather than create disposable files.
 
