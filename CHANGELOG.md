@@ -29,9 +29,6 @@ First release.
   output, active window, whole screen and fixed geometry.
 - With native wlroots capture, selection overlays are created while the
   capture runs.
-- Region precision aids: full-surface crosshair guides, a nearest-neighbour
-  8× loupe with physical pixel coordinates and colour, and a pre-drag hint.
-  All sample the existing frozen frame, including early and fullscreen overlays.
 - Desktop notification with a thumbnail whose click opens the editor;
   `quickscope notifications on|off|toggle|status` switches them at runtime
   and saves the change to the config file.

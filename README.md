@@ -243,11 +243,6 @@ quickscope ping | quit
 | `window` | The active window (Hyprland or X11/EWMH). |
 | `screen` | All outputs composed in their layout. |
 
-Region selection shows crosshair guides and an 8× pixel loupe from the frozen
-capture, with a centre-pixel marker, physical pixel coordinates relative to
-the current output and its `#rrggbb` colour. The loupe flips away from screen
-edges; the bottom shortcut hint disappears when a drag starts.
-
 | Option | Effect |
 | --- | --- |
 | `--edit` / `--no-edit` | Open the editor immediately instead of on notification click. |

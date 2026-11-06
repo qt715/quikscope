@@ -192,17 +192,6 @@ get early overlays, even on layer-shell (KDE): the desktop may show a
 permission dialog first, and an overlay's exclusive keyboard would keep the
 user from answering it.
 
-Precision aids share the overlay's frozen tiles. Fractional global pointer
-coordinates are retained separately from integer selection corners, then
-mapped through the output scale and physical-to-viewport factor. The loupe
-samples the retained BGRA bytes directly and paints a fixed 15×15 grid of
-8-pixel solid cells: nearest-neighbour magnification without new captures,
-image allocations or texture uploads on pointer motion. It samples the
-undimmed source, clamps neighbourhoods at image edges, and flips its panel
-to remain on screen. All overlay decorations wait for a ready frozen frame.
-Debug `overlay frame CPU` logs measure render/layout/paint preparation
-through the final overlay child; they do not include GPU rendering or
-compositor presentation.
 
 ## Shots, documents and the editor
 

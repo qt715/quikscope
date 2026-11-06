@@ -110,12 +110,7 @@ Mutation checks: forcing a checkpoint on every live `translate_all` /
 single-undo tests. Restore each mutation before running the full suite.
 
 The small-window help test opens a 480×320 offscreen window and checks the
-actual scroll-panel bounds against the 16-pixel window margin. The overlay
-regression starts pending (no paint), installs a frozen frame, dispatches
-fractional pointer input with a 2× physical-to-viewport factor, and checks
-the exact loupe-centre colour, full-width guide and disappearing hint.
-Overlay unit tests cover edge flipping, fractional/scaled sampling and
-BGRA reads across tile boundaries.
+actual scroll-panel bounds against the 16-pixel window margin.
 
 ## End to end
 
