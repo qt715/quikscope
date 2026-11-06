@@ -23,6 +23,8 @@ pub mod freedesktop;
 pub mod hyprland;
 #[cfg(target_os = "linux")]
 pub mod wlroots;
+#[cfg(target_os = "linux")]
+pub mod x11;
 
 /// Grabs screen pixels. Blocking: the daemon calls it on a background
 /// thread.
@@ -108,6 +110,9 @@ pub enum Surfaces {
     /// exclusive keyboard.
     #[cfg(target_os = "linux")]
     LayerShell,
+    /// Override-redirect popups, one per X11 monitor.
+    #[cfg(target_os = "linux")]
+    X11,
 }
 
 /// The backends for this session.
@@ -131,6 +136,32 @@ pub fn connect(events: EventSink) -> Platform {
             .map(|n| Arc::new(n) as Arc<dyn Notifier>)
             .map_err(|e| log::warn!("notifications unavailable: {e:#}"))
             .ok();
+        let backend = std::env::var("QUICKSCOPE_BACKEND").ok();
+        if backend.as_deref() == Some("x11")
+            || (backend.is_none()
+                && std::env::var_os("WAYLAND_DISPLAY").is_none()
+                && std::env::var_os("DISPLAY").is_some())
+        {
+            return Platform {
+                name: "x11",
+                capture: x11::ScreenCapture::spawn()
+                    .map(|c| Arc::new(c) as Arc<dyn Capture>)
+                    .map_err(|e| log::error!("X11 capture unavailable: {e:#}"))
+                    .ok(),
+                desktop: x11::Ewmh::connect()
+                    .map(|d| Arc::new(d) as Arc<dyn Desktop>)
+                    .unwrap_or_else(|e| {
+                        log::warn!("X11 desktop unavailable: {e:#}");
+                        Arc::new(NoDesktop)
+                    }),
+                clipboard: x11::SelectionOwner::spawn()
+                    .map(|c| Arc::new(c) as Arc<dyn Clipboard>)
+                    .map_err(|e| log::warn!("X11 clipboard unavailable: {e:#}"))
+                    .ok(),
+                notifier,
+                surfaces: Surfaces::X11,
+            };
+        }
         let desktop: Arc<dyn Desktop> = if hyprland::available() {
             Arc::new(hyprland::Hyprland)
         } else {
@@ -166,6 +197,20 @@ impl Platform {
         };
         match self.surfaces {
             #[cfg(target_os = "linux")]
+            Surfaces::X11 => WindowOptions {
+                titlebar: None,
+                focus: true,
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: point(px(logical.x as f32), px(logical.y as f32)),
+                    ..bounds
+                })),
+                display_id,
+                app_id: Some("quickscope".into()),
+                window_background: WindowBackgroundAppearance::Opaque,
+                kind: WindowKind::PopUp,
+                ..Default::default()
+            },
+            #[cfg(target_os = "linux")]
             Surfaces::LayerShell => {
                 use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
                 WindowOptions {
@@ -194,6 +239,8 @@ impl Platform {
     /// capture needs a window. `None` where that would flash on screen.
     pub fn prewarm_options(&self) -> Option<WindowOptions> {
         match self.surfaces {
+            #[cfg(target_os = "linux")]
+            Surfaces::X11 => None,
             #[cfg(target_os = "linux")]
             Surfaces::LayerShell => {
                 use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};

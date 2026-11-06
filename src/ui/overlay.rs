@@ -124,15 +124,16 @@ impl Overlay {
         }
     }
 
-    fn global(&self, p: gpui::Point<gpui::Pixels>) -> (i32, i32) {
+    fn global(&self, p: gpui::Point<gpui::Pixels>, window: &Window) -> (i32, i32) {
+        let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.0);
         (
-            self.output.x + f32::from(p.x).round() as i32,
-            self.output.y + f32::from(p.y).round() as i32,
+            self.output.x + (f32::from(p.x) * factor).round() as i32,
+            self.output.y + (f32::from(p.y) * factor).round() as i32,
         )
     }
 
-    fn mouse_down(&mut self, ev: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let (x, y) = self.global(ev.position);
+    fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let (x, y) = self.global(ev.position, window);
         self.selection.update(cx, |s, cx| {
             s.press(x, y);
             cx.notify();
@@ -163,7 +164,9 @@ impl Focusable for Overlay {
 }
 
 impl Render for Overlay {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // X11 capture coordinates are physical even when the UI uses Xft DPI.
+        let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.0);
         let this = cx.entity();
         let selection = self.selection.clone();
         let output = self.output;
@@ -183,12 +186,12 @@ impl Render for Overlay {
             .filter(|h| h.w > 0 && h.h > 0)
             .map(|h| {
                 let (lx, ly) = (
-                    (h.x - output.x) as f32,
-                    (h.bottom() - output.y) as f32 + 8.0,
+                    (h.x - output.x) as f32 / factor,
+                    (h.bottom() - output.y) as f32 / factor + 8.0,
                 );
                 // Keep the label on screen when the selection hugs the bottom edge.
-                let ly = if ly + 28.0 > output.h as f32 {
-                    (h.y - output.y) as f32 - 30.0
+                let ly = if ly + 28.0 > output.h as f32 / factor {
+                    (h.y - output.y) as f32 / factor - 30.0
                 } else {
                     ly
                 };
@@ -230,15 +233,15 @@ impl Render for Overlay {
                             zoom: f32::from(bounds.size.width) / image_width.max(1) as f32,
                         };
                         paint_tiles(window, &tiles, xf, bounds);
-                        paint_dim(window, bounds, highlight.map(|h| local(h, output)));
+                        paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
 
                         let sel = selection.clone();
                         let overlay = this.clone();
-                        window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                        window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
                             if phase != DispatchPhase::Bubble {
                                 return;
                             }
-                            let (x, y) = overlay.read(cx).global(ev.position);
+                            let (x, y) = overlay.read(cx).global(ev.position, window);
                             sel.update(cx, |s, cx| {
                                 s.motion(x, y);
                                 cx.notify();
@@ -246,11 +249,11 @@ impl Render for Overlay {
                         });
                         let sel = selection.clone();
                         let overlay = this.clone();
-                        window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                        window.on_mouse_event(move |ev: &MouseUpEvent, phase, window, cx| {
                             if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
                                 return;
                             }
-                            let (x, y) = overlay.read(cx).global(ev.position);
+                            let (x, y) = overlay.read(cx).global(ev.position, window);
                             sel.update(cx, |s, cx| {
                                 s.release(x, y, output);
                                 cx.notify();
@@ -265,10 +268,13 @@ impl Render for Overlay {
 }
 
 /// `r` (global logical) relative to this output's surface.
-fn local(r: IRect, output: IRect) -> Bounds<gpui::Pixels> {
+fn local(r: IRect, output: IRect, factor: f32) -> Bounds<gpui::Pixels> {
     Bounds {
-        origin: point(px((r.x - output.x) as f32), px((r.y - output.y) as f32)),
-        size: size(px(r.w as f32), px(r.h as f32)),
+        origin: point(
+            px((r.x - output.x) as f32 / factor),
+            px((r.y - output.y) as f32 / factor),
+        ),
+        size: size(px(r.w as f32 / factor), px(r.h as f32 / factor)),
     }
 }
 
@@ -307,6 +313,17 @@ fn paint_dim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_selection_hole_maps_to_scaled_viewport() {
+        let bounds = local(
+            IRect::new(120, 90, 400, 200),
+            IRect::new(100, 50, 1920, 1080),
+            2.0,
+        );
+        assert_eq!(bounds.origin, point(px(10.0), px(20.0)));
+        assert_eq!(bounds.size, size(px(200.0), px(100.0)));
+    }
 
     fn win(x: i32, y: i32, w: i32, h: i32) -> WindowRect {
         WindowRect {

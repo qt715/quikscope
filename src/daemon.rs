@@ -438,11 +438,55 @@ async fn select_region(
             return Err(e);
         }
     };
+    #[cfg(target_os = "linux")]
+    let selection_focus = if platform.surfaces == platform::Surfaces::X11 {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let windows = cx.update(|cx| {
+            overlays
+                .iter()
+                .zip(&snap.outputs)
+                .filter_map(|(overlay, output)| {
+                    overlay
+                        .update(cx, |_, window, _| {
+                            match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+                                RawWindowHandle::Xcb(handle) => {
+                                    Some((handle.window.get(), output.logical))
+                                }
+                                RawWindowHandle::Xlib(handle) => {
+                                    Some((handle.window as u32, output.logical))
+                                }
+                                _ => None,
+                            }
+                        })
+                        .ok()
+                        .flatten()
+                })
+                .collect()
+        });
+        Some(
+            cx.background_spawn(async move { platform::x11::SelectionFocus::acquire(windows) })
+                .await,
+        )
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    if let Some(Err(error)) = &selection_focus {
+        cx.update(|cx| {
+            for overlay in &overlays {
+                let _ = overlay.update(cx, |_, window, _| window.remove_window());
+            }
+            cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
+        });
+        bail!("focusing X11 selection: {error:#}");
+    }
     log::debug!(
         "selection overlays opened {:.1}ms after the snapshot",
         started.elapsed().as_secs_f64() * 1e3
     );
     let rect = done.await.ok().flatten();
+    #[cfg(target_os = "linux")]
+    drop(selection_focus);
     cx.update(|cx| {
         for o in overlays {
             let _ = o.update(cx, |_, window, _| window.remove_window());

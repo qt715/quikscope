@@ -37,6 +37,11 @@ name = "e2e"
 path = "tests/e2e.rs"
 required-features = ["e2e"]
 
+[[test]]
+name = "x11_e2e"
+path = "tests/x11_e2e.rs"
+required-features = ["e2e"]
+
 [dependencies]
 anyhow = "1"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
@@ -45,7 +50,7 @@ futures = "0.3"
 libc = "0.2"
 libloading = "0.8"
 gpui = { package = "gpui-pre", version = "=0.3.10" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["wayland"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["wayland", "x11"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 log = "0.4"
 lyon = "1"
@@ -70,9 +75,13 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
 zbus = "5"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6"
+x11rb = { version = "0.13.2", features = ["randr", "shm", "xfixes", "xtest"] }
+
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["wayland", "test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["wayland", "x11", "test-support"] }
 tempfile = "3"
 
 [profile.dev.package."*"]
