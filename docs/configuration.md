@@ -29,7 +29,7 @@ cursor = false
 notification_timeout_ms = 8000
 
 [editor]
-# Initial annotation color.
+# Initial annotation color: "#rrggbb" or "#rrggbbaa".
 color = "#e03131"
 # Initial size: 0 thin, 1 medium, 2 thick.
 stroke = 1

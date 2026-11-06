@@ -6,6 +6,7 @@
 | CLI parsing | `src/main.rs` | nothing |
 | Golden-image regression | `tests/render_regression.rs`, `tests/golden/` | nothing |
 | GPU/CPU parity | `tests/editor_render.rs` | Vulkan or GL (Mesa lavapipe/llvmpipe is enough) |
+| Editor interaction | `tests/editor_ui.rs` | Vulkan or GL, as above |
 | End to end | `tests/e2e.rs` (feature `e2e`) | `labwc` or `sway`, `dbus-daemon`; `grim` for reference comparisons; `bwrap` optional |
 
 ```sh
@@ -35,6 +36,13 @@ with the WGPU offscreen renderer, screenshots it, and compares the image area
 with the exporter's output for the same document. A 3-pixel offset in the
 editor's transform already fails it. On failure both images are written to
 `$TMPDIR/moment-parity-{gpu,cpu}.png`.
+
+## Editor interaction
+
+`editor_ui` drives the same offscreen editor through GPUI's real event
+dispatch (key and mouse events, painted between steps so hit-testing uses
+current layout): a color-picker wheel drag that must recolor the selection
+as exactly one undo step.
 
 ## End to end
 

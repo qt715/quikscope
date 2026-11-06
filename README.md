@@ -150,6 +150,13 @@ Style changes (color, size, fill) apply to the selected shape. Closing the
 editor keeps its annotations in the daemon: `moment open-last` or another
 notification click brings them back.
 
+**Colors.** Besides the eight swatches, the palette button opens a color
+picker: a hue/saturation wheel, value and alpha sliders, a hex field
+(`#rrggbb` or `#rrggbbaa`) and R, G, B, A fields (Up/Down step by 1,
+Shift+Up/Down by 10). Dragging recolors the selected shape live and counts as
+a single undo step. While the current color is not one of the swatches, the
+palette button shows it.
+
 ## Performance
 
 Measured in a headless labwc session at 2560×1440 (software GL, release

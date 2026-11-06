@@ -19,4 +19,8 @@ First release.
   captures always leave the newest one, and `quit` waits for it.
 - `moment notifications on|off|toggle|status`: switch capture notifications
   at runtime; the change is saved to the config file.
-- Unit, golden-image, GPU/CPU parity and headless end-to-end test suites; CI.
+- Color picker (hue/saturation wheel, value and alpha sliders, hex and RGBA
+  fields) behind the palette button; live recoloring of the selection as one
+  undo step.
+- Unit, golden-image, GPU/CPU parity, editor interaction and headless
+  end-to-end test suites; CI.
