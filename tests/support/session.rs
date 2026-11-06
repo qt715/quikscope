@@ -30,6 +30,51 @@ pub struct Notified {
     pub hints: Vec<String>,
 }
 
+/// A running `moment-e2e-helper ime`; see [`Session::input_method`].
+pub struct InputMethod {
+    child: Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl InputMethod {
+    /// The next activation report (`active` / `inactive`), if one comes
+    /// within `timeout`.
+    pub fn next(&self, timeout: Duration) -> Option<String> {
+        self.lines.recv_timeout(timeout).ok()
+    }
+
+    /// Sends one step: `pre=TEXT` or `commit=TEXT`.
+    pub fn step(&mut self, step: &str) {
+        use std::io::Write as _;
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{step}").unwrap();
+        stdin.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// Closes stdin and checks the helper exited cleanly.
+    pub fn stop(mut self) {
+        drop(self.child.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert!(status.success(), "input method helper failed: {status}");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
+        panic!("input method helper did not exit");
+    }
+}
+
+impl Drop for InputMethod {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 #[derive(Clone, Default)]
 struct FakeNotifications {
     log: Arc<Mutex<Vec<Notified>>>,
@@ -434,6 +479,33 @@ impl Session {
     pub fn type_text(&self, text: &str) {
         self.helper(&["type", text]);
         std::thread::sleep(Duration::from_millis(80));
+    }
+
+    /// Starts a resident input method, like fcitx5 running in the session.
+    pub fn input_method(&self) -> InputMethod {
+        let mut child = self
+            .command(HELPER)
+            .arg("ime")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let im = InputMethod { child, lines: rx };
+        assert_eq!(im.next(Duration::from_secs(5)).as_deref(), Some("ready"));
+        im
     }
 
     pub fn toplevels(&self) -> Vec<String> {

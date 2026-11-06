@@ -1,18 +1,21 @@
 //! The annotation editor window.
 
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
-    Focusable, Global, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent,
-    KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollEvent, Size, StatefulInteractiveElement as _, Styled as _, Window,
-    canvas, div, fill, outline, point, px,
+    App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, Global, HitboxBehavior, InteractiveElement as _,
+    IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollEvent, Size,
+    StatefulInteractiveElement as _, Styled as _, UTF16Selection, Window, canvas, div, fill,
+    outline, point, px,
 };
 
 use super::color_picker::{ColorPicker, PickerEvent};
+use super::edit_buffer::EditBuffer;
 use super::font_menu::{self, FontMenu, FontMenuEvent, next_size};
 use super::motion::{Transition, View};
 use super::{PatchCache, Shot, ViewTransform, hsla, paint_prims, paint_tiles, theme, toolbar};
@@ -22,6 +25,7 @@ use crate::document::{Document, PALETTE, Rgba, Shape, ShapeId, ShapeKind, Style}
 use crate::fonts::FontSpec;
 use crate::geom::{Pt, RectF};
 use crate::raster::Compression;
+use crate::text::TextLayout;
 
 /// Services the editor needs from the daemon.
 #[derive(Clone)]
@@ -159,9 +163,8 @@ pub struct TextEdit {
     /// The shape being edited, when editing existing text.
     pub id: Option<ShapeId>,
     pub origin: Pt,
-    pub text: String,
-    /// Caret position in chars.
-    pub cursor: usize,
+    /// Text, caret and IME pre-edit.
+    pub buf: EditBuffer,
     pub style: Style,
     pub font: FontSpec,
 }
@@ -170,7 +173,7 @@ impl TextEdit {
     pub fn kind(&self) -> ShapeKind {
         ShapeKind::Text {
             origin: self.origin,
-            text: self.text.clone(),
+            text: self.buf.text.clone(),
             font: self.font.clone(),
         }
     }
@@ -606,9 +609,8 @@ impl Editor {
         }
         self.text = Some(TextEdit {
             id: existing,
-            cursor: text.chars().count(),
             origin,
-            text,
+            buf: EditBuffer::new(text),
             style,
             font,
         });
@@ -644,7 +646,9 @@ impl Editor {
     }
 
     /// Returns true when the key was consumed by the text being edited.
-    fn text_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    /// Text itself arrives here only from plain key presses; input methods
+    /// deliver it through the [`EntityInputHandler`] impl below.
+    fn text_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(t) = &mut self.text else {
             return false;
         };
@@ -652,54 +656,40 @@ impl Editor {
         if ks.modifiers.control || ks.modifiers.platform || ks.modifiers.alt {
             return false;
         }
-        let byte_at =
-            |s: &str, chars: usize| s.char_indices().nth(chars).map_or(s.len(), |(i, _)| i);
+        let b = &mut t.buf;
+        // Arrow keys move visually: on a right-to-left line, "left" goes
+        // towards the end of the text.
+        let rtl = || {
+            let line = b.text.split('\n').nth(b.line()).unwrap_or("");
+            unicode_bidi::BidiInfo::new(line, None)
+                .paragraphs
+                .first()
+                .is_some_and(|p| p.level.is_rtl())
+        };
         match ks.key.as_str() {
             "escape" => {
                 self.commit_text(cx);
                 return true;
             }
-            "enter" => {
-                let at = byte_at(&t.text, t.cursor);
-                t.text.insert(at, '\n');
-                t.cursor += 1;
+            "enter" => b.insert("\n"),
+            "backspace" => b.backspace(),
+            "delete" => b.delete(),
+            "left" => {
+                let rtl = rtl();
+                b.step(rtl)
             }
-            "backspace" => {
-                if t.cursor > 0 {
-                    let at = byte_at(&t.text, t.cursor - 1);
-                    t.text.remove(at);
-                    t.cursor -= 1;
-                }
+            "right" => {
+                let rtl = rtl();
+                b.step(!rtl)
             }
-            "delete" => {
-                if t.cursor < t.text.chars().count() {
-                    let at = byte_at(&t.text, t.cursor);
-                    t.text.remove(at);
-                }
-            }
-            "left" => t.cursor = t.cursor.saturating_sub(1),
-            "right" => t.cursor = (t.cursor + 1).min(t.text.chars().count()),
-            "home" => {
-                let before: Vec<char> = t.text.chars().take(t.cursor).collect();
-                let line_start = before.iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1);
-                t.cursor = line_start;
-            }
-            "end" => {
-                let rest = t.text.chars().skip(t.cursor).position(|c| c == '\n');
-                t.cursor = match rest {
-                    Some(n) => t.cursor + n,
-                    None => t.text.chars().count(),
-                };
-            }
+            "home" => b.home(),
+            "end" => b.end(),
             _ => match &ks.key_char {
-                Some(s) if !s.is_empty() && !s.chars().any(char::is_control) => {
-                    let at = byte_at(&t.text, t.cursor);
-                    t.text.insert_str(at, s);
-                    t.cursor += s.chars().count();
-                }
+                Some(s) if !s.is_empty() && !s.chars().any(char::is_control) => b.insert(s),
                 _ => return false,
             },
         }
+        window.notify_text_input_changed(&self.focus);
         cx.notify();
         true
     }
@@ -713,7 +703,7 @@ impl Editor {
             cx.notify();
             return;
         }
-        if self.text_key(ev, cx) {
+        if self.text_key(ev, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -1224,13 +1214,34 @@ impl Editor {
                     &mut self.patches,
                 );
                 let layout = shape.text_layout().unwrap();
-                let caret = layout.caret(&t.text, t.cursor);
-                let top = xf.to_screen(t.origin.offset(caret.x, caret.y));
-                let caret_rect = Bounds {
-                    origin: top,
-                    size: gpui::size(px(2.), px(layout.line_height * zoom)),
-                };
-                window.paint_quad(fill(caret_rect, hsla(t.style.color)));
+                let caret = caret_rect(t, &layout, t.buf.cursor_chars(), xf);
+                window.paint_quad(fill(caret, hsla(t.style.color)));
+                // The IME's pre-edit is underlined, one segment per line.
+                if let Some(m) = t.buf.marked_chars() {
+                    let mut segments: Vec<(f32, f32, f32)> = Vec::new();
+                    for i in m {
+                        let (a, b) = (
+                            layout.caret(&t.buf.text, i),
+                            layout.caret(&t.buf.text, i + 1),
+                        );
+                        if a.y != b.y {
+                            continue;
+                        }
+                        let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
+                        match segments.last_mut() {
+                            Some(s) if s.2 == a.y && (s.1 - x0).abs() < 0.5 => s.1 = x1,
+                            Some(s) if s.2 == a.y && (s.0 - x1).abs() < 0.5 => s.0 = x0,
+                            _ => segments.push((x0, x1, a.y)),
+                        }
+                    }
+                    let below = layout.ascent + layout.size * 0.12;
+                    for (x0, x1, y) in segments {
+                        let r = RectF::new(t.origin.x + x0, t.origin.y + y + below, x1 - x0, 0.0);
+                        let mut b = xf.rect_to_screen(r);
+                        b.size.height = px(1.5);
+                        window.paint_quad(fill(b, hsla(t.style.color)));
+                    }
+                }
                 let frame = RectF::new(
                     t.origin.x,
                     t.origin.y,
@@ -1267,6 +1278,16 @@ impl Editor {
             }
         });
         self.patches.end_frame(window);
+        // While text is being typed the editor is a text input: Wayland
+        // enables text-input-v3 for it, so input methods (fcitx5, IBus)
+        // compose into it instead of seeing raw keys.
+        if self.text.is_some() {
+            window.handle_input(
+                &self.focus,
+                ElementInputHandler::new(bounds, cx.entity()),
+                cx,
+            );
+        }
 
         let cursor = match (&self.drag, self.space_held) {
             (Drag::Pan { .. }, _) => CursorStyle::ClosedHand,
@@ -1341,6 +1362,124 @@ pub fn tilde(path: &std::path::Path) -> String {
 impl Focusable for Editor {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
+    }
+}
+
+/// The caret before char `index` of the text being edited, in window
+/// coordinates.
+fn caret_rect(
+    t: &TextEdit,
+    layout: &TextLayout,
+    index: usize,
+    xf: ViewTransform,
+) -> Bounds<Pixels> {
+    let caret = layout.caret(&t.buf.text, index);
+    Bounds {
+        origin: xf.to_screen(t.origin.offset(caret.x, caret.y)),
+        size: gpui::size(px(2.), px(layout.line_height * xf.zoom)),
+    }
+}
+
+/// Input-method protocol for the text being edited. Ranges are UTF-16, as
+/// the platform sends them.
+impl EntityInputHandler for Editor {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        adjusted: &mut Option<Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let b = &self.text.as_ref()?.buf;
+        let r = b.range_from_utf16(&range);
+        *adjusted = Some(b.range_to_utf16(&r));
+        Some(b.text[r].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let b = &self.text.as_ref()?.buf;
+        let c = b.to_utf16(b.cursor);
+        Some(UTF16Selection {
+            range: c..c,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        let b = &self.text.as_ref()?.buf;
+        b.marked.as_ref().map(|m| b.range_to_utf16(m))
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(t) = &mut self.text {
+            t.buf.marked = None;
+            cx.notify();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(t) = &mut self.text else { return };
+        let range = range.map(|r| t.buf.range_from_utf16(&r));
+        t.buf.replace(range, text);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(t) = &mut self.text else { return };
+        let range = range.map(|r| t.buf.range_from_utf16(&r));
+        // The selection is in UTF-16 units of `new_text`.
+        let selected = new_selected_range.map(|r| {
+            let sub = EditBuffer::new(new_text.to_string());
+            sub.range_from_utf16(&r)
+        });
+        t.buf.set_marked(range, new_text, selected);
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range: Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let t = self.text.as_ref()?;
+        let scale = self.doc.read(cx).scale;
+        let layout = Shape::new(0, t.kind(), t.style, scale).text_layout()?;
+        let at = t.buf.from_utf16(range.start);
+        let index = t.buf.text[..at].chars().count();
+        Some(caret_rect(t, &layout, index, self.transform()))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        self.text.is_some()
     }
 }
 

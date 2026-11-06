@@ -42,7 +42,12 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: System dependencies (incl. Mesa lavapipe for offscreen GPUI rendering)
         run: scripts/ci-deps-ubuntu.sh
+      - name: Fonts for the shaping and fallback tests (CJK, Arabic, Hebrew, Devanagari, emoji)
+        run: sudo apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
       - name: Tests
+        env:
+          # Script tests fail instead of skipping when a font is missing.
+          MOMENT_REQUIRE_FONTS: "1"
         run: cargo test --locked
       - name: Upload regression diffs
         if: failure()

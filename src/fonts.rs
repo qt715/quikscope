@@ -112,6 +112,27 @@ impl Face {
         face
     }
 
+    /// The face prepared for shaping, instanced like [`Face::parse`].
+    pub fn shaper(&self, size_px: f32) -> rustybuzz::Face<'_> {
+        rustybuzz::Face::from_face(self.parse(size_px))
+    }
+
+    /// Whether the face has a glyph for every visible char of `grapheme`.
+    pub fn covers(&self, grapheme: &str) -> bool {
+        let Ok(face) = ttf_parser::Face::parse(self.data.as_ref().as_ref(), self.index) else {
+            return false;
+        };
+        grapheme
+            .chars()
+            .filter(|&c| !is_ignorable(c))
+            .all(|c| face.glyph_index(c).is_some())
+    }
+
+    /// Identity of the underlying font data, for caches.
+    pub fn key(&self) -> (usize, u32) {
+        (self.data.as_ref().as_ref().as_ptr() as usize, self.index)
+    }
+
     pub fn slant(&self) -> f32 {
         if self.synthetic_italic {
             SYNTHETIC_SLANT
@@ -189,6 +210,7 @@ pub fn warm() {
         .name("moment-fonts".into())
         .spawn(|| {
             LazyLock::force(&FAMILIES);
+            LazyLock::force(&CANDIDATES);
         })
         .ok();
 }
@@ -311,6 +333,212 @@ fn resolve_system(spec: &FontSpec) -> Option<Arc<Face>> {
         spec.family.clone(),
     )
     .map(Arc::new)
+}
+
+/// Which regional glyph forms Han characters should take. Japanese,
+/// Korean and Chinese share code points but not glyph shapes, and CJK font
+/// families come in one variant per region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lang {
+    Ja,
+    Ko,
+    ZhHans,
+    ZhHant,
+    ZhHk,
+}
+
+impl Lang {
+    /// The family-name suffix of this region's CJK fonts (Noto, Source Han).
+    fn suffix(self) -> &'static str {
+        match self {
+            Lang::Ja => " JP",
+            Lang::Ko => " KR",
+            Lang::ZhHans => " SC",
+            Lang::ZhHant => " TC",
+            Lang::ZhHk => " HK",
+        }
+    }
+
+    /// BCP 47 tag for the shaper (selects `locl` forms).
+    pub fn tag(self) -> &'static str {
+        match self {
+            Lang::Ja => "ja",
+            Lang::Ko => "ko",
+            Lang::ZhHans => "zh-Hans",
+            Lang::ZhHant => "zh-Hant",
+            Lang::ZhHk => "zh-HK",
+        }
+    }
+
+    /// From the text itself when it says (kana, hangul, bopomofo), otherwise
+    /// from the locale, otherwise Japanese.
+    pub fn detect(text: &str) -> Lang {
+        for c in text.chars() {
+            match c as u32 {
+                0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => return Lang::Ja,
+                0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF => return Lang::Ko,
+                0x3100..=0x312F | 0x31A0..=0x31BF => return Lang::ZhHant,
+                _ => {}
+            }
+        }
+        *LOCALE_LANG
+    }
+
+    fn from_locale(locale: &str) -> Option<Lang> {
+        let l = locale.to_ascii_lowercase().replace('-', "_");
+        Some(if l.starts_with("ja") {
+            Lang::Ja
+        } else if l.starts_with("ko") {
+            Lang::Ko
+        } else if l.starts_with("zh_tw") || l.contains("hant") {
+            Lang::ZhHant
+        } else if l.starts_with("zh_hk") || l.starts_with("zh_mo") {
+            Lang::ZhHk
+        } else if l.starts_with("zh") {
+            Lang::ZhHans
+        } else {
+            return None;
+        })
+    }
+}
+
+static LOCALE_LANG: LazyLock<Lang> = LazyLock::new(|| {
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.is_empty())
+        .and_then(|v| Lang::from_locale(&v))
+        .unwrap_or(Lang::Ja)
+});
+
+/// Characters that never need a glyph of their own: joiners and variation
+/// selectors only steer the shaping of their neighbours.
+pub fn is_ignorable(c: char) -> bool {
+    matches!(c as u32,
+        0x200B..=0x200F | 0x2060..=0x2064 | 0xFE00..=0xFE0F | 0xE0000..=0xE0FFF | 0xFEFF)
+}
+
+/// Whether `grapheme` asks for an emoji (pictographic) rendering rather
+/// than a text one.
+pub fn is_emoji(grapheme: &str) -> bool {
+    let mut chars = grapheme.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if grapheme.contains('\u{FE0F}') || grapheme.contains('\u{20E3}') {
+        return true;
+    }
+    if grapheme.contains('\u{FE0E}') {
+        return false;
+    }
+    // Code points whose default presentation is emoji.
+    matches!(first as u32,
+        0x1F1E6..=0x1F1FF // regional indicators (flags)
+        | 0x1F300..=0x1F5FF
+        | 0x1F600..=0x1F64F
+        | 0x1F680..=0x1F6FF
+        | 0x1F7E0..=0x1F7EB
+        | 0x1F90C..=0x1F9FF
+        | 0x1FA70..=0x1FAFF
+        | 0x2614..=0x2615 | 0x2648..=0x2653 | 0x267F | 0x2693 | 0x26A1
+        | 0x26AA..=0x26AB | 0x26BD..=0x26BE | 0x26C4..=0x26C5 | 0x26CE | 0x26D4
+        | 0x26EA | 0x26F2..=0x26F3 | 0x26F5 | 0x26FA | 0x26FD | 0x2705
+        | 0x270A..=0x270B | 0x2728 | 0x274C | 0x274E | 0x2753..=0x2755 | 0x2757
+        | 0x2795..=0x2797 | 0x27B0 | 0x27BF | 0x2B1B..=0x2B1C | 0x2B50 | 0x2B55
+        | 0x231A..=0x231B | 0x23E9..=0x23EC | 0x23F0 | 0x23F3 | 0x25FD..=0x25FE)
+}
+
+/// One installed family considered for fallback, represented by its most
+/// regular face.
+struct Candidate {
+    family: Arc<str>,
+    source: fontdb::Source,
+    index: u32,
+    emoji: bool,
+    /// "Noto Sans …" 0, other Noto 1, everything else 2: Noto covers the
+    /// most scripts with a consistent design.
+    rank: u8,
+    /// Region suffix for CJK families, e.g. " JP".
+    region: Option<&'static str>,
+}
+
+static CANDIDATES: LazyLock<Vec<Candidate>> = LazyLock::new(|| {
+    let mut best: HashMap<&str, &fontdb::FaceInfo> = HashMap::new();
+    for info in DB.faces() {
+        let Some((name, _)) = info.families.first() else {
+            continue;
+        };
+        let score =
+            |f: &fontdb::FaceInfo| (f.style != fontdb::Style::Normal, f.weight.0.abs_diff(400));
+        let slot = best.entry(name.as_str()).or_insert(info);
+        if score(info) < score(slot) {
+            *slot = info;
+        }
+    }
+    let regions = [" JP", " KR", " SC", " TC", " HK"];
+    let mut out: Vec<Candidate> = best
+        .into_iter()
+        .map(|(name, info)| Candidate {
+            family: name.into(),
+            source: info.source.clone(),
+            index: info.index,
+            emoji: name.contains("Emoji"),
+            rank: if name.starts_with("Noto Sans") {
+                0
+            } else if name.starts_with("Noto") {
+                1
+            } else {
+                2
+            },
+            region: regions.into_iter().find(|r| name.ends_with(r)),
+        })
+        .collect();
+    out.sort_by(|a, b| (a.rank, &a.family).cmp(&(b.rank, &b.family)));
+    out
+});
+
+type FallbackKey = (Box<str>, Lang);
+static FALLBACKS: LazyLock<Mutex<HashMap<FallbackKey, Option<Arc<str>>>>> =
+    LazyLock::new(Default::default);
+
+/// An installed family that can draw `grapheme`, for when neither the
+/// chosen font nor Inter can. Emoji prefer colour emoji fonts and Han
+/// characters prefer the CJK variant for `lang`. Results (including "none")
+/// are cached, so a scan over the installed fonts happens once per grapheme.
+pub fn fallback_family(grapheme: &str, lang: Lang) -> Option<Arc<str>> {
+    let key = (Box::from(grapheme), lang);
+    if let Some(hit) = FALLBACKS.lock().unwrap().get(&key) {
+        return hit.clone();
+    }
+    let started = std::time::Instant::now();
+    let emoji = is_emoji(grapheme);
+    let mut order: Vec<&Candidate> = CANDIDATES.iter().collect();
+    order.sort_by_key(|c| {
+        let region = match c.region {
+            Some(r) if r == lang.suffix() => 0,
+            None => 1,
+            Some(_) => 2,
+        };
+        (c.emoji != emoji, region)
+    });
+    let wanted: Vec<char> = grapheme.chars().filter(|&c| !is_ignorable(c)).collect();
+    let found = order
+        .into_iter()
+        .find(|c| {
+            load(&c.source)
+                .and_then(|data| {
+                    let face = ttf_parser::Face::parse(data.as_ref().as_ref(), c.index).ok()?;
+                    Some(wanted.iter().all(|&ch| face.glyph_index(ch).is_some()))
+                })
+                .unwrap_or(false)
+        })
+        .map(|c| c.family.clone());
+    log::debug!(
+        "fallback for {grapheme:?}: {found:?} in {:.1}ms",
+        started.elapsed().as_secs_f64() * 1e3
+    );
+    FALLBACKS.lock().unwrap().insert(key, found.clone());
+    found
 }
 
 #[cfg(test)]

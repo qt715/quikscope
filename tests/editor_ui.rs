@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use gpui::EntityInputHandler as _;
 use gpui::{
     AnyWindowHandle, AppContext as _, Entity, HeadlessAppContext, KeyDownEvent, Keystroke,
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Point,
@@ -136,6 +137,24 @@ impl Ui {
             .unwrap()
     }
 
+    /// Calls the editor's input-method protocol, as the platform does.
+    fn ime<R>(
+        &mut self,
+        f: impl FnOnce(&mut Editor, &mut gpui::Window, &mut gpui::Context<Editor>) -> R,
+    ) -> R {
+        let any = self.any();
+        let r = self
+            .cx
+            .update_window(any, |view, window, cx| {
+                view.downcast::<Editor>()
+                    .unwrap()
+                    .update(cx, |e, cx| f(e, window, cx))
+            })
+            .unwrap();
+        self.frame();
+        r
+    }
+
     /// Window position of image point `p`.
     fn screen(&mut self, p: Pt) -> Point<gpui::Pixels> {
         self.editor(|e, _| e.transform().to_screen(p))
@@ -156,6 +175,52 @@ fn text_font(doc: &Document) -> moment::fonts::FontSpec {
         ShapeKind::Text { font, .. } => font.clone(),
         other => panic!("expected text, got {other:?}"),
     }
+}
+
+#[test]
+fn input_method_composition_commits_into_the_text() {
+    let mut ui = Ui::new(blank());
+    // Without text being edited the editor is no text input, so an input
+    // method leaves the single-key tool shortcuts alone.
+    assert!(!ui.ime(|e, w, cx| e.accepts_text_input(w, cx)));
+    ui.typ("t");
+    let at = ui.screen(Pt::new(100.0, 100.0));
+    ui.click(at);
+    ui.typ("A");
+    assert!(ui.ime(|e, w, cx| e.accepts_text_input(w, cx)));
+
+    // A Japanese IME composes "nihon", each step replacing its pre-edit.
+    ui.ime(|e, w, cx| e.replace_and_mark_text_in_range(None, "に", None, w, cx));
+    ui.ime(|e, w, cx| e.replace_and_mark_text_in_range(None, "にほん", None, w, cx));
+    assert_eq!(ui.ime(|e, w, cx| e.marked_text_range(w, cx)), Some(1..4));
+    assert_eq!(
+        ui.ime(|e, w, cx| e.selected_text_range(false, w, cx))
+            .map(|s| s.range),
+        Some(4..4)
+    );
+    // The candidate window is anchored at the pre-edit, on the text line.
+    let anchor = ui
+        .ime(|e, w, cx| e.bounds_for_range(1..1, gpui::Bounds::default(), w, cx))
+        .unwrap();
+    let mid_y = anchor.origin.y + anchor.size.height / 2.0;
+    assert!(
+        anchor.origin.x > at.x && anchor.origin.x < at.x + px(60.),
+        "{anchor:?}"
+    );
+    assert!((mid_y - at.y).abs() < px(3.), "{anchor:?} vs {at:?}");
+
+    // Conversion commits "日本" in place of the pre-edit.
+    ui.ime(|e, w, cx| e.replace_text_in_range(None, "日本", w, cx));
+    assert_eq!(ui.ime(|e, w, cx| e.marked_text_range(w, cx)), None);
+    // Typing continues after the committed text.
+    ui.typ("!");
+    ui.key("escape", None, Modifiers::default());
+    let text = ui.doc(|d| match &d.shapes()[0].kind {
+        ShapeKind::Text { text, .. } => text.clone(),
+        _ => unreachable!(),
+    });
+    assert_eq!(text, "A日本!");
+    assert_eq!(ui.doc(|d| d.shapes().len()), 1, "one shape, one undo step");
 }
 
 #[test]

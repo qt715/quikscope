@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use tiny_skia::{FillRule, Paint, PixmapMut, Transform};
+use tiny_skia::{FillRule, FilterQuality, Paint, Pixmap, PixmapMut, PixmapPaint, Transform};
 
 use crate::document::{RenderJob, Rgba};
 use crate::raster::Image;
@@ -53,6 +53,9 @@ pub fn render(job: &RenderJob) -> Image {
                     Prim::Pixels { x, y, image } => {
                         blit_premultiplied(&mut pixmap, image, x - crop.x, y - crop.y);
                     }
+                    Prim::Image { rect, image } => {
+                        draw_image(&mut pixmap, *rect, image, tf);
+                    }
                 }
             }
         }
@@ -96,6 +99,32 @@ fn blit_premultiplied(pixmap: &mut PixmapMut, src: &Image, dx: i32, dy: i32) {
             data[i + 3] = p[3];
         }
     }
+}
+
+/// Draws a straight-alpha bitmap scaled into `rect` (image coordinates).
+fn draw_image(pixmap: &mut PixmapMut, rect: crate::geom::RectF, src: &Image, tf: Transform) {
+    let mut data = src.data.clone();
+    premultiply(&mut data);
+    let Some(size) = tiny_skia::IntSize::from_wh(src.width, src.height) else {
+        return;
+    };
+    let Some(img) = Pixmap::from_vec(data, size) else {
+        return;
+    };
+    let paint = PixmapPaint {
+        quality: FilterQuality::Bilinear,
+        ..PixmapPaint::default()
+    };
+    let place = Transform::from_row(
+        rect.w / src.width as f32,
+        0.0,
+        0.0,
+        rect.h / src.height as f32,
+        rect.x,
+        rect.y,
+    )
+    .post_concat(tf);
+    pixmap.draw_pixmap(0, 0, img.as_ref(), &paint, place, None);
 }
 
 fn premultiply(data: &mut [u8]) {

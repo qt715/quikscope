@@ -539,3 +539,94 @@ fn editor_opens_on_a_small_hidpi_display() {
     s.wait_log("editor first frame", Duration::from_secs(10));
     assert_eq!(stdout(&s.moment(&["ping"])), "ok", "daemon still alive");
 }
+
+#[test]
+fn input_method_composes_and_commits_into_editor_text() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+    // The input method runs before the editor exists, like fcitx5 does.
+    let mut ime = s.input_method();
+    let out = s.moment(&["capture", "screen", "--edit", "--no-notify"]);
+    assert!(out.status.success());
+    s.wait_for_window("moment");
+    s.wait_log("editor window opened", Duration::from_secs(10));
+
+    // Focused but not typing text: the editor is no text input, so the
+    // input method stays inactive and single-key tool shortcuts reach the
+    // editor instead of being composed.
+    assert_eq!(ime.next(Duration::from_millis(1000)), None);
+    s.keys(&["t"]);
+    s.helper(&["click", "300", "200"]);
+    assert_eq!(
+        ime.next(Duration::from_secs(5)).as_deref(),
+        Some("active"),
+        "the text tool did not enable the input method"
+    );
+    s.type_text("A");
+
+    let grim = s.has("grim");
+    let shot = |name: &str| {
+        let path = s.root().join(name);
+        assert!(s.command("grim").arg(&path).status().unwrap().success());
+        decode_png(&path)
+    };
+    let before = grim.then(|| shot("before.png"));
+    // Compose "nihongo": the pre-edit is drawn in place...
+    ime.step("pre=にほ");
+    ime.step("pre=にほんご");
+    if let Some(before) = before {
+        let during = shot("during.png");
+        let changed = before
+            .data
+            .chunks_exact(4)
+            .zip(during.data.chunks_exact(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(changed > 300, "pre-edit drawn: {changed} pixels changed");
+    }
+    // ...and converting commits "日本語" in its place. The ASCII "!"
+    // takes GPUI's key-event path for single-byte commits.
+    ime.step("commit=日本語");
+    ime.step("commit=!");
+
+    // Finishing the text turns the input method off again.
+    s.keys(&["escape"]);
+    assert_eq!(
+        ime.next(Duration::from_secs(5)).as_deref(),
+        Some("inactive")
+    );
+    ime.stop();
+    s.keys(&["ctrl+s"]);
+    s.wait_log("saved ", Duration::from_secs(10));
+    let saved = std::fs::read_dir(s.shots_dir())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let img = decode_png(&saved);
+    // The text's ink (pure annotation red) spans exactly what "A日本語!"
+    // lays out to: neither the pre-edit nor both strings survived.
+    let red = [0x31, 0x31, 0xe0, 0xff];
+    let xs: Vec<u32> = img
+        .data
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(_, p)| *p == red)
+        .map(|(i, _)| i as u32 % img.width)
+        .collect();
+    assert!(!xs.is_empty(), "no text in the saved image");
+    let ink = (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1) as f32;
+    let layout = moment::text::layout("A日本語!", &moment::fonts::FontSpec::default());
+    let expected = moment::text::ink(&layout, moment::geom::Pt::new(0.0, 0.0))
+        .path
+        .unwrap()
+        .bounds()
+        .width();
+    assert!(
+        (ink - expected).abs() <= 3.0,
+        "text ink {ink}px wide, \"A日本語!\" lays out {expected}px"
+    );
+}

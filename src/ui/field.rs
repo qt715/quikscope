@@ -3,12 +3,16 @@
 //! Clicking selects the whole value so typing replaces it; Enter, Tab or
 //! losing focus submits. Number fields step with the arrow keys.
 
+use std::ops::Range;
+
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    App, Bounds, Context, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, UTF16Selection, Window,
+    canvas, div, prelude::FluentBuilder as _, px,
 };
 
+use super::edit_buffer::EditBuffer;
 use super::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,6 +40,8 @@ pub struct Field {
     text: String,
     /// The whole value is selected; the next character replaces it.
     selected: bool,
+    /// IME pre-edit at the end of `text` (text fields only).
+    marked: Option<Range<usize>>,
     focus: FocusHandle,
     width: Pixels,
     placeholder: SharedString,
@@ -109,6 +115,7 @@ impl Field {
             kind,
             text: String::new(),
             selected: false,
+            marked: None,
             focus,
             width: px(width),
             placeholder: SharedString::default(),
@@ -136,12 +143,38 @@ impl Field {
         let text = text.into();
         if text != self.text {
             self.text = text;
+            self.marked = None;
             cx.notify();
         }
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.text.clear();
+        self.marked = None;
+        cx.notify();
+    }
+
+    /// The value as an IME edit buffer, caret at the end. A selected value
+    /// is replaced by the first composition, like a typed key replaces it.
+    fn buffer(&self) -> EditBuffer {
+        let mut b = EditBuffer::new(if self.selected && self.marked.is_none() {
+            String::new()
+        } else {
+            self.text.clone()
+        });
+        b.marked = self.marked.clone();
+        b
+    }
+
+    fn ime_edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut EditBuffer)) {
+        let mut b = self.buffer();
+        f(&mut b);
+        self.selected = false;
+        self.marked = b.marked;
+        if b.text != self.text {
+            self.text = b.text;
+            cx.emit(FieldEvent::Changed(self.text.clone()));
+        }
         cx.notify();
     }
 
@@ -204,7 +237,14 @@ impl Render for Field {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
         let empty = self.text.is_empty();
+        let (committed, marked) = match &self.marked {
+            Some(m) => (&self.text[..m.start], &self.text[m.clone()]),
+            None => (self.text.as_str(), ""),
+        };
+        let ime =
+            (focused && self.kind == FieldKind::Text).then(|| (self.focus.clone(), cx.entity()));
         div()
+            .relative()
             .track_focus(&self.focus)
             // Width 0 means "fill the parent".
             .when(self.width > px(0.), |d| d.w(self.width))
@@ -241,12 +281,128 @@ impl Render for Field {
                     .child(if empty {
                         self.placeholder.clone()
                     } else {
-                        SharedString::from(self.text.clone())
+                        SharedString::from(committed.to_string())
                     }),
             )
+            .when(!marked.is_empty(), |d| {
+                d.child(
+                    div()
+                        .underline()
+                        .child(SharedString::from(marked.to_string())),
+                )
+            })
             .when(focused && !self.selected, |d| {
                 d.child(div().w(px(1.)).h(px(12.)).bg(theme::text()))
             })
+            // Text fields are text inputs while focused, so input methods
+            // compose into them (font names in any script).
+            .when_some(ime, |d, (focus, field)| {
+                d.child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            window.handle_input(&focus, ElementInputHandler::new(bounds, field), cx)
+                        },
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+            })
+    }
+}
+
+impl EntityInputHandler for Field {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        adjusted: &mut Option<Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let b = EditBuffer::new(self.text.clone());
+        let r = b.range_from_utf16(&range);
+        *adjusted = Some(b.range_to_utf16(&r));
+        Some(self.text[r].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let b = EditBuffer::new(self.text.clone());
+        let end = b.to_utf16(self.text.len());
+        Some(UTF16Selection {
+            range: if self.selected { 0..end } else { end..end },
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        let b = EditBuffer::new(self.text.clone());
+        self.marked.as_ref().map(|m| b.range_to_utf16(m))
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.marked = None;
+        cx.notify();
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_edit(cx, |b| {
+            let range = range.map(|r| b.range_from_utf16(&r));
+            b.replace(range, &text.replace('\n', " "));
+        });
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_edit(cx, |b| {
+            let range = range.map(|r| b.range_from_utf16(&r));
+            let selected = new_selected_range
+                .map(|r| EditBuffer::new(new_text.to_string()).range_from_utf16(&r));
+            b.set_marked(range, new_text, selected);
+        });
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        // The caret is at the end of a short value; the field's box is a
+        // close enough anchor for the candidate window.
+        Some(element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        // Number and hex fields stay out of input methods, which would
+        // otherwise turn digits into full-width forms.
+        self.kind == FieldKind::Text
     }
 }
 

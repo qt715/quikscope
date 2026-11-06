@@ -19,6 +19,9 @@ pub enum Prim {
     Fill { path: Path, color: Rgba },
     /// Opaque pixels placed at an integer position in image coordinates.
     Pixels { x: i32, y: i32, image: Arc<Image> },
+    /// A colour bitmap (straight alpha) scaled into `rect`, in image
+    /// coordinates. Emoji glyphs.
+    Image { rect: RectF, image: Arc<Image> },
 }
 
 /// Stroker precision: outlines stay smooth up to this zoom factor.
@@ -90,9 +93,15 @@ pub fn shape_prims(shape: &Shape, base: &Image) -> Vec<Prim> {
         }
         ShapeKind::Text { origin, .. } => {
             let layout = shape.text_layout().unwrap();
-            if let Some(path) = text::outline(&layout, *origin) {
+            let ink = text::ink(&layout, *origin);
+            if let Some(path) = ink.path {
                 out.push(Prim::Fill { path, color });
             }
+            out.extend(
+                ink.images
+                    .into_iter()
+                    .map(|(rect, image)| Prim::Image { rect, image }),
+            );
         }
         ShapeKind::Step { center, number } => {
             let radius = shape.step_radius();
@@ -111,7 +120,7 @@ pub fn shape_prims(shape: &Shape, base: &Image) -> Vec<Prim> {
                 center.x - layout.width / 2.0,
                 center.y - layout.line_height / 2.0,
             );
-            if let Some(path) = text::outline(&layout, origin) {
+            if let Some(path) = text::ink(&layout, origin).path {
                 let ink = if color.is_light() {
                     Rgba::rgb(0x1e1e1e)
                 } else {

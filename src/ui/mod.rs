@@ -1,6 +1,7 @@
 //! GPUI front end: the region selection overlay and the annotation editor.
 
 pub mod color_picker;
+pub mod edit_buffer;
 pub mod editor;
 pub mod field;
 pub mod font_menu;
@@ -268,7 +269,8 @@ pub fn gpui_path(path: &tiny_skia::Path, xf: ViewTransform) -> Option<gpui::Path
     b.build().ok()
 }
 
-/// GPU textures for pixelate patches, keyed by the patch allocation.
+/// GPU textures for pixelate patches and colour glyphs, keyed by the image
+/// allocation.
 #[derive(Default)]
 pub struct PatchCache {
     images: HashMap<usize, Arc<RenderImage>>,
@@ -321,6 +323,11 @@ pub fn paint_prims(
                 );
                 let tex = patches.get(image);
                 let _ = window.paint_image(clip, xf.rect_to_screen(r), (0.).into(), tex, 0, false);
+            }
+            Prim::Image { rect, image } => {
+                let tex = patches.get(image);
+                let _ =
+                    window.paint_image(clip, xf.rect_to_screen(*rect), (0.).into(), tex, 0, false);
             }
         }
     }

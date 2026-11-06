@@ -8,6 +8,7 @@
 //! moment-e2e-helper move X Y
 //! moment-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
 //! moment-e2e-helper type TEXT                    # type ASCII text
+//! moment-e2e-helper ime                          # resident input method: steps on stdin, reports activation
 //! moment-e2e-helper toplevels                    # print "app_id\ttitle" per window
 //! moment-e2e-helper paste MIME                   # write the clipboard contents to stdout
 //! moment-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
@@ -27,6 +28,9 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, event_created_child};
 use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_manager_v2, zwp_input_method_v2,
+};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
 };
@@ -183,6 +187,13 @@ struct State {
     heads: Vec<Head>,
     head_serial: Option<u32>,
     config_result: Option<bool>,
+    /// Input method: activation requested by the compositor, applied at
+    /// the next `done`.
+    ime_pending: bool,
+    ime_active: bool,
+    /// Number of `done` events, which commits must quote.
+    ime_serial: u32,
+    ime_unavailable: bool,
 }
 
 fn main() {
@@ -379,6 +390,7 @@ fn main() {
             kb.destroy();
             queue.roundtrip(&mut state).unwrap();
         }
+        "ime" => run_ime(&globals, &mut queue, &mut state),
         "pattern" => run_pattern(&globals, &mut queue, &mut state, &outputs),
         _ => {
             eprintln!("unknown command {cmd:?}");
@@ -409,6 +421,88 @@ fn layout_extent(state: &State) -> (u32, u32) {
 fn pattern_pixel(x: u32, y: u32) -> [u8; 4] {
     let b = if x < 64 && y < 64 { 255 } else { 0 };
     [b, (y % 256) as u8, (x % 256) as u8, 255]
+}
+
+/// Plays a resident input method (what fcitx5 or IBus are to the
+/// compositor). Prints `active` / `inactive` whenever the compositor
+/// (de)activates it for a focused text input, and applies one step per
+/// stdin line: `pre=TEXT` (pre-edit) or `commit=TEXT`. Exits on EOF.
+fn run_ime(
+    globals: &wayland_client::globals::GlobalList,
+    queue: &mut wayland_client::EventQueue<State>,
+    state: &mut State,
+) {
+    let qh = queue.handle();
+    let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).expect("seat");
+    let mgr: zwp_input_method_manager_v2::ZwpInputMethodManagerV2 =
+        globals.bind(&qh, 1..=1, ()).expect("input method manager");
+    let im = mgr.get_input_method(&seat, &qh, ());
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lines().map_while(Result::ok) {
+            tx.send(line).unwrap();
+        }
+    });
+    queue.roundtrip(state).unwrap();
+    println!("ready");
+    let mut reported = false;
+    loop {
+        queue.roundtrip(state).unwrap();
+        if state.ime_unavailable {
+            eprintln!("another input method is registered");
+            std::process::exit(1);
+        }
+        if state.ime_active != reported {
+            reported = state.ime_active;
+            println!("{}", if reported { "active" } else { "inactive" });
+        }
+        std::io::stdout().flush().unwrap();
+        match rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(step) => {
+                if !state.ime_active {
+                    eprintln!("step {step:?} while no text input is active");
+                    std::process::exit(1);
+                }
+                let (kind, value) = step.split_once('=').expect("STEP is kind=value");
+                match kind {
+                    "pre" => {
+                        let end = value.len() as i32;
+                        im.set_preedit_string(value.to_string(), end, end);
+                    }
+                    "commit" => im.commit_string(value.to_string()),
+                    other => panic!("unknown ime step {other:?}"),
+                }
+                im.commit(state.ime_serial);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    im.destroy();
+    queue.roundtrip(state).unwrap();
+}
+
+impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &zwp_input_method_v2::ZwpInputMethodV2,
+        event: zwp_input_method_v2::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwp_input_method_v2::Event;
+        match event {
+            Event::Activate => state.ime_pending = true,
+            Event::Deactivate => state.ime_pending = false,
+            Event::Done => {
+                state.ime_serial += 1;
+                state.ime_active = state.ime_pending;
+            }
+            Event::Unavailable => state.ime_unavailable = true,
+            _ => {}
+        }
+    }
 }
 
 fn run_pattern(
@@ -700,3 +794,4 @@ wayland_client::delegate_noop!(State: ignore zwlr_output_configuration_head_v1::
 
 wayland_client::delegate_noop!(State: ignore zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1);
 wayland_client::delegate_noop!(State: ignore zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1);
+wayland_client::delegate_noop!(State: ignore zwp_input_method_manager_v2::ZwpInputMethodManagerV2);
