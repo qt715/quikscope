@@ -60,6 +60,7 @@ pub(super) fn connect(events: EventSink) -> Platform {
         clipboard: shell.as_ref().map(|s| s.clone() as Arc<dyn Clipboard>),
         notifier: shell.map(|s| s as Arc<dyn Notifier>),
         surfaces: Surfaces::Windows,
+        capture_may_prompt: false,
     }
 }
 

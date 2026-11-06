@@ -9,6 +9,7 @@
 //! quickscope-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
 //! quickscope-e2e-helper type TEXT                    # type ASCII text
 //! quickscope-e2e-helper ime                          # resident input method: steps on stdin, reports activation
+//! quickscope-e2e-helper dialog                       # permission-dialog stand-in: a toplevel; prints "accepted" on Enter
 //! quickscope-e2e-helper toplevels                    # print "app_id\ttitle" per window
 //! quickscope-e2e-helper paste MIME                   # write the clipboard contents to stdout
 //! quickscope-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
@@ -26,7 +27,10 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm,
     wl_shm_pool, wl_surface,
 };
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, event_created_child};
+use wayland_client::{
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, event_created_child,
+};
+use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_manager_v2, zwp_input_method_v2,
@@ -194,6 +198,9 @@ struct State {
     /// Number of `done` events, which commits must quote.
     ime_serial: u32,
     ime_unavailable: bool,
+    /// Dialog: its toplevel was configured, and Enter reached it.
+    dialog_configured: bool,
+    dialog_accepted: bool,
 }
 
 fn main() {
@@ -392,6 +399,7 @@ fn main() {
         }
         "ime" => run_ime(&globals, &mut queue, &mut state),
         "pattern" => run_pattern(&globals, &mut queue, &mut state, &outputs),
+        "dialog" => run_dialog(&globals, &mut queue, &mut state),
         _ => {
             eprintln!("unknown command {cmd:?}");
             std::process::exit(2);
@@ -501,6 +509,110 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for State {
             }
             Event::Unavailable => state.ime_unavailable = true,
             _ => {}
+        }
+    }
+}
+
+/// Stands in for a desktop permission dialog (the Screenshot portal's):
+/// an ordinary toplevel that the compositor focuses, accepting on Enter.
+/// Anything holding the keyboard meanwhile keeps the user from answering.
+fn run_dialog(
+    globals: &wayland_client::globals::GlobalList,
+    queue: &mut wayland_client::EventQueue<State>,
+    state: &mut State,
+) {
+    let qh = queue.handle();
+    let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=4, ()).unwrap();
+    let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
+    let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+    let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).expect("seat");
+    let _keyboard = seat.get_keyboard(&qh, ());
+    let surface = compositor.create_surface(&qh, ());
+    let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+    let toplevel = xdg.get_toplevel(&qh, ());
+    toplevel.set_app_id("quickscope-e2e-dialog".into());
+    toplevel.set_title("Allow screenshot?".into());
+    surface.commit();
+    while !state.dialog_configured {
+        queue.blocking_dispatch(state).unwrap();
+    }
+    let (w, h) = (320u32, 160u32);
+    let size = (w * h * 4) as usize;
+    let fd = rustix::fs::memfd_create("dialog", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+    rustix::fs::ftruncate(&fd, size as u64).unwrap();
+    let mut file = std::fs::File::from(fd);
+    file.write_all(&[0x60; 320 * 160 * 4]).unwrap();
+    let pool = shm.create_pool(file.as_fd(), size as i32, &qh, ());
+    let buffer = pool.create_buffer(
+        0,
+        w as i32,
+        h as i32,
+        (w * 4) as i32,
+        wl_shm::Format::Xrgb8888,
+        &qh,
+        (),
+    );
+    surface.attach(Some(&buffer), 0, 0);
+    surface.damage_buffer(0, 0, w as i32, h as i32);
+    surface.commit();
+    queue.roundtrip(state).unwrap();
+    println!("ready");
+    std::io::stdout().flush().unwrap();
+    while !state.dialog_accepted {
+        queue.blocking_dispatch(state).unwrap();
+    }
+    println!("accepted");
+    std::io::stdout().flush().unwrap();
+}
+
+impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
+    fn event(
+        _: &mut Self,
+        wm_base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_wm_base::Event::Ping { serial } = event {
+            wm_base.pong(serial);
+        }
+    }
+}
+
+impl Dispatch<xdg_surface::XdgSurface, ()> for State {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            xdg.ack_configure(serial);
+            state.dialog_configured = true;
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Key {
+            key,
+            state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+            ..
+        } = event
+            && Some(key) == keycode("enter")
+        {
+            state.dialog_accepted = true;
         }
     }
 }
@@ -778,6 +890,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
 }
 
 wayland_client::delegate_noop!(State: ignore wl_output::WlOutput);
+wayland_client::delegate_noop!(State: ignore xdg_toplevel::XdgToplevel);
 wayland_client::delegate_noop!(State: ignore wl_seat::WlSeat);
 wayland_client::delegate_noop!(State: ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(State: ignore wl_surface::WlSurface);

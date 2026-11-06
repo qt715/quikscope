@@ -132,6 +132,9 @@ pub struct Platform {
     pub clipboard: Option<Arc<dyn Clipboard>>,
     pub notifier: Option<Arc<dyn Notifier>>,
     pub surfaces: Surfaces,
+    /// The desktop may show its own dialog while capturing (the Screenshot
+    /// portal asks for permission), so nothing may take input meanwhile.
+    pub capture_may_prompt: bool,
 }
 
 /// Connects the backends for the current session. Missing pieces are
@@ -168,6 +171,7 @@ pub fn connect(events: EventSink) -> Platform {
                     .ok(),
                 notifier,
                 surfaces: Surfaces::X11,
+                capture_may_prompt: false,
             };
         }
         let desktop: Arc<dyn Desktop> = if hyprland::available() {
@@ -225,6 +229,7 @@ pub fn connect(events: EventSink) -> Platform {
             clipboard,
             notifier,
             surfaces,
+            capture_may_prompt: use_portal,
         }
     }
     #[cfg(windows)]
@@ -239,7 +244,9 @@ impl Platform {
     /// producing the frame. Only layer-shell qualifies: the surface is
     /// transparent until the frozen frame arrives, so a capture that sees it
     /// sees the desktop unchanged. X11 and Windows popups would capture as
-    /// black without a compositor, and fullscreen toplevels animate in.
+    /// black without a compositor, and fullscreen toplevels animate in. A
+    /// capture that may prompt (the portal's permission dialog) gets none:
+    /// the overlay's exclusive keyboard would keep the user from answering.
     /// `size` is the display's logical size: anchored to every edge the
     /// compositor stretches the surface anyway, but GPUI sizes its first
     /// buffer from it, and its default would leave a centred window.
@@ -250,6 +257,9 @@ impl Platform {
         display: DisplayId,
         size: gpui::Size<gpui::Pixels>,
     ) -> Option<WindowOptions> {
+        if self.capture_may_prompt {
+            return None;
+        }
         match self.surfaces {
             #[cfg(target_os = "linux")]
             Surfaces::LayerShell => {

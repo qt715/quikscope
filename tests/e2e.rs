@@ -1062,3 +1062,36 @@ fn selection_overlay_covers_a_large_output_edge_to_edge() {
     let out = s.finish(child, Duration::from_secs(15));
     assert_eq!(out.status.code(), Some(1));
 }
+
+#[test]
+fn portal_permission_dialog_gets_the_keyboard_before_any_overlay() {
+    // GNOME and KDE may ask before a portal screenshot. Nothing of ours may
+    // take the keyboard while they do, or the user cannot approve.
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    if !s.has("grim") {
+        assert!(
+            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            "grim required for portal e2e"
+        );
+        eprintln!("skipped: portal e2e requires grim");
+        return;
+    }
+    // labwc offers layer-shell, the KDE case where overlays could open early.
+    s.enable_portal_with_dialog(true);
+    s.start_daemon();
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    s.wait_for_window("quickscope-e2e-dialog");
+    std::thread::sleep(Duration::from_millis(300));
+    s.keys(&["enter"]);
+    s.wait_overlay(1);
+    s.keys(&["escape"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("cancelled"),
+        "Enter reached the dialog: {stderr}"
+    );
+}
