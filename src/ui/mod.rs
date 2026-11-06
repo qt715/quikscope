@@ -8,6 +8,7 @@ pub mod font_menu;
 pub mod motion;
 pub mod overlay;
 pub mod toolbar;
+pub mod zoom;
 
 use std::borrow::Cow;
 use std::collections::HashMap;

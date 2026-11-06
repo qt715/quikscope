@@ -18,6 +18,7 @@ use super::color_picker::{ColorPicker, PickerEvent};
 use super::edit_buffer::EditBuffer;
 use super::font_menu::{self, FontMenu, FontMenuEvent, next_size};
 use super::motion::{Transition, View};
+use super::zoom;
 use super::{PatchCache, Shot, ViewTransform, hsla, paint_prims, paint_tiles, theme, toolbar};
 use crate::clipboard::Clipboard;
 use crate::config::Config;
@@ -199,6 +200,8 @@ pub struct Editor {
     auto_fit: bool,
     /// Window canvas size and document canvas the current fit was for.
     fitted_for: (Size<Pixels>, IRect),
+    /// Ctrl+scroll accumulated into zoom steps.
+    wheel: zoom::Wheel,
     canvas: Bounds<Pixels>,
     drag: Drag,
     draft: Option<Shape>,
@@ -275,6 +278,7 @@ impl Editor {
             transition: None,
             auto_fit: true,
             fitted_for: Default::default(),
+            wheel: zoom::Wheel::default(),
             canvas: Bounds::default(),
             drag: Drag::None,
             draft: None,
@@ -336,8 +340,8 @@ impl Editor {
         });
     }
 
-    /// The view that fits `area` (image pixels) into the window, never
-    /// magnifying past one image pixel per device pixel.
+    /// The view that fits `area` (image pixels) into the window, at the
+    /// largest zoom level that fits and never past actual pixels.
     fn fitted_view(&self, area: IRect, window: &Window) -> Option<View> {
         let (w, h) = (area.w as f32, area.h as f32);
         let cw = f32::from(self.canvas.size.width) - 2.0 * MARGIN;
@@ -345,8 +349,9 @@ impl Editor {
         if cw <= 0.0 || ch <= 0.0 || w <= 0.0 || h <= 0.0 {
             return None;
         }
-        let native = 1.0 / window.scale_factor();
-        let zoom = (cw / w).min(ch / h).min(native).clamp(MIN_ZOOM, MAX_ZOOM);
+        let sf = window.scale_factor();
+        let device = ((cw / w).min(ch / h) * sf).min(1.0);
+        let zoom = (zoom::snap_down(device) / sf).clamp(MIN_ZOOM, MAX_ZOOM);
         Some(View {
             zoom,
             pan: point(
@@ -371,6 +376,22 @@ impl Editor {
     pub fn actual_size(&mut self, window: &Window) {
         let center = self.canvas.center();
         self.zoom_around(1.0 / window.scale_factor(), center, STEP_ZOOM);
+    }
+
+    /// Moves `steps` zoom levels (negative: out) from where the view is
+    /// heading, so quick repeats chain, around `anchor`.
+    fn zoom_steps(
+        &mut self,
+        steps: i32,
+        anchor: Point<Pixels>,
+        duration: Duration,
+        window: &Window,
+    ) {
+        let sf = window.scale_factor();
+        let target = zoom::step_by(self.view.zoom * sf, steps) / sf;
+        if (target - self.view.zoom).abs() > f32::EPSILON {
+            self.zoom_around(target, anchor, duration);
+        }
     }
 
     /// Zooms to `zoom`, keeping the image point under `anchor` (window
@@ -745,11 +766,11 @@ impl Editor {
                     cx.notify();
                 }
                 ("=", _) | ("+", _) => {
-                    self.zoom_around(self.view.zoom * 1.25, self.canvas.center(), STEP_ZOOM);
+                    self.zoom_steps(1, self.canvas.center(), STEP_ZOOM, window);
                     cx.notify();
                 }
                 ("-", _) => {
-                    self.zoom_around(self.view.zoom / 1.25, self.canvas.center(), STEP_ZOOM);
+                    self.zoom_steps(-1, self.canvas.center(), STEP_ZOOM, window);
                     cx.notify();
                 }
                 _ => return,
@@ -1018,13 +1039,16 @@ impl Editor {
         cx.notify();
     }
 
-    fn scroll(&mut self, ev: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn scroll(&mut self, ev: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
         let delta = ev.delta.pixel_delta(px(40.));
         if ev.modifiers.control {
-            let factor = (1.0 + f32::from(delta.y) / 400.0).clamp(0.5, 2.0);
-            // Relative to the target, so a burst of wheel steps accumulates
-            // instead of restarting from wherever the transition is.
-            self.zoom_around(self.view.zoom * factor, ev.position, WHEEL_ZOOM);
+            // One zoom level per wheel notch; touchpad pixels accumulate.
+            // Steps chain from the target, so a quick burst of notches keeps
+            // easing instead of restarting from wherever the transition is.
+            let steps = self.wheel.feed(f32::from(delta.y));
+            if steps != 0 {
+                self.zoom_steps(steps, ev.position, WHEEL_ZOOM, window);
+            }
         } else {
             let delta = if ev.modifiers.shift {
                 point(delta.y, px(0.))
@@ -1497,7 +1521,8 @@ impl EntityInputHandler for Editor {
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = cx.entity();
-        let zoom_label = format!("{:.0}%", self.view.zoom * 100.0);
+        // Device pixels per image pixel: 100% is actual pixels on any scale.
+        let zoom_label = format!("{:.0}%", self.view.zoom * window.scale_factor() * 100.0);
         let viewport = window.viewport_size();
         let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
 

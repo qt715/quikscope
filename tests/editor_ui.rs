@@ -381,12 +381,41 @@ fn field_key_edits_end_ime_composition() {
     assert_eq!((text.as_str(), marked), ("", None));
 }
 
+/// Scale factor of headless test windows; the sizes below assume it.
+fn ui_scale() -> f32 {
+    let mut ui = Ui::new(blank());
+    ui.ime(|_, w, _| w.scale_factor())
+}
+
 /// The editor's zoom on screen once transitions settle, in device pixels per
 /// image pixel (what the zoom label shows).
 fn settled_zoom(ui: &mut Ui) -> f32 {
     std::thread::sleep(std::time::Duration::from_millis(320));
     ui.frame();
     ui.ime(|e, w, _| e.zoom() * w.scale_factor())
+}
+
+#[test]
+fn zoom_moves_in_tenths_below_actual_size_and_quarters_above() {
+    // The headless window is 1000x700 logical at scale 2: 3000x2000 fits at
+    // 61% of actual pixels, which snaps to the 60% level.
+    let doc = Document::new(Arc::new(Image::filled(3000, 2000, [40, 40, 40, 255])), 1.0);
+    assert_eq!(ui_scale(), 2.0);
+    let mut ui = Ui::new(doc);
+    let pct = |z: f32| (z * 100.0).round() as u32;
+    assert_eq!(pct(settled_zoom(&mut ui)), 60);
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        ui.ctrl("=", false);
+        seen.push(pct(settled_zoom(&mut ui)));
+    }
+    assert_eq!(seen, [70, 80, 90, 100, 125]);
+    ui.ctrl("-", false);
+    ui.ctrl("-", false);
+    assert_eq!(pct(settled_zoom(&mut ui)), 90);
+    // Fit snaps back down to a level.
+    ui.ctrl("0", false);
+    assert_eq!(pct(settled_zoom(&mut ui)), 60);
 }
 
 #[test]
@@ -410,8 +439,8 @@ fn drawing_past_the_edge_refits_the_view_to_the_contents() {
         })
     });
     ui.frame();
-    // 2800+ px of content now fits at a smaller zoom, all of it on screen.
-    assert!(settled_zoom(&mut ui) < 0.75);
+    // 2800+ px of content now fits at 60%, and all of it is on screen.
+    assert_eq!((settled_zoom(&mut ui) * 100.0).round() as u32, 60);
     let left = ui.screen(Pt::new(-1205.0, 100.0));
     let right = ui.screen(Pt::new(1600.0, 1000.0));
     assert!(left.x > px(0.) && right.x < px(1000.), "{left:?} {right:?}");
