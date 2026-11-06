@@ -1602,6 +1602,10 @@ impl Render for Editor {
                         } else {
                             theme::panel_border()
                         })
+                        // Long messages (install hints) wrap inside the
+                        // window instead of running off both edges.
+                        .max_w(px(560.))
+                        .mx_4()
                         .text_sm()
                         .text_color(theme::text())
                         .child(t.message.clone()),
