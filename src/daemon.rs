@@ -85,6 +85,8 @@ pub fn bind(socket: &Path) -> Result<UnixListener> {
 pub fn run(socket: PathBuf) -> Result<()> {
     let started = Instant::now();
     let config = Arc::new(Config::load()?);
+    // Index system fonts off the main thread before the font menu needs them.
+    crate::fonts::warm();
     let listener = bind(&socket)?;
     let (tx, rx) = mpsc::unbounded::<Msg>();
     spawn_listener(listener, tx.clone());

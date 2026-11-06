@@ -37,6 +37,24 @@ pub struct EditorConfig {
     pub stroke: u8,
     /// Close the editor after a successful Ctrl+S.
     pub close_on_save: bool,
+    /// Default font for new text: any installed family, or the bundled "Inter".
+    pub font_family: String,
+    /// 100 (thin) … 900 (black).
+    pub font_weight: u16,
+    /// Logical pixels.
+    pub font_size: f32,
+    pub font_italic: bool,
+}
+
+impl EditorConfig {
+    pub fn font(&self) -> crate::fonts::FontSpec {
+        crate::fonts::FontSpec {
+            family: self.font_family.as_str().into(),
+            weight: self.font_weight,
+            italic: self.font_italic,
+            size: self.font_size,
+        }
+    }
 }
 
 impl Default for Config {
@@ -60,6 +78,10 @@ impl Default for EditorConfig {
             color: "#e03131".into(),
             stroke: 1,
             close_on_save: false,
+            font_family: crate::fonts::DEFAULT_FAMILY.into(),
+            font_weight: crate::fonts::DEFAULT_WEIGHT,
+            font_size: crate::fonts::DEFAULT_SIZE,
+            font_italic: false,
         }
     }
 }
@@ -80,6 +102,18 @@ impl Config {
         let e = &config.editor;
         crate::color::parse_hex(&e.color)
             .with_context(|| format!("editor.color {:?} is not #rrggbb or #rrggbbaa", e.color))?;
+        anyhow::ensure!(
+            (1..=1000).contains(&e.font_weight),
+            "editor.font_weight {} is outside 1–1000",
+            e.font_weight
+        );
+        anyhow::ensure!(
+            (crate::fonts::MIN_SIZE..=crate::fonts::MAX_SIZE).contains(&e.font_size),
+            "editor.font_size {} is outside {}–{}",
+            e.font_size,
+            crate::fonts::MIN_SIZE,
+            crate::fonts::MAX_SIZE
+        );
         Ok(config)
     }
 
@@ -319,6 +353,25 @@ mod tests {
         std::fs::write(&path, "bogus_key = 1\n").unwrap();
         assert!(persist_bool(&path, "notify", true).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "bogus_key = 1\n");
+    }
+
+    #[test]
+    fn editor_font_defaults_and_validation() {
+        let c = Config::parse(
+            "[editor]\nfont_family = \"Berkeley Mono\"\nfont_weight = 300\nfont_italic = true\nfont_size = 18\ncolor = \"#11223380\"\n",
+        )
+        .unwrap();
+        let f = c.editor.font();
+        assert_eq!(
+            (&*f.family, f.weight, f.italic, f.size),
+            ("Berkeley Mono", 300, true, 18.0)
+        );
+        assert_eq!(
+            Config::default().editor.font(),
+            crate::fonts::FontSpec::default()
+        );
+        assert!(Config::parse("[editor]\nfont_weight = 0").is_err());
+        assert!(Config::parse("[editor]\nfont_size = 2000").is_err());
     }
 
     #[test]

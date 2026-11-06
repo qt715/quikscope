@@ -13,11 +13,13 @@ use gpui::{
 };
 
 use super::color_picker::{ColorPicker, PickerEvent};
+use super::font_menu::{self, FontMenu, FontMenuEvent, next_size};
 use super::motion::{Transition, View};
 use super::{PatchCache, Shot, ViewTransform, hsla, paint_prims, paint_tiles, theme, toolbar};
 use crate::clipboard::Clipboard;
 use crate::config::Config;
 use crate::document::{Document, PALETTE, Rgba, Shape, ShapeId, ShapeKind, Style};
+use crate::fonts::FontSpec;
 use crate::geom::{Pt, RectF};
 use crate::raster::Compression;
 
@@ -161,6 +163,17 @@ pub struct TextEdit {
     /// Caret position in chars.
     pub cursor: usize,
     pub style: Style,
+    pub font: FontSpec,
+}
+
+impl TextEdit {
+    pub fn kind(&self) -> ShapeKind {
+        ShapeKind::Text {
+            origin: self.origin,
+            text: self.text.clone(),
+            font: self.font.clone(),
+        }
+    }
 }
 
 struct Toast {
@@ -196,6 +209,9 @@ pub struct Editor {
     saved: Option<(PathBuf, u64)>,
     /// Set until the first frame is painted, for latency logging.
     opened: Option<Instant>,
+    /// Font for new text; follows the last font chosen.
+    pub font: FontSpec,
+    font_menu: Entity<FontMenu>,
     color_picker: Entity<ColorPicker>,
     /// Window x of the toolbar button the picker hangs from, when open.
     picker_at: Option<Pixels>,
@@ -224,15 +240,22 @@ impl Editor {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         cx.observe(&doc, |_, _, cx| cx.notify()).detach();
-        let style = cx
+        let (style, font) = cx
             .try_global::<EditorServices>()
-            .map(|s| Style {
-                color: crate::color::parse_hex(&s.config.editor.color).unwrap_or(PALETTE[0]),
-                size: s.config.editor.stroke.min(2),
-                fill: false,
+            .map(|s| {
+                let e = &s.config.editor;
+                let style = Style {
+                    color: crate::color::parse_hex(&e.color).unwrap_or(PALETTE[0]),
+                    size: e.stroke.min(2),
+                    fill: false,
+                };
+                (style, e.font())
             })
             .unwrap_or_default();
+        let font_menu = cx.new(|cx| FontMenu::new(font.clone(), window, cx));
         let color_picker = cx.new(|cx| ColorPicker::new(style.color, window, cx));
+        cx.subscribe_in(&font_menu, window, Self::on_font_menu)
+            .detach();
         cx.subscribe_in(&color_picker, window, Self::on_picker)
             .detach();
         Editor {
@@ -260,6 +283,8 @@ impl Editor {
             toast_generation: 0,
             saved: None,
             opened: Some(Instant::now()),
+            font,
+            font_menu,
             color_picker,
             picker_at: None,
             color_session: None,
@@ -426,6 +451,78 @@ impl Editor {
         cx.notify();
     }
 
+    /// The font and image-space bounds of the text being edited or the
+    /// selected text shape — what the font menu applies to.
+    pub fn font_target(&self, cx: &App) -> Option<(FontSpec, RectF)> {
+        if let Some(t) = &self.text {
+            let doc = self.doc.read(cx);
+            let shape = Shape::new(0, t.kind(), t.style, doc.scale);
+            return Some((t.font.clone(), shape.bounds()));
+        }
+        let s = self.doc.read(cx).shape(self.selected?)?;
+        match &s.kind {
+            ShapeKind::Text { font, .. } => Some((font.clone(), s.bounds())),
+            _ => None,
+        }
+    }
+
+    /// Sets the font for new text and for the edited or selected text.
+    pub fn set_font(&mut self, font: FontSpec, cx: &mut Context<Self>) {
+        self.font = font.clone();
+        if let Some(t) = &mut self.text {
+            t.font = font;
+        } else if let Some(id) = self.selected {
+            self.doc.update(cx, |d, _| {
+                let Some(s) = d.shape(id).cloned() else {
+                    return;
+                };
+                if let ShapeKind::Text {
+                    origin,
+                    text,
+                    font: old,
+                } = &s.kind
+                    && *old != font
+                {
+                    let kind = ShapeKind::Text {
+                        origin: *origin,
+                        text: text.clone(),
+                        font,
+                    };
+                    d.replace(Shape::new(id, kind, s.style, s.scale));
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// Changes the target's font with `f` (keyboard shortcuts). Returns
+    /// false when there is no text to apply it to.
+    fn update_font(
+        &mut self,
+        f: impl FnOnce(&FontSpec) -> FontSpec,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((font, _)) = self.font_target(cx) else {
+            return false;
+        };
+        self.set_font(f(&font), cx);
+        true
+    }
+
+    fn on_font_menu(
+        &mut self,
+        _: &Entity<FontMenu>,
+        ev: &FontMenuEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match ev {
+            FontMenuEvent::Changed(font) => self.set_font(font.clone(), cx),
+            // Back to the canvas so typing continues into the text.
+            FontMenuEvent::Done => window.focus(&self.focus, cx),
+        }
+    }
+
     pub fn set_color(&mut self, color: Rgba, cx: &mut Context<Self>) {
         self.set_style(
             Style {
@@ -491,18 +588,21 @@ impl Editor {
 
     fn begin_text(&mut self, origin: Pt, existing: Option<ShapeId>, cx: &mut Context<Self>) {
         self.commit_text(cx);
-        let (text, style, origin) = existing
+        let (text, style, origin, font) = existing
             .and_then(|id| {
                 let doc = self.doc.read(cx);
                 let s = doc.shape(id)?;
                 match &s.kind {
-                    ShapeKind::Text { origin, text } => Some((text.clone(), s.style, *origin)),
+                    ShapeKind::Text { origin, text, font } => {
+                        Some((text.clone(), s.style, *origin, font.clone()))
+                    }
                     _ => None,
                 }
             })
-            .unwrap_or((String::new(), self.style, origin));
+            .unwrap_or((String::new(), self.style, origin, self.font.clone()));
         if existing.is_some() {
             self.style = style;
+            self.font = font.clone();
         }
         self.text = Some(TextEdit {
             id: existing,
@@ -510,6 +610,7 @@ impl Editor {
             origin,
             text,
             style,
+            font,
         });
         self.selected = None;
         cx.notify();
@@ -521,10 +622,7 @@ impl Editor {
             return;
         };
         self.doc.update(cx, |d, _| {
-            let kind = ShapeKind::Text {
-                origin: edit.origin,
-                text: edit.text.clone(),
-            };
+            let kind = edit.kind();
             match edit.id {
                 Some(id) => {
                     let shape = Shape::new(id, kind, edit.style, d.scale);
@@ -624,6 +722,20 @@ impl Editor {
         let key = ks.key.as_str();
         if m.control || m.platform {
             match (key, m.shift) {
+                // Text formatting, for the edited or selected text.
+                ("b", false) if self.update_font(FontSpec::toggle_bold, cx) => {}
+                ("i", false)
+                    if self.update_font(
+                        |f| FontSpec {
+                            italic: !f.italic,
+                            ..f.clone()
+                        },
+                        cx,
+                    ) => {}
+                ("." | ">", true)
+                    if self.update_font(|f| f.with_size(next_size(f.size, true)), cx) => {}
+                ("," | "<", true)
+                    if self.update_font(|f| f.with_size(next_size(f.size, false)), cx) => {}
                 ("s", shift) => self.save(shift, window, cx),
                 ("c", _) => self.copy(cx),
                 ("z", false) => self.undo(cx),
@@ -776,8 +888,7 @@ impl Editor {
                     )
                 });
                 // Clicks place the middle of the first line at the pointer.
-                let size = crate::document::TEXT_SIZES[self.style.size.min(2) as usize]
-                    * self.doc.read(cx).scale;
+                let size = self.font.size * self.doc.read(cx).scale;
                 let origin = p.offset(0.0, -size * crate::text::LINE_HEIGHT / 2.0);
                 self.begin_text(origin, text_hit, cx);
             }
@@ -1104,15 +1215,7 @@ impl Editor {
             }
 
             if let Some(t) = &self.text {
-                let shape = Shape::new(
-                    0,
-                    ShapeKind::Text {
-                        origin: t.origin,
-                        text: t.text.clone(),
-                    },
-                    t.style,
-                    doc.scale,
-                );
+                let shape = Shape::new(0, t.kind(), t.style, doc.scale);
                 paint_prims(
                     window,
                     shape.prims(&doc.base),
@@ -1245,7 +1348,8 @@ impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = cx.entity();
         let zoom_label = format!("{:.0}%", self.view.zoom * 100.0);
-        let vw = f32::from(window.viewport_size().width);
+        let viewport = window.viewport_size();
+        let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
 
         // Popovers mirror the current values (palette clicks, selection changes).
         let color = self.style.color;
@@ -1261,6 +1365,38 @@ impl Render for Editor {
                 .child(self.color_picker.clone())
         });
 
+        let font_menu = match self.font_target(cx) {
+            Some((font, rect)) => {
+                let r = self.transform().rect_to_screen(rect);
+                let (mw, mh) = (font_menu::MENU_WIDTH, font_menu::MENU_HEIGHT);
+                let x = f32::from(r.left()).clamp(8.0, (vw - mw - 8.0).max(8.0));
+                // Above the text when there is room under the toolbar, else below.
+                let above = f32::from(r.top()) - mh - 10.0;
+                let y = if above >= TOOLBAR_SPACE {
+                    above
+                } else {
+                    f32::from(r.bottom()) + 10.0
+                }
+                .clamp(TOOLBAR_SPACE, (vh - mh - 8.0).max(TOOLBAR_SPACE));
+                let drop_up = y + mh + font_menu::DROPDOWN_HEIGHT > vh
+                    && y - font_menu::DROPDOWN_HEIGHT > 0.0;
+                self.font_menu.update(cx, |m, cx| {
+                    m.set_spec(&font, window, cx);
+                    m.set_drop_up(drop_up, cx);
+                });
+                Some(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .child(self.font_menu.clone()),
+                )
+            }
+            None => {
+                self.font_menu.update(cx, |m, cx| m.close(cx));
+                None
+            }
+        };
         let toast = self.toast.as_ref().map(|t| {
             div()
                 .absolute()
@@ -1340,6 +1476,7 @@ impl Render for Editor {
                 ),
             )
             .children(toast)
+            .children(font_menu)
             .children(picker)
     }
 }

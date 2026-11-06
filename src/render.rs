@@ -103,7 +103,10 @@ pub fn shape_prims(shape: &Shape, base: &Image) -> Vec<Prim> {
                 });
             }
             let label = number.to_string();
-            let layout = text::layout(&label, radius * 1.1);
+            let layout = text::layout(
+                &label,
+                &crate::fonts::FontSpec::default().with_size(radius * 1.1),
+            );
             let origin = Pt::new(
                 center.x - layout.width / 2.0,
                 center.y - layout.line_height / 2.0,

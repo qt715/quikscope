@@ -8,6 +8,7 @@ pub mod config;
 pub mod daemon;
 pub mod document;
 pub mod export;
+pub mod fonts;
 pub mod geom;
 pub mod ipc;
 pub mod notify;

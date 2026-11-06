@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use crate::fonts::FontSpec;
 use crate::geom::{Pt, RectF, dist_to_segment};
 use crate::raster::Image;
 use crate::render::{self, Prim};
@@ -60,8 +61,6 @@ pub const PALETTE: [Rgba; 8] = [
 
 /// Stroke widths for size 0/1/2, in logical pixels (scaled by the image scale).
 pub const STROKE_WIDTHS: [f32; 3] = [2.0, 4.0, 8.0];
-/// Text sizes for size 0/1/2, in logical pixels.
-pub const TEXT_SIZES: [f32; 3] = [18.0, 28.0, 44.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
@@ -109,6 +108,8 @@ pub enum ShapeKind {
     Text {
         origin: Pt,
         text: String,
+        /// Family, weight, italic and size (logical pixels).
+        font: FontSpec,
     },
     /// Numbered badge for step-by-step instructions.
     Step {
@@ -167,8 +168,12 @@ impl Shape {
         }
     }
 
+    /// Text size in image pixels.
     pub fn text_size(&self) -> f32 {
-        TEXT_SIZES[self.style.size.min(2) as usize] * self.scale
+        match &self.kind {
+            ShapeKind::Text { font, .. } => font.size * self.scale,
+            _ => 0.0,
+        }
     }
 
     pub fn step_radius(&self) -> f32 {
@@ -177,7 +182,13 @@ impl Shape {
 
     pub fn text_layout(&self) -> Option<TextLayout> {
         match &self.kind {
-            ShapeKind::Text { text, .. } => Some(text::layout(text, self.text_size())),
+            ShapeKind::Text { text, font, .. } => Some(text::layout(
+                text,
+                &FontSpec {
+                    size: font.size * self.scale,
+                    ..font.clone()
+                },
+            )),
             _ => None,
         }
     }
@@ -296,9 +307,10 @@ impl Shape {
             ShapeKind::Rect { a, b } => ShapeKind::Rect { a: mv(a), b: mv(b) },
             ShapeKind::Ellipse { a, b } => ShapeKind::Ellipse { a: mv(a), b: mv(b) },
             ShapeKind::Pixelate { a, b } => ShapeKind::Pixelate { a: mv(a), b: mv(b) },
-            ShapeKind::Text { origin, text } => ShapeKind::Text {
+            ShapeKind::Text { origin, text, font } => ShapeKind::Text {
                 origin: mv(origin),
                 text: text.clone(),
+                font: font.clone(),
             },
             ShapeKind::Step { center, number } => ShapeKind::Step {
                 center: mv(center),
@@ -731,6 +743,7 @@ mod tests {
             ShapeKind::Text {
                 origin: Pt::default(),
                 text: " \n ".into(),
+                font: FontSpec::default(),
             },
             s,
         );

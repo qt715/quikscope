@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use moment::document::{Document, PALETTE, ShapeKind, Style};
+use moment::fonts::FontSpec;
 use moment::geom::{Pt, RectF};
 use moment::raster::Image;
 
@@ -97,6 +98,32 @@ pub fn populate(doc: &mut Document) {
             ShapeKind::Text {
                 origin: p(220.0, 225.0),
                 text: "Hello, moment!\nSecond line".into(),
+                font: FontSpec::default(),
+            },
+            style(7, 1, false),
+        ),
+        (
+            ShapeKind::Text {
+                origin: p(20.0, 268.0),
+                text: "Light italic".into(),
+                font: FontSpec {
+                    weight: 300,
+                    italic: true,
+                    size: 22.0,
+                    ..FontSpec::default()
+                },
+            },
+            style(0, 1, false),
+        ),
+        (
+            ShapeKind::Text {
+                origin: p(250.0, 108.0),
+                text: "BLACK 900".into(),
+                font: FontSpec {
+                    weight: 900,
+                    size: 16.0,
+                    ..FontSpec::default()
+                },
             },
             style(7, 1, false),
         ),

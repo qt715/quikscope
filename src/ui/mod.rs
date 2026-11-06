@@ -3,6 +3,7 @@
 pub mod color_picker;
 pub mod editor;
 pub mod field;
+pub mod font_menu;
 pub mod motion;
 pub mod overlay;
 pub mod toolbar;
@@ -94,6 +95,9 @@ impl AssetSource for Assets {
             "copy",
             "paint-bucket",
             "palette",
+            "italic",
+            "chevron-down",
+            "plus",
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -109,7 +113,7 @@ pub const UI_FONT: &str = "Inter";
 pub fn init(cx: &mut App) {
     if let Err(e) = cx
         .text_system()
-        .add_fonts(vec![Cow::Borrowed(crate::text::FONT_DATA)])
+        .add_fonts(vec![Cow::Borrowed(crate::fonts::INTER)])
     {
         log::warn!("could not register the UI font: {e:#}");
     }
