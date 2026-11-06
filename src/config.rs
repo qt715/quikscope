@@ -31,7 +31,7 @@ pub struct Config {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EditorConfig {
-    /// Initial annotation color as `#rrggbb`.
+    /// Initial annotation color as `#rrggbb` or `#rrggbbaa`.
     pub color: String,
     /// Initial stroke size: 0 = thin, 1 = medium, 2 = thick.
     pub stroke: u8,
@@ -77,8 +77,9 @@ impl Config {
 
     pub fn parse(text: &str) -> Result<Config> {
         let config: Config = toml::from_str(text)?;
-        parse_hex_color(&config.editor.color)
-            .with_context(|| format!("editor.color {:?} is not #rrggbb", config.editor.color))?;
+        let e = &config.editor;
+        crate::color::parse_hex(&e.color)
+            .with_context(|| format!("editor.color {:?} is not #rrggbb or #rrggbbaa", e.color))?;
         Ok(config)
     }
 
@@ -129,13 +130,6 @@ pub fn persist_bool(path: &Path, key: &str, value: bool) -> Result<()> {
     std::fs::write(&tmp, out)?;
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
-}
-
-pub fn parse_hex_color(s: &str) -> Option<u32> {
-    let hex = s.strip_prefix('#')?;
-    (hex.len() == 6)
-        .then(|| u32::from_str_radix(hex, 16).ok())
-        .flatten()
 }
 
 fn home() -> PathBuf {
@@ -325,13 +319,6 @@ mod tests {
         std::fs::write(&path, "bogus_key = 1\n").unwrap();
         assert!(persist_bool(&path, "notify", true).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "bogus_key = 1\n");
-    }
-
-    #[test]
-    fn hex_colors() {
-        assert_eq!(parse_hex_color("#e03131"), Some(0xe03131));
-        assert_eq!(parse_hex_color("e03131"), None);
-        assert_eq!(parse_hex_color("#e0313"), None);
     }
 
     #[test]

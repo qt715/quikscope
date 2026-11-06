@@ -3,6 +3,7 @@
 pub mod cache;
 pub mod capture;
 pub mod clipboard;
+pub mod color;
 pub mod config;
 pub mod daemon;
 pub mod document;

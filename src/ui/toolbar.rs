@@ -12,7 +12,8 @@ use super::{hsla, theme};
 use crate::document::PALETTE;
 
 /// Every icon the toolbar references (checked against the asset table in tests).
-pub const ICONS: [&str; 17] = [
+pub const ICONS: [&str; 18] = [
+    "palette",
     "mouse-pointer-2",
     "hand",
     "square",
@@ -114,7 +115,7 @@ pub fn toolbar(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
         })
         .collect();
 
-    let swatches: Vec<AnyElement> = PALETTE
+    let mut swatches: Vec<AnyElement> = PALETTE
         .iter()
         .enumerate()
         .map(|(i, &color)| {
@@ -139,6 +140,38 @@ pub fn toolbar(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
                 .into_any_element()
         })
         .collect();
+    // Any other color (picked in the color picker) shows here; clicking opens
+    // the picker.
+    let custom = !PALETTE.contains(&style.color);
+    swatches.push(
+        div()
+            .id("color-custom")
+            .size(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .tooltip(|_, cx| cx.new(|_| Tip("Custom color")).into())
+            .when(custom || editor.picker_open(), |d| {
+                d.border_2().border_color(theme::accent())
+            })
+            .hover(|d| d.bg(theme::hover()))
+            .on_click(
+                cx.listener(|e, ev: &gpui::ClickEvent, _, cx| e.toggle_picker(ev.position().x, cx)),
+            )
+            .child(if custom {
+                div()
+                    .size(px(16.))
+                    .rounded_full()
+                    .bg(hsla(style.color))
+                    .border_1()
+                    .border_color(theme::panel_border())
+                    .into_any_element()
+            } else {
+                icon("palette", theme::text()).into_any_element()
+            })
+            .into_any_element(),
+    );
 
     let sizes: Vec<AnyElement> = (0u8..3)
         .map(|size| {

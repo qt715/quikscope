@@ -12,6 +12,7 @@ use gpui::{
     canvas, div, fill, outline, point, px,
 };
 
+use super::color_picker::{ColorPicker, PickerEvent};
 use super::motion::{Transition, View};
 use super::{PatchCache, Shot, ViewTransform, hsla, paint_prims, paint_tiles, theme, toolbar};
 use crate::clipboard::Clipboard;
@@ -195,6 +196,12 @@ pub struct Editor {
     saved: Option<(PathBuf, u64)>,
     /// Set until the first frame is painted, for latency logging.
     opened: Option<Instant>,
+    color_picker: Entity<ColorPicker>,
+    /// Window x of the toolbar button the picker hangs from, when open.
+    picker_at: Option<Pixels>,
+    /// Shape whose color a picker drag is changing: the drag's first change
+    /// records undo, the rest replace it in place.
+    color_session: Option<ShapeId>,
 }
 
 const MIN_ZOOM: f32 = 0.02;
@@ -220,13 +227,14 @@ impl Editor {
         let style = cx
             .try_global::<EditorServices>()
             .map(|s| Style {
-                color: crate::config::parse_hex_color(&s.config.editor.color)
-                    .map(Rgba::rgb)
-                    .unwrap_or(PALETTE[0]),
+                color: crate::color::parse_hex(&s.config.editor.color).unwrap_or(PALETTE[0]),
                 size: s.config.editor.stroke.min(2),
                 fill: false,
             })
             .unwrap_or_default();
+        let color_picker = cx.new(|cx| ColorPicker::new(style.color, window, cx));
+        cx.subscribe_in(&color_picker, window, Self::on_picker)
+            .detach();
         Editor {
             shot,
             doc,
@@ -252,6 +260,9 @@ impl Editor {
             toast_generation: 0,
             saved: None,
             opened: Some(Instant::now()),
+            color_picker,
+            picker_at: None,
+            color_session: None,
         }
     }
 
@@ -355,18 +366,63 @@ impl Editor {
 
     /// Applies a style change to the tool and to the selected or edited shape.
     pub fn set_style(&mut self, style: Style, cx: &mut Context<Self>) {
+        self.apply_style(style, false, cx);
+    }
+
+    /// Like [`Editor::set_style`]. While `live` (a picker drag), only the
+    /// first change records undo; later ones, and the final non-live one,
+    /// update that step in place.
+    fn apply_style(&mut self, style: Style, live: bool, cx: &mut Context<Self>) {
         self.style = style;
         if let Some(t) = &mut self.text {
             t.style = style;
         } else if let Some(id) = self.selected {
+            let in_session = self.color_session == Some(id);
             self.doc.update(cx, |d, _| {
                 if let Some(s) = d.shape(id).cloned()
                     && s.style != style
                 {
-                    d.replace(s.with_style(style));
+                    if in_session {
+                        d.replace_live(s.with_style(style));
+                    } else {
+                        d.replace(s.with_style(style));
+                    }
                 }
             });
+            self.color_session = live.then_some(id);
         }
+        cx.notify();
+    }
+
+    fn on_picker(
+        &mut self,
+        _: &Entity<ColorPicker>,
+        ev: &PickerEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let PickerEvent::Changed { color, live } = *ev;
+        self.apply_style(
+            Style {
+                color,
+                ..self.style
+            },
+            live,
+            cx,
+        );
+    }
+
+    pub fn picker_open(&self) -> bool {
+        self.picker_at.is_some()
+    }
+
+    /// Opens the color picker under the toolbar button at window x `at`, or
+    /// closes it.
+    pub fn toggle_picker(&mut self, at: Pixels, cx: &mut Context<Self>) {
+        self.picker_at = match self.picker_at {
+            Some(_) => None,
+            None => Some(at),
+        };
         cx.notify();
     }
 
@@ -553,6 +609,12 @@ impl Editor {
     // ── input ───────────────────────────────────────────────────────────
 
     fn key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if ev.keystroke.key == "escape" && self.picker_at.is_some() {
+            self.picker_at = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.text_key(ev, cx) {
             cx.stop_propagation();
             return;
@@ -654,6 +716,8 @@ impl Editor {
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        // A click on the canvas dismisses the color picker.
+        self.picker_at = None;
         if ev.button == MouseButton::Middle || (self.space_held && ev.button == MouseButton::Left) {
             self.start_pan(ev.position);
             cx.notify();
@@ -1178,9 +1242,25 @@ impl Focusable for Editor {
 }
 
 impl Render for Editor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = cx.entity();
         let zoom_label = format!("{:.0}%", self.view.zoom * 100.0);
+        let vw = f32::from(window.viewport_size().width);
+
+        // Popovers mirror the current values (palette clicks, selection changes).
+        let color = self.style.color;
+        self.color_picker
+            .update(cx, |p, cx| p.set_color(color, window, cx));
+        let picker = self.picker_at.map(|at| {
+            let w = super::color_picker::PANEL_WIDTH;
+            let x = (f32::from(at) - w / 2.0).clamp(8.0, (vw - w - 8.0).max(8.0));
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(TOOLBAR_SPACE - 4.0))
+                .child(self.color_picker.clone())
+        });
+
         let toast = self.toast.as_ref().map(|t| {
             div()
                 .absolute()
@@ -1260,6 +1340,7 @@ impl Render for Editor {
                 ),
             )
             .children(toast)
+            .children(picker)
     }
 }
 

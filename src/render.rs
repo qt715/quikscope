@@ -48,7 +48,8 @@ pub fn shape_prims(shape: &Shape, base: &Image) -> Vec<Prim> {
         ShapeKind::Pen { points } => stroke(smooth_path(points), color, LineCap::Round, &mut out),
         ShapeKind::Highlighter { points } => stroke(
             smooth_path(points),
-            color.with_alpha(HIGHLIGHT_ALPHA),
+            // The chosen alpha scales the highlighter's own translucency.
+            color.with_alpha((color.a as u32 * HIGHLIGHT_ALPHA as u32 / 255) as u8),
             LineCap::Round,
             &mut out,
         ),

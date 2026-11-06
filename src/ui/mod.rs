@@ -1,6 +1,8 @@
 //! GPUI front end: the region selection overlay and the annotation editor.
 
+pub mod color_picker;
 pub mod editor;
+pub mod field;
 pub mod motion;
 pub mod overlay;
 pub mod toolbar;
@@ -91,6 +93,7 @@ impl AssetSource for Assets {
             "save",
             "copy",
             "paint-bucket",
+            "palette",
         );
         Ok(bytes.map(Cow::Borrowed))
     }
