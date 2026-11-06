@@ -1,6 +1,10 @@
 //! Editor interaction through GPUI's real input dispatch (offscreen window,
 //! headless WGPU renderer): text formatting shortcuts and the color picker.
 
+// GPUI 0.3.10 has no Windows offscreen renderer; native interaction belongs
+// to the interactive VM smoke suite rather than this WGPU-specific harness.
+#![cfg(not(windows))]
+
 use std::sync::Arc;
 
 use gpui::EntityInputHandler as _;

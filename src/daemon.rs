@@ -4,11 +4,15 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use uds_windows::{UnixListener, UnixStream};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use futures::StreamExt as _;
@@ -75,11 +79,14 @@ pub fn bind(socket: &Path) -> Result<UnixListener> {
     }
     let listener =
         UnixListener::bind(socket).with_context(|| format!("binding {}", socket.display()))?;
+    #[cfg(unix)]
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
 }
 
 pub fn run(socket: PathBuf) -> Result<()> {
+    #[cfg(windows)]
+    platform::windows::initialize()?;
     let started = Instant::now();
     let config = Arc::new(Config::load()?);
     // Index system fonts off the main thread before the font menu needs them.
@@ -161,9 +168,13 @@ pub fn run(socket: PathBuf) -> Result<()> {
                         }
                         Msg::Desktop(Event::Request(req)) => {
                             cx.spawn(async move |cx| {
+                                let quit = req == Request::Quit;
                                 log::debug!("desktop request: {req}");
                                 if let Response::Error(e) = handle(req, cx).await {
                                     notify_error(&e, cx);
+                                }
+                                if quit {
+                                    cx.update(|cx| cx.quit());
                                 }
                             })
                             .detach();
@@ -424,6 +435,8 @@ async fn select_region(
                 cx.open_window(
                     platform.overlay_options(&name, logical, cx),
                     move |window, cx| {
+                        #[cfg(windows)]
+                        platform::windows::focus_overlay(window, logical);
                         cx.new(|cx| Overlay::new(selection, logical, width, tiles, window, cx))
                     },
                 )
@@ -902,8 +915,11 @@ mod tests {
         let live = bind(&path).expect("stale socket is replaced");
         let err = bind(&path).unwrap_err();
         assert!(err.to_string().contains("already listening"), "{err}");
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         drop(live);
     }
 

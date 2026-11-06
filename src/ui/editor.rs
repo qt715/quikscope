@@ -1544,9 +1544,15 @@ fn square(start: Pt, p: Pt) -> Pt {
 
 /// `~/…` for paths under `$HOME`, for toasts.
 pub fn tilde(path: &std::path::Path) -> String {
-    match std::env::var_os("HOME").map(PathBuf::from) {
+    match std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from) {
         Some(home) => match path.strip_prefix(&home) {
-            Ok(rest) => format!("~/{}", rest.display()),
+            Ok(rest) => {
+                #[cfg(windows)]
+                let rest = rest.display().to_string().replace('\\', "/");
+                #[cfg(not(windows))]
+                let rest = rest.display();
+                format!("~/{rest}")
+            }
             Err(_) => path.display().to_string(),
         },
         None => path.display().to_string(),
@@ -1853,7 +1859,9 @@ mod tests {
 
     #[test]
     fn tilde_shortens_home_paths() {
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let home = PathBuf::from(
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap(),
+        );
         assert_eq!(tilde(&home.join("Pictures/a.png")), "~/Pictures/a.png");
         assert_eq!(tilde(std::path::Path::new("/etc/x")), "/etc/x");
     }

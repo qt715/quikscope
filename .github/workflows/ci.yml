@@ -66,6 +66,21 @@ jobs:
           path: /tmp/quickscope-*.png
           if-no-files-found: ignore
 
+  windows:
+    name: Windows build, clippy and non-GPU tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked --release
+      - run: cargo clippy --locked --all-targets -- --deny warnings
+      # GPUI 0.3.10 returns no headless renderer on Windows. The two
+      # offscreen GPU suites are cfg-excluded; lib, CLI, golden and OCR run.
+      - run: cargo test --locked
+
   msrv:
     name: Minimum supported Rust version
     runs-on: ubuntu-24.04

@@ -5,6 +5,10 @@
 //!
 //! Needs a Vulkan or GL implementation (Mesa's lavapipe/llvmpipe in CI).
 
+// GPUI 0.3.10 exposes no Windows offscreen renderer (returns Ok(None)).
+// Native editor rendering is exercised through the interactive VM instead.
+#![cfg(not(windows))]
+
 #[path = "support/scene.rs"]
 mod scene;
 

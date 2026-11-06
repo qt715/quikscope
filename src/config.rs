@@ -27,6 +27,62 @@ pub struct Config {
     pub notification_timeout_ms: i32,
     pub editor: EditorConfig,
     pub ocr: OcrConfig,
+    /// Windows-only global shortcuts. Empty strings disable a binding.
+    pub hotkeys: Hotkeys,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Hotkeys {
+    pub region: String,
+    pub screen: String,
+    pub window: String,
+    pub open_last: String,
+}
+
+impl Default for Hotkeys {
+    fn default() -> Self {
+        Self {
+            region: "PrintScreen".into(),
+            screen: "Ctrl+PrintScreen".into(),
+            window: "Alt+PrintScreen".into(),
+            open_last: "Shift+PrintScreen".into(),
+        }
+    }
+}
+
+/// Win32 modifier flags and virtual-key code, also validated on Linux so a
+/// shared configuration never silently changes meaning between platforms.
+pub fn parse_hotkey(value: &str) -> Result<Option<(u32, u32)>> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<_> = value.split('+').map(str::trim).collect();
+    let (key, modifiers) = parts.split_last().expect("split always has one element");
+    let mut flags = 0;
+    for modifier in modifiers {
+        let flag = match modifier.to_ascii_lowercase().as_str() {
+            "alt" => 1,
+            "ctrl" | "control" => 2,
+            "shift" => 4,
+            "win" => 8,
+            _ => anyhow::bail!("unknown hotkey modifier {modifier:?} in {value:?}"),
+        };
+        anyhow::ensure!(flags & flag == 0, "repeated hotkey modifier in {value:?}");
+        flags |= flag;
+    }
+    let key = key.to_ascii_uppercase();
+    let vk = match key.as_str() {
+        "PRINTSCREEN" => 0x2c,
+        k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => k.as_bytes()[0] as u32,
+        k => match k.strip_prefix('F').and_then(|n| n.parse::<u32>().ok()) {
+            Some(n @ 1..=24) => 0x70 + n - 1,
+            _ => {
+                anyhow::bail!("unsupported hotkey key {key:?}: use PrintScreen, F1–F24, A–Z or 0–9")
+            }
+        },
+    };
+    Ok(Some((flags, vk)))
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -70,7 +126,7 @@ impl EditorConfig {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            save_dir: "~/Pictures/Screenshots".into(),
+            save_dir: default_save_dir(),
             filename: "screenshot_%Y%m%d_%H%M%S.png".into(),
             copy_to_clipboard: true,
             notify: true,
@@ -79,6 +135,7 @@ impl Default for Config {
             notification_timeout_ms: 8000,
             editor: EditorConfig::default(),
             ocr: OcrConfig::default(),
+            hotkeys: Hotkeys::default(),
         }
     }
 }
@@ -134,6 +191,20 @@ impl Config {
                 "ocr.languages: {lang:?} is not a Tesseract model name like \"eng\" or \"chi_sim\""
             );
         }
+        let mut seen = std::collections::HashSet::new();
+        for (name, binding) in [
+            ("region", &config.hotkeys.region),
+            ("screen", &config.hotkeys.screen),
+            ("window", &config.hotkeys.window),
+            ("open_last", &config.hotkeys.open_last),
+        ] {
+            if let Some(key) = parse_hotkey(binding).with_context(|| format!("hotkeys.{name}"))? {
+                anyhow::ensure!(
+                    seen.insert(key),
+                    "hotkeys.{name}: duplicate global shortcut {binding:?}"
+                );
+            }
+        }
         Ok(config)
     }
 
@@ -186,8 +257,22 @@ pub fn persist_bool(path: &Path, key: &str, value: bool) -> Result<()> {
     Ok(())
 }
 
+fn default_save_dir() -> String {
+    #[cfg(windows)]
+    {
+        crate::platform::windows::pictures_dir()
+            .join("Screenshots")
+            .to_string_lossy()
+            .into_owned()
+    }
+    #[cfg(not(windows))]
+    {
+        "~/Pictures/Screenshots".into()
+    }
+}
+
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
 }
@@ -202,6 +287,7 @@ pub fn expand_home(p: &str) -> PathBuf {
     }
 }
 
+#[cfg(not(windows))]
 fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
     std::env::var_os(var)
         .map(PathBuf::from)
@@ -210,11 +296,25 @@ fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
 }
 
 pub fn config_path() -> PathBuf {
+    #[cfg(windows)]
+    return home_env("APPDATA", "AppData/Roaming").join("quickscope/config.toml");
+    #[cfg(not(windows))]
     xdg_dir("XDG_CONFIG_HOME", ".config").join("quickscope/config.toml")
 }
 
 pub fn cache_dir() -> PathBuf {
+    #[cfg(windows)]
+    return home_env("LOCALAPPDATA", "AppData/Local").join("quickscope");
+    #[cfg(not(windows))]
     xdg_dir("XDG_CACHE_HOME", ".cache").join("quickscope")
+}
+
+#[cfg(windows)]
+fn home_env(var: &str, fallback: &str) -> PathBuf {
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home().join(fallback))
 }
 
 /// Uncompressed copy of the latest capture, read by `open-last` after a
@@ -235,17 +335,22 @@ pub fn socket_path() -> PathBuf {
     if let Some(p) = std::env::var_os("QUICKSCOPE_SOCKET") {
         return PathBuf::from(p);
     }
-    // Keyed by display so a nested compositor or X server gets its own
-    // daemon.
-    let display = match (std::env::var("WAYLAND_DISPLAY"), std::env::var("DISPLAY")) {
-        (Ok(w), _) if !w.is_empty() => Path::new(&w)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or(w),
-        (_, Ok(x)) if !x.is_empty() => format!("x11-{}", x.replace([':', '/'], "")),
-        _ => "wayland-0".into(),
-    };
-    runtime_dir().join(format!("quickscope-{display}.sock"))
+    #[cfg(windows)]
+    return cache_dir().join("ipc.sock");
+    #[cfg(not(windows))]
+    {
+        // Keyed by display so a nested compositor or X server gets its own
+        // daemon.
+        let display = match (std::env::var("WAYLAND_DISPLAY"), std::env::var("DISPLAY")) {
+            (Ok(w), _) if !w.is_empty() => Path::new(&w)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(w),
+            (_, Ok(x)) if !x.is_empty() => format!("x11-{}", x.replace([':', '/'], "")),
+            _ => "wayland-0".into(),
+        };
+        runtime_dir().join(format!("quickscope-{display}.sock"))
+    }
 }
 
 /// Local broken-down time via libc, so filenames follow the user's timezone
@@ -292,6 +397,43 @@ pub struct LocalTime {
     pub second: u32,
 }
 
+#[cfg(windows)]
+pub fn local_tm(secs: i64) -> LocalTime {
+    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+    let ticks = secs
+        .saturating_add(11_644_473_600)
+        .saturating_mul(10_000_000) as u64;
+    let file = FILETIME {
+        dwLowDateTime: ticks as u32,
+        dwHighDateTime: (ticks >> 32) as u32,
+    };
+    let mut utc = SYSTEMTIME::default();
+    let mut local = SYSTEMTIME::default();
+    // Null timezone uses Windows' current timezone and daylight-saving rules.
+    if unsafe { FileTimeToSystemTime(&file, &mut utc) }.is_err()
+        || unsafe { SystemTimeToTzSpecificLocalTime(None, &utc, &mut local) }.is_err()
+    {
+        return LocalTime {
+            year: 1970,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+    }
+    LocalTime {
+        year: local.wYear as i32,
+        month: local.wMonth as u32,
+        day: local.wDay as u32,
+        hour: local.wHour as u32,
+        minute: local.wMinute as u32,
+        second: local.wSecond as u32,
+    }
+}
+
+#[cfg(not(windows))]
 pub fn local_tm(secs: i64) -> LocalTime {
     let t: libc::time_t = secs;
     // SAFETY: zeroed `tm` is a valid out-parameter; both pointers outlive the call.
@@ -320,6 +462,17 @@ pub fn local_tm(secs: i64) -> LocalTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkeys_validate_modifiers_keys_and_collisions() {
+        assert_eq!(parse_hotkey("Ctrl+Shift+F24").unwrap(), Some((6, 0x87)));
+        assert_eq!(parse_hotkey("").unwrap(), None);
+        assert!(parse_hotkey("Ctrl+Ctrl+A").is_err());
+        assert!(parse_hotkey("Super+PrintScreen").is_err());
+        assert!(parse_hotkey("F25").is_err());
+        assert!(Config::parse("[hotkeys]\nregion = 'Ctrl+PrintScreen'").is_err());
+        assert!(Config::parse("[hotkeys]\nregion = ''\nscreen = 'Win+S'").is_ok());
+    }
 
     #[test]
     fn defaults_when_file_is_empty() {

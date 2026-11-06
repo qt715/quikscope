@@ -11,9 +11,12 @@
 
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use uds_windows::UnixStream;
 
 use anyhow::{Context as _, Result, bail};
 
@@ -384,6 +387,8 @@ pub fn send_or_spawn(socket: &Path, req: &Request, timeout: Option<Duration>) ->
 }
 
 fn exchange(mut stream: UnixStream, req: &Request, timeout: Option<Duration>) -> Result<Response> {
+    #[cfg(windows)]
+    crate::platform::windows::allow_foreground();
     stream.set_read_timeout(timeout)?;
     writeln!(stream, "{req}")?;
     stream.flush()?;
@@ -399,6 +404,7 @@ fn exchange(mut stream: UnixStream, req: &Request, timeout: Option<Duration>) ->
 
 /// Starts a detached daemon and returns the first successful connection to it.
 fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt as _;
     let exe = std::env::current_exe().context("locating the quickscope executable")?;
     let log = crate::config::cache_dir().join("daemon.log");
@@ -417,11 +423,19 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     };
     // Detach into its own session so closing the launching terminal (or the
     // compositor's exec helper exiting) does not take the daemon down.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no inherited console,
+        // and no console is created (CREATE_NO_WINDOW is ignored when detached).
+        cmd.creation_flags(0x0000_0008 | 0x0000_0200);
     }
     cmd.spawn().context("starting the daemon")?;
 
@@ -567,7 +581,10 @@ mod tests {
     fn send_reports_daemon_hangup() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.sock");
+        #[cfg(unix)]
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        #[cfg(windows)]
+        let listener = uds_windows::UnixListener::bind(&path).unwrap();
         let t = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
             let mut line = String::new();

@@ -6,10 +6,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use gpui::{
-    App, Bounds, DisplayId, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-    point, px, size,
-};
+use gpui::{App, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions};
+#[cfg(not(windows))]
+use gpui::{Bounds, DisplayId, point, px, size};
 
 use crate::capture::Snapshot;
 use crate::clipboard::PendingPng;
@@ -21,6 +20,8 @@ use crate::raster::Image;
 pub mod freedesktop;
 #[cfg(target_os = "linux")]
 pub mod hyprland;
+#[cfg(windows)]
+pub mod windows;
 #[cfg(target_os = "linux")]
 pub mod wlroots;
 #[cfg(target_os = "linux")]
@@ -113,6 +114,8 @@ pub enum Surfaces {
     /// Override-redirect popups, one per X11 monitor.
     #[cfg(target_os = "linux")]
     X11,
+    #[cfg(windows)]
+    Windows,
 }
 
 /// The backends for this session.
@@ -184,13 +187,19 @@ pub fn connect(events: EventSink) -> Platform {
             surfaces: Surfaces::LayerShell,
         }
     }
+    #[cfg(windows)]
+    {
+        windows::connect(events)
+    }
 }
 
 impl Platform {
     /// Window options for the selection overlay covering `logical` (global
     /// logical coordinates) on the output called `name`.
-    pub fn overlay_options(&self, name: &str, logical: IRect, cx: &App) -> WindowOptions {
-        let display_id = display_for(name, logical, cx);
+    pub fn overlay_options(&self, name: &str, logical: IRect, _cx: &App) -> WindowOptions {
+        #[cfg(not(windows))]
+        let display_id = display_for(name, logical, _cx);
+        #[cfg(not(windows))]
         let bounds = Bounds {
             origin: point(px(0.), px(0.)),
             size: size(px(logical.w as f32), px(logical.h as f32)),
@@ -231,6 +240,23 @@ impl Platform {
                     ..Default::default()
                 }
             }
+            #[cfg(windows)]
+            Surfaces::Windows => {
+                let (display_id, bounds) = windows::overlay_geometry(name, logical);
+                WindowOptions {
+                    titlebar: None,
+                    focus: true,
+                    show: false,
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    display_id,
+                    kind: WindowKind::PopUp,
+                    is_movable: false,
+                    is_resizable: false,
+                    is_minimizable: false,
+                    window_background: WindowBackgroundAppearance::Opaque,
+                    ..Default::default()
+                }
+            }
         }
     }
 
@@ -262,6 +288,8 @@ impl Platform {
                     ..Default::default()
                 })
             }
+            #[cfg(windows)]
+            Surfaces::Windows => None,
         }
     }
 }
@@ -269,6 +297,7 @@ impl Platform {
 /// GPUI's display for an output: Wayland displays are named by a v5 UUID
 /// of the output name; elsewhere the display whose bounds start at the
 /// output's logical origin.
+#[cfg(not(windows))]
 fn display_for(name: &str, logical: IRect, cx: &App) -> Option<DisplayId> {
     let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes());
     let displays = cx.displays();

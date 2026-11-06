@@ -62,7 +62,11 @@ struct Lib {
 impl Lib {
     fn open() -> Result<Lib> {
         let mut last = None;
-        for name in ["libtesseract.so.5", "libtesseract.so"] {
+        #[cfg(windows)]
+        let names = ["libtesseract-5.dll", "tesseract55.dll", "libtesseract.dll"];
+        #[cfg(not(windows))]
+        let names = ["libtesseract.so.5", "libtesseract.so"];
+        for name in names {
             // SAFETY: loading a shared library runs its initialisers;
             // libtesseract's are ordinary C++ static constructors.
             match unsafe { libloading::Library::new(name) } {
@@ -70,9 +74,14 @@ impl Lib {
                 Err(e) => last = Some(e),
             }
         }
+        #[cfg(not(windows))]
+        let message = "text extraction needs Tesseract (libtesseract.so.5): install `tesseract` \
+                       and a language pack such as `tesseract-data-eng`";
+        #[cfg(windows)]
+        let message = "text extraction needs Tesseract (libtesseract-5.dll): install Tesseract \
+                       and eng.traineddata, and add its DLL directory to PATH";
         Err(anyhow!(
-            "text extraction needs Tesseract (libtesseract.so.5): install `tesseract` \
-             and a language pack such as `tesseract-data-eng` ({})",
+            "{message} ({})",
             last.map(|e| e.to_string()).unwrap_or_default()
         ))
     }

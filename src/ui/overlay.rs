@@ -165,7 +165,7 @@ impl Focusable for Overlay {
 
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // X11 capture coordinates are physical even when the UI uses Xft DPI.
+        // X11 and Windows capture coordinates can be physical while the UI uses DIPs.
         let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.0);
         let this = cx.entity();
         let selection = self.selection.clone();
@@ -313,7 +313,6 @@ fn paint_dim(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn physical_selection_hole_maps_to_scaled_viewport() {
         let bounds = local(
