@@ -27,7 +27,8 @@ First release.
   command.
 - Capture modes: frozen-screen region selection across all outputs, focused
   output, active window, whole screen and fixed geometry.
-- On layer-shell, selection overlays are created while the capture runs.
+- With native wlroots capture, selection overlays are created while the
+  capture runs.
 - Region precision aids: full-surface crosshair guides, a nearest-neighbour
   8× loupe with physical pixel coordinates and colour, and a pre-drag hint.
   All sample the existing frozen frame, including early and fullscreen overlays.
