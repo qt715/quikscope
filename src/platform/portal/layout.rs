@@ -38,6 +38,14 @@ pub(super) struct Layout {
     state: State,
 }
 
+pub(crate) fn supports_layer_shell() -> Result<bool> {
+    let connection = Connection::connect_to_env()?;
+    let (globals, _queue) = registry_queue_init::<State>(&connection)?;
+    Ok(globals
+        .contents()
+        .with_list(|list| list.iter().any(|g| g.interface == "zwlr_layer_shell_v1")))
+}
+
 impl Layout {
     pub fn connect() -> Result<Self> {
         let connection = Connection::connect_to_env().context("connecting portal output layout")?;

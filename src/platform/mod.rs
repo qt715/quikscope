@@ -175,16 +175,15 @@ pub fn connect(events: EventSink) -> Platform {
         } else {
             Arc::new(NoDesktop)
         };
-        let forced = std::env::var("QUICKSCOPE_BACKEND").ok();
-        let native = if forced.as_deref() == Some("portal") {
+        let native = if backend.as_deref() == Some("portal") {
             None
         } else {
             wlroots::Screencopy::spawn()
                 .map_err(|e| log::debug!("wlr-screencopy unavailable: {e:#}"))
                 .ok()
         };
-        let use_portal = forced.as_deref() == Some("portal")
-            || (forced.is_none()
+        let use_portal = backend.as_deref() == Some("portal")
+            || (backend.is_none()
                 && native.is_none()
                 && std::env::var_os("WAYLAND_DISPLAY").is_some());
         let capture = if use_portal {
@@ -198,8 +197,23 @@ pub fn connect(events: EventSink) -> Platform {
         .ok();
         let clipboard = wlroots::DataControl::spawn()
             .map(|c| Arc::new(c) as Arc<dyn Clipboard>)
-            .map_err(|e| log::warn!("clipboard unavailable: {e:#}"))
-            .ok();
+            .map_err(|e| log::warn!("Wayland data-control clipboard unavailable: {e:#}"))
+            .ok()
+            .or_else(|| {
+                std::env::var_os("DISPLAY")?;
+                log::info!("using Xwayland CLIPBOARD fallback");
+                x11::SelectionOwner::spawn()
+                    .map(|c| Arc::new(c) as Arc<dyn Clipboard>)
+                    .map_err(|e| log::warn!("Xwayland clipboard unavailable: {e:#}"))
+                    .ok()
+            });
+        let surfaces = if std::env::var("QUICKSCOPE_DEBUG_NO_LAYER_SHELL").as_deref() != Ok("1")
+            && portal::supports_layer_shell().unwrap_or(false)
+        {
+            Surfaces::LayerShell
+        } else {
+            Surfaces::Fullscreen
+        };
         Platform {
             name: if use_portal { "portal" } else { "wlroots" },
             capture,
@@ -210,11 +224,7 @@ pub fn connect(events: EventSink) -> Platform {
             },
             clipboard,
             notifier,
-            surfaces: if use_portal {
-                Surfaces::Fullscreen
-            } else {
-                Surfaces::LayerShell
-            },
+            surfaces,
         }
     }
     #[cfg(windows)]
@@ -340,7 +350,7 @@ impl Platform {
 /// of the output name; elsewhere the display whose bounds start at the
 /// output's logical origin.
 #[cfg(not(windows))]
-fn display_for(name: &str, logical: IRect, cx: &App) -> Option<DisplayId> {
+pub(crate) fn display_for(name: &str, logical: IRect, cx: &App) -> Option<DisplayId> {
     let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes());
     let displays = cx.displays();
     displays

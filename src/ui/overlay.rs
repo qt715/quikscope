@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use futures::channel::oneshot;
 use gpui::{
-    App, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle, Focusable,
+    App, Bounds, Context, CursorStyle, DispatchPhase, DisplayId, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, Styled as _, Window, canvas, div,
     fill, outline, point, px, size,
@@ -88,6 +88,15 @@ impl Selection {
     }
 }
 
+/// Frozen candidates for the single fullscreen surface on desktops without layer-shell.
+pub struct FullscreenFrame {
+    pub name: String,
+    pub display: Option<DisplayId>,
+    pub logical: IRect,
+    pub image_width: u32,
+    pub tiles: Arc<[Tile]>,
+}
+
 pub struct Overlay {
     selection: Entity<Selection>,
     /// This output's logical rectangle.
@@ -102,6 +111,8 @@ pub struct Overlay {
     /// Logged once, when the first pointer motion arrives: until then
     /// clicks may still land on whatever was under the overlay.
     pointer_seen: bool,
+    fullscreen: Option<Vec<FullscreenFrame>>,
+    display: Option<DisplayId>,
 }
 
 impl Overlay {
@@ -125,15 +136,73 @@ impl Overlay {
             focus,
             opened: Some(std::time::Instant::now()),
             pointer_seen: false,
+            fullscreen: None,
+            display: None,
         }
+    }
+
+    pub fn fullscreen(
+        selection: Entity<Selection>,
+        frames: Vec<FullscreenFrame>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let first = &frames[0];
+        let mut overlay = Self::new(
+            selection,
+            first.logical,
+            first.image_width,
+            first.tiles.clone(),
+            window,
+            cx,
+        );
+        overlay.fullscreen = Some(frames);
+        cx.observe_window_display(window, |overlay, window, cx| {
+            overlay.sync_display(window, cx);
+            cx.notify();
+        })
+        .detach();
+        overlay
+    }
+
+    fn sync_display(&mut self, window: &Window, cx: &App) {
+        let Some(frames) = &self.fullscreen else {
+            return;
+        };
+        let Some(display) = window.display(cx) else {
+            return;
+        };
+        let id = display.id();
+        if self.display == Some(id) {
+            return;
+        }
+        let Some(frame) = frames.iter().find(|frame| frame.display == Some(id)) else {
+            return;
+        };
+        self.display = Some(id);
+        self.output = frame.logical;
+        self.image_width = frame.image_width;
+        self.scale = frame.image_width as f32 / frame.logical.w.max(1) as f32;
+        self.tiles = frame.tiles.clone();
+        log::debug!(
+            "fullscreen selection mapped to {} ({})",
+            frame.name,
+            frame.logical
+        );
     }
 
     fn global(&self, p: gpui::Point<gpui::Pixels>, window: &Window) -> (i32, i32) {
         let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.0);
-        (
-            self.output.x + (f32::from(p.x) * factor).round() as i32,
-            self.output.y + (f32::from(p.y) * factor).round() as i32,
-        )
+        let x = self.output.x + (f32::from(p.x) * factor).round() as i32;
+        let y = self.output.y + (f32::from(p.y) * factor).round() as i32;
+        if self.fullscreen.is_some() {
+            (
+                x.clamp(self.output.x, self.output.right()),
+                y.clamp(self.output.y, self.output.bottom()),
+            )
+        } else {
+            (x, y)
+        }
     }
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -169,6 +238,7 @@ impl Focusable for Overlay {
 
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_display(window, cx);
         // X11 and Windows capture coordinates can be physical while the UI uses DIPs.
         let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.0);
         let this = cx.entity();

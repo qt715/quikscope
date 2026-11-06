@@ -58,6 +58,10 @@ impl FakeScreenshot {
 }
 
 impl Session {
+    pub fn force_fullscreen(&mut self) {
+        self.env
+            .push(("QUICKSCOPE_DEBUG_NO_LAYER_SHELL".into(), "1".into()));
+    }
     pub fn enable_portal(&mut self) -> Arc<AtomicU32> {
         let response = Arc::new(AtomicU32::new(0));
         self.bus

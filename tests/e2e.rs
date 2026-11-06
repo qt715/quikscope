@@ -796,6 +796,7 @@ fn portal_capture_fullscreen_selection_and_denial() {
         return;
     }
     let response = s.enable_portal();
+    s.force_fullscreen();
     s.start_daemon();
     assert!(s.daemon_log().contains("platform backend: portal"));
     let reference = s.root().join("reference.png");
@@ -860,4 +861,136 @@ fn portal_capture_fullscreen_selection_and_denial() {
             "{out:?}"
         );
     }
+}
+
+#[test]
+fn portal_fullscreen_uses_the_output_it_lands_on() {
+    let Some(mut s) = Session::start_with(2, |s| {
+        s.helper(&["output", "HEADLESS-2", "1", "1"]);
+        std::thread::sleep(Duration::from_millis(200));
+    }) else {
+        return;
+    };
+    if !s.has("grim") {
+        assert!(
+            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            "grim required for portal e2e"
+        );
+        return;
+    }
+    s.enable_portal();
+    s.force_fullscreen();
+    let references: Vec<_> = ["HEADLESS-1", "HEADLESS-2"]
+        .into_iter()
+        .map(|name| {
+            let path = s.root().join(format!("{name}.png"));
+            assert!(
+                s.command("grim")
+                    .args(["-o", name])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            decode_png(&path)
+        })
+        .collect();
+    assert_ne!(
+        references[0].width, references[1].width,
+        "distinguishable output frames"
+    );
+    s.start_daemon();
+    s.helper(&["move", "1400", "200"]);
+    let child = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    s.wait_log("fullscreen selection mapped to", Duration::from_secs(10));
+    let log = s.daemon_log();
+    let mapped = log
+        .lines()
+        .rev()
+        .find(|line| line.contains("fullscreen selection mapped to"))
+        .unwrap();
+    let selected = if mapped.contains("HEADLESS-2") {
+        1
+    } else {
+        assert!(mapped.contains("HEADLESS-1"));
+        0
+    };
+    eprintln!("actual fullscreen placement: {mapped}");
+    for (i, name) in ["HEADLESS-1", "HEADLESS-2"].into_iter().enumerate() {
+        let path = s.root().join(format!("overlay-{name}.png"));
+        assert!(
+            s.command("grim")
+                .args(["-o", name])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let visible = decode_png(&path);
+        if i != selected {
+            assert_eq!(visible, references[i], "only one output has an overlay");
+        } else {
+            for (x, y) in [(150, 200), (350, 450), (500, 300)] {
+                let before = references[i].pixel(x, y);
+                let after = visible.pixel(x, y);
+                for channel in 0..3 {
+                    let expected = before[channel] as f32 * (143. / 255.);
+                    assert!(
+                        (after[channel] as f32 - expected).abs() <= 2.,
+                        "frozen output pixel {x},{y}: {before:?} -> {after:?}"
+                    );
+                }
+            }
+        }
+    }
+    s.keys(&["enter"]);
+    let image = decode_png(&saved_path(&s.finish(child, Duration::from_secs(15))));
+    assert_eq!(
+        image, references[selected],
+        "Enter captures the output actually displaying the frozen frame"
+    );
+}
+
+#[test]
+fn portal_layer_shell_selects_across_outputs() {
+    let Some(mut s) = Session::start_with(2, |_| {}) else {
+        return;
+    };
+    if !s.has("grim") {
+        assert!(
+            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            "grim required for portal e2e"
+        );
+        return;
+    }
+    s.enable_portal();
+    s.start_daemon();
+    let path = s.root().join("whole-desktop.png");
+    assert!(s.command("grim").arg(&path).status().unwrap().success());
+    let reference = decode_png(&path);
+    let child = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    s.helper(&["drag", "1100", "100", "1450", "330"]);
+    let image = decode_png(&saved_path(&s.finish(child, Duration::from_secs(15))));
+    assert_eq!(
+        image,
+        reference.crop(quickscope::geom::IRect::new(1100, 100, 350, 230))
+    );
+    assert!(
+        !s.daemon_log().contains("fullscreen selection mapped"),
+        "layer-shell offered by compositor must be used"
+    );
 }

@@ -428,6 +428,29 @@ async fn select_region(
     let (selection, done) = Selection::new(windows);
     let result: Result<Vec<WindowHandle<Overlay>>> = cx.update(|cx| {
         let selection = cx.new(|_| selection);
+        #[cfg(target_os = "linux")]
+        if platform.surfaces == platform::Surfaces::Fullscreen {
+            let frames: Vec<_> = outputs
+                .into_iter()
+                .map(|(name, logical, image_width, tiles)| ui::overlay::FullscreenFrame {
+                    display: platform::display_for(&name, logical, cx),
+                    name,
+                    logical,
+                    image_width,
+                    tiles,
+                })
+                .collect();
+            let first = &frames[0];
+            return cx
+                .open_window(
+                    platform.overlay_options(&first.name, first.logical, cx),
+                    move |window, cx| {
+                        cx.new(|cx| Overlay::fullscreen(selection, frames, window, cx))
+                    },
+                )
+                .map(|window| vec![window])
+                .context("opening fullscreen selection overlay");
+        }
         outputs
             .into_iter()
             .map(|(name, logical, width, tiles)| {

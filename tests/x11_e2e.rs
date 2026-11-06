@@ -659,3 +659,67 @@ fn capture_latency_worker() {
         );
     }
 }
+
+#[test]
+fn portal_uses_xwayland_clipboard_without_data_control() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    let mut worker = Command::new(std::env::current_exe().unwrap());
+    worker
+        .args(["--exact", "portal_clipboard_worker", "--nocapture"])
+        .envs(
+            s.command()
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value))),
+        )
+        .env("QUICKSCOPE_BACKEND", "portal")
+        .env("QUICKSCOPE_PORTAL_CLIPBOARD_WORKER", "1")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}/absent-bus", s.dir.path().display()),
+        )
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("XAUTHORITY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    let mut child = worker.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    s.children.push(child);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line == "clipboard-ready" {
+                let _ = tx.send(());
+            }
+        }
+    });
+    rx.recv_timeout(TIMEOUT)
+        .expect("portal clipboard fallback worker ready");
+    let (png, _) = s.clipboard();
+    assert_eq!(
+        Image::decode(&png).unwrap(),
+        Image::filled(128, 80, [13, 47, 193, 255])
+    );
+    let child = s.children.last_mut().unwrap();
+    drop(child.stdin.take());
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn portal_clipboard_worker() {
+    if std::env::var("QUICKSCOPE_PORTAL_CLIPBOARD_WORKER").as_deref() != Ok("1") {
+        return;
+    }
+    use std::io::Write as _;
+    use std::sync::Arc;
+    let platform = quickscope::platform::connect(Arc::new(|_| {}));
+    assert_eq!(platform.name, "portal");
+    let clipboard = platform.clipboard.expect("Xwayland clipboard fallback");
+    let _png = clipboard.set_image(Arc::new(Image::filled(128, 80, [13, 47, 193, 255])));
+    println!("clipboard-ready");
+    std::io::stdout().flush().unwrap();
+    let mut done = String::new();
+    std::io::stdin().read_line(&mut done).unwrap();
+}

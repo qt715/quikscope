@@ -1,6 +1,8 @@
 //! Screenshot portal fallback for compositors without wlr-screencopy.
 mod layout;
 
+pub(crate) use layout::supports_layer_shell;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
