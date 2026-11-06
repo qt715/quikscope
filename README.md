@@ -1,8 +1,9 @@
 # quickscope
 
-A fast screenshot tool for X11, wlroots-based Wayland desktops (Hyprland,
-sway, labwc, river, …) and Windows 10/11, with a built-in annotation editor
-written in [GPUI](https://gpui.rs).
+A fast screenshot tool for X11, Wayland desktops and Windows 10/11, with a
+built-in annotation editor written in [GPUI](https://gpui.rs). Native
+wlroots capture is preferred; GNOME and KDE Plasma use the desktop
+Screenshot portal.
 
 ```text
 keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
@@ -33,10 +34,12 @@ keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ c
 
 ## Install
 
-Requires either an X11 server with a 24/32-bit TrueColor root visual, or a
-compositor with `wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`
-(all wlroots compositors and Hyprland), plus Rust ≥ 1.95 to build.
-A session D-Bus notification server is optional.
+Requires an X11 server with a 24/32-bit TrueColor root visual or a Wayland
+compositor, and Rust ≥ 1.95 to build. Native Wayland capture uses
+`wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`. Other desktops
+need a session D-Bus, `xdg-desktop-portal` and their matching backend
+(`xdg-desktop-portal-gnome` or `xdg-desktop-portal-kde`; install through
+your distribution). A session D-Bus notification server is optional.
 
 ```sh
 cargo install --locked --path .
@@ -140,6 +143,30 @@ layerrule = no_anim on, match:namespace ^(quickscope-selection)$
 
 `no_anim` on the selection layer makes the frozen overlay appear instantly
 instead of fading in. On sway, add `for_window [app_id="quickscope"] floating enable`.
+
+## GNOME / KDE Plasma (portal)
+
+The daemon falls back to `org.freedesktop.portal.Screenshot` when
+`wlr-screencopy` is unavailable. Set `QUICKSCOPE_BACKEND=portal` on the
+daemon to force it (or `QUICKSCOPE_BACKEND=wlroots` to require native capture).
+The desktop can still ask permission despite `interactive=false`; accept
+its permission dialog to capture. Cancelling or denying returns a clear error.
+
+Portal capture decodes a PNG file and is slower than native screencopy.
+The portal controls cursor inclusion: `--cursor` / `--no-cursor` cannot
+override it. Fullscreen normal windows show the frozen region-selection
+image; desktop fullscreen/focus animations can delay its appearance, and
+the compositor decides which output receives keyboard focus. Disable
+fullscreen animations in desktop settings if needed. There is no window
+list/snapping or active-window capture; `output` defaults to the first output.
+The portal raster must cover the logical desktop at a uniform scale;
+incompatible mixed-scale rasters are rejected rather than cropped incorrectly.
+
+Clipboard uses data-control where available (including supported KDE
+versions); GNOME normally lacks it. Without a clipboard backend, use
+`--no-clipboard --save` (or edit/save). Notifications still work.
+Portal PNGs are not deleted: the API does not transfer ownership, and
+GNOME/KDE may save into Pictures rather than create disposable files.
 
 ## Usage
 

@@ -137,6 +137,34 @@ Set `QUICKSCOPE_E2E_KEEP=1` to keep a session's directory (compositor and daemon
 logs) after the test, and `QUICKSCOPE_E2E_COMPOSITOR=sway` to pick the
 compositor.
 
+### Portal fallback
+
+`QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e portal_capture_fullscreen_selection_and_denial -- --nocapture`
+runs the real daemon forced to `QUICKSCOPE_BACKEND=portal` in that same
+private labwc desktop. A fake Screenshot service on the private D-Bus
+captures real pixels with `grim`, writes a percent-escaped local file URI,
+and emits Response **before** returning the method reply (catching late
+subscription races). The test compares screen pixels with grim, drags a
+region through fullscreen normal windows, checks Esc cancellation and
+Enter capture, and checks both permission-denial response codes. Five
+screen captures print end-to-end latency samples. Missing grim skips unless
+`QUICKSCOPE_E2E=1`. Unit tests cover negative origins, fractional scales,
+layout gaps, output filters, incompatible raster dimensions and responses.
+
+This fake exercises transport and real compositor pixels, not GNOME/KDE's
+permission UI or their multi-monitor raster conventions. Real desktop
+portal behavior and animation timing need testing on those desktops.
+An isolated, extracted Mutter 51.1 was also started headless with a
+1280×720 virtual output and software rendering. This was only a compositor
+startup smoke: GNOME Shell and the GNOME/KDE portal backends were not
+installed, so real GNOME/KDE Screenshot requests were not exercised.
+
+On the private 1280×720 labwc desktop, five fake-portal screen captures
+(`--save --no-notify --no-clipboard`, optimized test build) took
+25.35, 20.51, 20.14, 20.53 and 20.59 ms end to end. This includes spawning
+grim, PNG encode/decode, IPC and saving. Real desktop permission dialogs
+and capture effects add unmeasured latency; these are not GNOME/KDE numbers.
+
 ## CI
 
 `.github/workflows/ci.yml` runs formatting and clippy (`-D warnings`), the

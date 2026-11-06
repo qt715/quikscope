@@ -65,6 +65,53 @@ the same encoded bytes; large transfers advance only when the requestor deletes
 the previous INCR property. Popups bypass the window manager, so region selection
 sets native keyboard focus after they map and restores the prior focus on exit.
 There is no X11 GPU prewarm window because it could flash on the desktop.
+| `portal` | Screenshot portal → PNG | data-control if offered, otherwise unavailable | fullscreen xdg-toplevel | none |
+
+### Screenshot portal
+
+On Wayland, native screencopy is attempted first; if it is unavailable, use
+the Screenshot portal. `QUICKSCOPE_BACKEND=portal|wlroots` forces the choice.
+Both the session-bus connection and a separate Wayland output-layout
+connection are kept alive. A Request/Response subscription is installed
+before `Screenshot("", {interactive: false, handle_token: …})`; filtering
+uses the returned request handle, including older non-token-derived handles.
+Codes 1/2 report cancellation/denial/failure. Local `file://` URIs are
+percent-decoded using `url`, then decoded into BGRA.
+
+The desktop raster is split using wl_output + xdg-output logical bounds;
+negative origins, gaps and uniform fractional scaling are supported.
+Output changes during the portal dialog produce an error instead of using
+stale geometry. The API has no per-output scale metadata: nonuniform
+mixed-scale rasters whose aspect ratio differs from the logical desktop
+are rejected. The desktop controls pointer inclusion (the Screenshot
+interface has no cursor option), permission dialogs and capture flashes.
+
+Portal overlays are fullscreen normal windows, with the frozen image
+prepared before opening. They do not request layer-shell or GPU prewarming
+windows. Compositor animations and fullscreen focus/output placement policy
+cannot be overridden by the application. Esc/Enter use the same selection
+handlers as the native backend.
+
+Files are deliberately retained, even under `/tmp`: the portal does not
+grant ownership or specify cleanup. [KDE's implementation][kde-screenshot]
+saves `Pictures/Screenshot_*.png`; [GNOME's implementation][gnome-screenshot]
+asks Shell to create a named screenshot. Document-portal paths are not
+necessarily disposable files either.
+
+The faster KWin ScreenShot2 API was considered, not selected: [Plasma 6.5
+checks restricted-interface authorization][kwin-screenshot] for the caller
+PID. Newer KWin development sources remove that check, but that is not a
+portable contract across deployed desktops. No permission bypass or
+desktop-specific window-query service is required; `Desktop` returns
+"unknown", so there is no active-window capture or snapping.
+
+[portal-screenshot]: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Screenshot.html
+[kde-screenshot]: https://github.com/KDE/xdg-desktop-portal-kde/blob/master/src/screenshot.cpp
+[gnome-screenshot]: https://github.com/GNOME/xdg-desktop-portal-gnome/blob/main/src/screenshotdialog.c
+[kwin-screenshot]: https://github.com/KDE/kwin/blob/Plasma/6.5/src/plugins/screenshot/screenshotdbusinterface2.cpp
+
+See the [Screenshot portal specification][portal-screenshot] for its
+permission and cursor limitations.
 
 
 GPUI's executable manifest requests per-monitor-v2 DPI awareness; quickscope

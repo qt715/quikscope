@@ -10,6 +10,10 @@ First release.
   Windows paths use AppData and the Pictures known folder; IPC retains the
   line protocol over AF_UNIX. Linux-only dependencies are target-specific.
 - Daemon with line-based IPC over a Unix socket, started on demand by any command.
+- Screenshot portal fallback for Wayland desktops without wlr-screencopy,
+  including fullscreen normal-window region selection and clear permission
+  errors; selectable with `QUICKSCOPE_BACKEND=portal`. Portal cursor,
+  mixed-scale, focus/animation and clipboard limitations are documented.
 - Capture modes: frozen-screen region selection across all outputs (with
   window snapping on Hyprland), focused output, active window, whole screen,
   and fixed geometry.
