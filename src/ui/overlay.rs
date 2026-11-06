@@ -17,8 +17,8 @@ use gpui::{
 };
 
 use super::{Tile, ViewTransform, paint_tiles, theme};
-use crate::capture::hyprland::{WindowRect, window_at};
 use crate::geom::IRect;
+use crate::platform::{WindowRect, window_at};
 
 /// Below this drag distance (logical px) a press counts as a click.
 const CLICK_SLOP: i32 = 4;

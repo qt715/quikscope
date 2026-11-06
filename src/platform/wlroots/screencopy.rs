@@ -12,7 +12,6 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use futures::channel::oneshot;
 use memmap2::MmapMut;
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
@@ -22,23 +21,23 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1,
 };
 
-use super::{OutputFrame, Snapshot};
+use crate::capture::{OutputFrame, Snapshot};
 use crate::geom::IRect;
+use crate::platform::Capture;
 use crate::raster::{Image, Transform};
 
 /// Upper bound for one capture; a healthy compositor answers within a frame.
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Handle to the capture thread. Cheap to clone.
-#[derive(Clone)]
-pub struct Capturer {
+/// Handle to the capture thread.
+pub struct Screencopy {
     tx: mpsc::Sender<Job>,
 }
 
 struct Job {
     outputs: Option<Vec<String>>,
     cursor: bool,
-    reply: oneshot::Sender<Result<Snapshot>>,
+    reply: mpsc::Sender<Result<Snapshot>>,
 }
 
 /// Public description of an output, as last announced by the compositor.
@@ -48,10 +47,10 @@ pub struct OutputInfo {
     pub logical: IRect,
 }
 
-impl Capturer {
+impl Screencopy {
     /// Connects to the compositor on a new thread. Fails if the compositor
     /// lacks `wlr-screencopy` or `wl_shm`.
-    pub fn spawn() -> Result<Capturer> {
+    pub fn spawn() -> Result<Screencopy> {
         let (tx, rx) = mpsc::channel::<Job>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
         std::thread::Builder::new()
@@ -78,31 +77,21 @@ impl Capturer {
         ready_rx
             .recv()
             .map_err(|_| anyhow!("capture thread exited during startup"))??;
-        Ok(Capturer { tx })
+        Ok(Screencopy { tx })
     }
+}
 
-    /// Captures the named outputs (all outputs when `None`).
-    pub fn capture(
-        &self,
-        outputs: Option<Vec<String>>,
-        cursor: bool,
-    ) -> oneshot::Receiver<Result<Snapshot>> {
-        let (reply, rx) = oneshot::channel();
-        if let Err(mpsc::SendError(job)) = self.tx.send(Job {
-            outputs,
-            cursor,
-            reply,
-        }) {
-            let _ = job
-                .reply
-                .send(Err(anyhow!("the capture thread is not running")));
-        }
-        rx
-    }
-
-    /// Blocking convenience wrapper for tools and tests.
-    pub fn capture_blocking(&self, outputs: Option<Vec<String>>, cursor: bool) -> Result<Snapshot> {
-        futures::executor::block_on(self.capture(outputs, cursor))
+impl Capture for Screencopy {
+    fn capture(&self, outputs: Option<&[String]>, cursor: bool) -> Result<Snapshot> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(Job {
+                outputs: outputs.map(<[String]>::to_vec),
+                cursor,
+                reply,
+            })
+            .map_err(|_| anyhow!("the capture thread is not running"))?;
+        rx.recv()
             .map_err(|_| anyhow!("the capture thread dropped the request"))?
     }
 }

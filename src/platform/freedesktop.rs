@@ -8,6 +8,7 @@ use anyhow::{Context as _, Result};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{StructureBuilder, Value};
 
+use crate::platform::{Event, EventSink, Notifier};
 use crate::raster::Image;
 
 const DEST: &str = "org.freedesktop.Notifications";
@@ -16,26 +17,19 @@ const PATH: &str = "/org/freedesktop/Notifications";
 const DEFAULT_ACTION: &str = "default";
 const EDIT_ACTION: &str = "edit";
 
-/// A notification action the user took.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Activation {
-    pub shot: u64,
-}
-
-#[derive(Clone)]
-pub struct Notifier {
+pub struct Notifications {
     conn: Connection,
     /// Server-assigned notification id → shot id.
     pending: Arc<Mutex<HashMap<u32, u64>>>,
 }
 
-impl Notifier {
-    /// Connects to the session bus and starts listening for clicks.
-    /// `on_activate` runs on the listener thread.
-    pub fn spawn(on_activate: impl Fn(Activation) + Send + 'static) -> Result<Notifier> {
+impl Notifications {
+    /// Connects to the session bus and starts listening for clicks, which
+    /// become [`Event::OpenShot`].
+    pub fn spawn(events: EventSink) -> Result<Notifications> {
         let conn = Connection::session().context("connecting to the session bus")?;
         let pending: Arc<Mutex<HashMap<u32, u64>>> = Arc::default();
-        let notifier = Notifier {
+        let notifier = Notifications {
             conn: conn.clone(),
             pending: pending.clone(),
         };
@@ -66,21 +60,16 @@ impl Notifier {
                     }
                     let shot = pending.lock().unwrap().get(&id).copied();
                     if let Some(shot) = shot {
-                        on_activate(Activation { shot });
+                        events(Event::OpenShot(shot));
                     }
                 }
             })?;
         Ok(notifier)
     }
+}
 
-    /// Shows "Screenshot captured" with a thumbnail and an Edit action.
-    pub fn shot_captured(
-        &self,
-        shot: u64,
-        image: &Image,
-        body: &str,
-        timeout_ms: i32,
-    ) -> Result<u32> {
+impl Notifier for Notifications {
+    fn shot_captured(&self, shot: u64, image: &Image, body: &str, timeout_ms: i32) -> Result<()> {
         let thumb = image.thumbnail(256);
         let image_data = StructureBuilder::new()
             .add_field(thumb.width as i32)
@@ -114,11 +103,10 @@ impl Notifier {
         )?;
         let id: u32 = reply.body().deserialize()?;
         self.pending.lock().unwrap().insert(id, shot);
-        Ok(id)
+        Ok(())
     }
 
-    /// Plain notification without actions (errors, saves).
-    pub fn message(&self, summary: &str, body: &str) -> Result<()> {
+    fn message(&self, summary: &str, body: &str) -> Result<()> {
         let hints: HashMap<&str, Value> = HashMap::new();
         let actions: [&str; 0] = [];
         self.conn.call_method(

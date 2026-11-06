@@ -14,19 +14,17 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use gpui::{
-    App, AppContext as _, AsyncApp, BorrowAppContext as _, Bounds, Entity, Global, QuitMode,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, layer_shell,
-    point, px, size,
+    App, AppContext as _, AsyncApp, BorrowAppContext as _, Entity, Global, QuitMode, WindowBounds,
+    WindowHandle, WindowOptions, px, size,
 };
 
 use crate::cache::LastCapture;
-use crate::capture::{Capturer, Composed, Snapshot, hyprland};
-use crate::clipboard::Clipboard;
+use crate::capture::{Composed, Snapshot};
 use crate::config::{self, Config};
 use crate::document::Document;
 use crate::geom::IRect;
 use crate::ipc::{CaptureOptions, Mode, Request, Response, Switch};
-use crate::notify::Notifier;
+use crate::platform::{self, Capture, Clipboard, Event, Notifier, Platform};
 use crate::raster::{Compression, Image};
 use crate::ui::editor::{Editor, EditorServices, LastTool};
 use crate::ui::overlay::{Overlay, Selection};
@@ -37,16 +35,15 @@ use crate::ui::{self, Assets, Shot};
 const KEEP_SHOTS: usize = 8;
 
 enum Msg {
+    /// From the IPC socket; the response goes back to the client.
     Request(Request, oneshot::Sender<Response>),
-    /// A notification was clicked.
-    OpenShot(u64),
+    /// From the desktop: notification clicks, tray menus, global hotkeys.
+    Desktop(Event),
 }
 
 struct Daemon {
     config: Arc<Config>,
-    capturer: Option<Capturer>,
-    clipboard: Option<Clipboard>,
-    notifier: Option<Notifier>,
+    platform: Arc<Platform>,
     /// Sole writer of the `open-last` cache file.
     cache: LastCapture,
     shots: VecDeque<Arc<Shot>>,
@@ -94,22 +91,13 @@ pub fn run(socket: PathBuf) -> Result<()> {
     let (tx, rx) = mpsc::unbounded::<Msg>();
     spawn_listener(listener, tx.clone());
 
-    // Background services connect concurrently with GPUI start-up.
+    // Platform backends connect concurrently with GPUI start-up.
     let services = std::thread::spawn({
         let tx = tx.clone();
         move || {
-            let capturer = Capturer::spawn()
-                .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
-                .ok();
-            let clipboard = Clipboard::spawn()
-                .map_err(|e| log::warn!("clipboard unavailable: {e:#}"))
-                .ok();
-            let notifier = Notifier::spawn(move |a| {
-                let _ = tx.unbounded_send(Msg::OpenShot(a.shot));
-            })
-            .map_err(|e| log::warn!("notifications unavailable: {e:#}"))
-            .ok();
-            (capturer, clipboard, notifier)
+            platform::connect(Arc::new(move |event| {
+                let _ = tx.unbounded_send(Msg::Desktop(event));
+            }))
         }
     });
 
@@ -119,17 +107,17 @@ pub fn run(socket: PathBuf) -> Result<()> {
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
             ui::init(cx);
-            let (capturer, clipboard, notifier) = services.join().unwrap_or((None, None, None));
+            let platform = Arc::new(services.join().expect("platform start-up panicked"));
+            log::info!("platform backend: {}", platform.name);
             cx.set_global(EditorServices {
                 config: config.clone(),
-                clipboard: clipboard.clone(),
+                clipboard: platform.clipboard.clone(),
             });
+            let prewarm = platform.prewarm_options();
             cx.set_global(Daemon {
                 notify: config.notify,
                 config,
-                capturer,
-                clipboard,
-                notifier,
+                platform,
                 cache: LastCapture::spawn(config::last_capture_path()),
                 shots: VecDeque::new(),
                 docs: HashMap::new(),
@@ -137,7 +125,9 @@ pub fn run(socket: PathBuf) -> Result<()> {
                 next_id: 1,
                 selecting: false,
             });
-            prewarm_gpu(cx);
+            if let Some(options) = prewarm {
+                prewarm_gpu(options, cx);
+            }
             log::info!(
                 "daemon ready on {} in {:.0}ms",
                 socket.display(),
@@ -162,12 +152,21 @@ pub fn run(socket: PathBuf) -> Result<()> {
                             })
                             .detach();
                         }
-                        Msg::OpenShot(id) => {
+                        Msg::Desktop(Event::OpenShot(id)) => {
                             cx.update(|cx| {
                                 if let Err(e) = open_editor(id, EditorTool::Default, cx) {
                                     log::error!("opening editor: {e:#}");
                                 }
                             });
+                        }
+                        Msg::Desktop(Event::Request(req)) => {
+                            cx.spawn(async move |cx| {
+                                log::debug!("desktop request: {req}");
+                                if let Response::Error(e) = handle(req, cx).await {
+                                    notify_error(&e, cx);
+                                }
+                            })
+                            .detach();
                         }
                     }
                 }
@@ -178,10 +177,10 @@ pub fn run(socket: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Opens and immediately closes an invisible 1×1 layer surface so the GPU
-/// device, swapchain format and shader pipelines exist before the first
-/// capture needs a window.
-fn prewarm_gpu(cx: &mut App) {
+/// Opens and immediately closes an invisible window so the GPU device,
+/// swapchain format and shader pipelines exist before the first capture
+/// needs a window.
+fn prewarm_gpu(options: WindowOptions, cx: &mut App) {
     struct Blank;
     impl gpui::Render for Blank {
         fn render(
@@ -193,26 +192,7 @@ fn prewarm_gpu(cx: &mut App) {
         }
     }
     let started = Instant::now();
-    let opened = cx.open_window(
-        WindowOptions {
-            titlebar: None,
-            focus: false,
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.), px(0.)),
-                size: size(px(1.), px(1.)),
-            })),
-            window_background: WindowBackgroundAppearance::Transparent,
-            kind: WindowKind::LayerShell(layer_shell::LayerShellOptions {
-                namespace: "quickscope-prewarm".into(),
-                layer: layer_shell::Layer::Background,
-                anchor: layer_shell::Anchor::TOP | layer_shell::Anchor::LEFT,
-                keyboard_interactivity: layer_shell::KeyboardInteractivity::None,
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        |_, cx| cx.new(|_| Blank),
-    );
+    let opened = cx.open_window(options, |_, cx| cx.new(|_| Blank));
     match opened {
         Ok(handle) => {
             cx.spawn(async move |cx| {
@@ -302,30 +282,49 @@ fn daemon<R>(cx: &mut AsyncApp, f: impl FnOnce(&mut Daemon, &mut App) -> R) -> R
 }
 
 async fn snapshot(
-    capturer: &Capturer,
+    capture: &Arc<dyn Capture>,
     outputs: Option<Vec<String>>,
     cursor: bool,
+    cx: &mut AsyncApp,
 ) -> Result<Snapshot> {
-    capturer
-        .capture(outputs, cursor)
+    let capture = capture.clone();
+    cx.background_spawn(async move { capture.capture(outputs.as_deref(), cursor) })
         .await
-        .map_err(|_| anyhow!("the capture thread stopped"))?
+}
+
+/// Errors from requests nobody waits on (tray menus, hotkeys) would
+/// otherwise vanish into the log.
+fn notify_error(message: &str, cx: &mut AsyncApp) {
+    let Some(n) = daemon(cx, |d, _| d.platform.notifier.clone()) else {
+        return;
+    };
+    let message = message.to_string();
+    cx.background_spawn(async move {
+        if let Err(e) = n.message("Screenshot failed", &message) {
+            log::warn!("notification failed: {e:#}");
+        }
+    })
+    .detach();
 }
 
 async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<Option<Response>> {
     let started = Instant::now();
-    let (config, capturer) = daemon(cx, |d, _| (d.config.clone(), d.capturer.clone()));
-    let capturer = capturer.context("screen capture is unavailable (see the daemon log)")?;
+    let (config, platform) = daemon(cx, |d, _| (d.config.clone(), d.platform.clone()));
+    let capturer = platform
+        .capture
+        .clone()
+        .context("screen capture is unavailable (see the daemon log)")?;
+    let desktop = platform.desktop.clone();
     let cursor = opts.cursor.unwrap_or(config.cursor);
 
     let composed: Composed = if let Some(rect) = opts.geometry {
-        let snap = snapshot(&capturer, None, cursor).await?;
+        let snap = snapshot(&capturer, None, cursor, cx).await?;
         snap.compose(rect)
             .with_context(|| format!("geometry {rect} lies outside every output"))?
     } else {
         match mode {
             Mode::Screen => {
-                let snap = snapshot(&capturer, None, cursor).await?;
+                let snap = snapshot(&capturer, None, cursor, cx).await?;
                 snap.compose(snap.bounds())
                     .context("no outputs to capture")?
             }
@@ -333,11 +332,11 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
                 let name = match opts.output.clone() {
                     Some(n) => Some(n),
                     None => {
-                        cx.background_spawn(async { hyprland::focused_output() })
+                        cx.background_spawn(async move { desktop.focused_output() })
                             .await
                     }
                 };
-                let snap = snapshot(&capturer, name.clone().map(|n| vec![n]), cursor).await?;
+                let snap = snapshot(&capturer, name.clone().map(|n| vec![n]), cursor, cx).await?;
                 let frame = match &name {
                     Some(n) => snap.output(n),
                     None => snap.outputs.first(),
@@ -350,16 +349,21 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
             }
             Mode::Window => {
                 let rect = cx
-                    .background_spawn(async { hyprland::active_window() })
+                    .background_spawn(async move { desktop.active_window() })
                     .await
-                    .context("window capture needs Hyprland and a focused window")?;
-                let snap = snapshot(&capturer, None, cursor).await?;
+                    .with_context(|| {
+                        format!(
+                            "window capture needs a focused window the {} backend can locate",
+                            platform.name
+                        )
+                    })?;
+                let snap = snapshot(&capturer, None, cursor, cx).await?;
                 snap.compose(rect)
                     .context("the active window is not on any output")?
             }
             Mode::Region => {
-                let snap = snapshot(&capturer, None, cursor).await?;
-                let Some(rect) = select_region(&snap, cx).await? else {
+                let snap = snapshot(&capturer, None, cursor, cx).await?;
+                let Some(rect) = select_region(&snap, &platform, cx).await? else {
                     return Ok(None);
                 };
                 cx.background_spawn(async move { snap.compose(rect) })
@@ -380,14 +384,19 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
 
 /// Shows the frozen overlays and waits for a selection in global logical
 /// coordinates. `None` means the user cancelled.
-async fn select_region(snap: &Snapshot, cx: &mut AsyncApp) -> Result<Option<IRect>> {
+async fn select_region(
+    snap: &Snapshot,
+    platform: &Arc<Platform>,
+    cx: &mut AsyncApp,
+) -> Result<Option<IRect>> {
     let started = Instant::now();
     if daemon(cx, |d, _| std::mem::replace(&mut d.selecting, true)) {
         bail!("a selection is already in progress");
     }
-    // The window list (Hyprland IPC) and each output's GPU tiles are
-    // prepared in parallel; neither depends on the other.
-    let windows = cx.background_spawn(async { hyprland::visible_windows() });
+    // The window list and each output's GPU tiles are prepared in parallel;
+    // neither depends on the other.
+    let desktop = platform.desktop.clone();
+    let windows = cx.background_spawn(async move { desktop.visible_windows() });
     let tile_tasks: Vec<_> = snap
         .outputs
         .iter()
@@ -408,39 +417,12 @@ async fn select_region(snap: &Snapshot, cx: &mut AsyncApp) -> Result<Option<IRec
     let (selection, done) = Selection::new(windows);
     let result: Result<Vec<WindowHandle<Overlay>>> = cx.update(|cx| {
         let selection = cx.new(|_| selection);
-        let displays = cx.displays();
         outputs
             .into_iter()
             .map(|(name, logical, width, tiles)| {
-                let display_id = displays
-                    .iter()
-                    .find(|d| d.uuid().ok() == Some(display_uuid(&name)))
-                    .map(|d| d.id());
                 let selection = selection.clone();
                 cx.open_window(
-                    WindowOptions {
-                        titlebar: None,
-                        focus: true,
-                        window_bounds: Some(WindowBounds::Windowed(Bounds {
-                            origin: point(px(0.), px(0.)),
-                            size: size(px(logical.w as f32), px(logical.h as f32)),
-                        })),
-                        display_id,
-                        app_id: Some("quickscope".into()),
-                        window_background: WindowBackgroundAppearance::Opaque,
-                        kind: WindowKind::LayerShell(layer_shell::LayerShellOptions {
-                            namespace: "quickscope-selection".into(),
-                            layer: layer_shell::Layer::Overlay,
-                            anchor: layer_shell::Anchor::TOP
-                                | layer_shell::Anchor::BOTTOM
-                                | layer_shell::Anchor::LEFT
-                                | layer_shell::Anchor::RIGHT,
-                            exclusive_zone: Some(px(-1.)),
-                            keyboard_interactivity: layer_shell::KeyboardInteractivity::Exclusive,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
+                    platform.overlay_options(&name, logical, cx),
                     move |window, cx| {
                         cx.new(|cx| Overlay::new(selection, logical, width, tiles, window, cx))
                     },
@@ -468,11 +450,6 @@ async fn select_region(snap: &Snapshot, cx: &mut AsyncApp) -> Result<Option<IRec
         cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
     });
     Ok(rect.filter(|r| !r.is_empty()))
-}
-
-/// GPUI names Wayland displays by a v5 UUID of the output name.
-fn display_uuid(name: &str) -> uuid::Uuid {
-    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes())
 }
 
 fn add_shot(
@@ -508,7 +485,9 @@ async fn finish_capture(
     config: Arc<Config>,
     cx: &mut AsyncApp,
 ) -> Result<Response> {
-    let (clipboard, notifier) = daemon(cx, |d, _| (d.clipboard.clone(), d.notifier.clone()));
+    let (clipboard, notifier) = daemon(cx, |d, _| {
+        (d.platform.clipboard.clone(), d.platform.notifier.clone())
+    });
 
     if !opts.text && opts.clipboard.unwrap_or(config.copy_to_clipboard) {
         match &clipboard {
@@ -580,8 +559,8 @@ async fn extract_text(
     shot: Arc<Shot>,
     opts: &CaptureOptions,
     config: Arc<Config>,
-    clipboard: Option<Clipboard>,
-    notifier: Option<Notifier>,
+    clipboard: Option<Arc<dyn Clipboard>>,
+    notifier: Option<Arc<dyn Notifier>>,
     cx: &mut AsyncApp,
 ) -> Result<Response> {
     let (image, scale) = (shot.image.clone(), shot.scale);
@@ -661,7 +640,7 @@ fn preview(text: &str) -> String {
 /// config file first, so the daemon never reports a state that a restart
 /// would lose.
 async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<Response>> {
-    let (current, notifier) = daemon(cx, |d, _| (d.notify, d.notifier.clone()));
+    let (current, notifier) = daemon(cx, |d, _| (d.notify, d.platform.notifier.clone()));
     let on = switch.apply(current);
     if switch != Switch::Status {
         cx.background_spawn(

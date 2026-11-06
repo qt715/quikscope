@@ -20,7 +20,6 @@ use super::font_menu::{self, FontMenu, FontMenuEvent, next_size};
 use super::motion::{Transition, View};
 use super::zoom;
 use super::{PatchCache, Shot, ViewTransform, hsla, paint_prims, paint_tiles, theme, toolbar};
-use crate::clipboard::Clipboard;
 use crate::config::Config;
 use crate::document::{Document, PALETTE, Rgba, Shape, ShapeId, ShapeKind, Style};
 use crate::fonts::FontSpec;
@@ -32,7 +31,7 @@ use crate::text::TextLayout;
 #[derive(Clone)]
 pub struct EditorServices {
     pub config: Arc<Config>,
-    pub clipboard: Option<Clipboard>,
+    pub clipboard: Option<Arc<dyn crate::platform::Clipboard>>,
 }
 
 impl Global for EditorServices {}

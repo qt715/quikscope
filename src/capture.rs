@@ -1,15 +1,10 @@
-//! Screen capture: per-output frames from `wlr-screencopy` and composition of
-//! arbitrary logical rectangles out of them.
-
-pub mod hyprland;
-pub mod screencopy;
+//! Captured screens: per-output frames (from whichever platform backend)
+//! and composition of arbitrary logical rectangles out of them.
 
 use std::sync::Arc;
 
 use crate::geom::IRect;
 use crate::raster::Image;
-
-pub use screencopy::Capturer;
 
 /// One output's pixels, already rotated into the orientation the user sees.
 #[derive(Clone, Debug)]

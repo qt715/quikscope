@@ -1,6 +1,5 @@
 //! Hyprland IPC: focused monitor, active window and visible windows, used to
 //! resolve `output`/`window` captures and window snapping in region mode.
-//! Other compositors simply return `None` here.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -11,6 +10,7 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
 use crate::geom::IRect;
+use crate::platform::{Desktop, WindowRect};
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceRef {
@@ -44,15 +44,6 @@ struct Client {
 
 fn yes() -> bool {
     true
-}
-
-/// A window that can be snapped to in region mode.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WindowRect {
-    pub rect: IRect,
-    pub floating: bool,
-    /// 0 = most recently focused.
-    pub focus_order: i64,
 }
 
 fn socket() -> Option<PathBuf> {
@@ -142,17 +133,27 @@ fn parse_visible_windows(monitors: &[u8], clients: &[u8]) -> Result<Vec<WindowRe
     Ok(windows)
 }
 
-/// The topmost window under a logical point.
-pub fn window_at(windows: &[WindowRect], x: i32, y: i32) -> Option<IRect> {
-    windows
-        .iter()
-        .find(|w| w.rect.contains(x, y))
-        .map(|w| w.rect)
+/// Hyprland's IPC as a [`Desktop`].
+pub struct Hyprland;
+
+impl Desktop for Hyprland {
+    fn focused_output(&self) -> Option<String> {
+        focused_output()
+    }
+
+    fn active_window(&self) -> Option<IRect> {
+        active_window()
+    }
+
+    fn visible_windows(&self) -> Vec<WindowRect> {
+        visible_windows()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::window_at;
 
     const MONITORS: &str = r#"[
         {"name":"DP-1","focused":true,"activeWorkspace":{"id":2,"name":"2"},

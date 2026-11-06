@@ -38,6 +38,22 @@ The capture and clipboard threads use their own connections rather than
 GPUI's: GPUI's event loop is not exposed, and data-control needs no focused
 surface (the daemon usually has none), unlike `wl_data_device`.
 
+## Platform backends
+
+Everything that differs between desktops sits behind the traits in
+`src/platform/mod.rs`: `Capture` (screen pixels), `Desktop` (focused output,
+active window, windows to snap to), `Clipboard`, `Notifier`, and how the
+selection overlays become windows (`Surfaces`). `platform::connect` picks the
+backends once at daemon start and logs the choice (`platform backend: …`).
+Desktop-originated actions (notification clicks, and on platforms without
+compositor keybinds, tray menus and global hotkeys) reach the daemon as
+`platform::Event`s and run through the same request handler as the IPC
+socket.
+
+| Backend | Capture | Clipboard | Overlay | Window knowledge |
+| --- | --- | --- | --- | --- |
+| `wlroots` | `wlr-screencopy` | `wlr-data-control` | layer-shell | Hyprland IPC when present |
+
 ## Capture path
 
 1. `wlr-screencopy` frames for all outputs are requested at once. The
