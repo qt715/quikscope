@@ -167,6 +167,9 @@ codes; and cross outputs through layer-shell overlays. A two-output test
 forces `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` with a rotated, distinct second
 output: only the landed-on output is overlaid, its visible dimmed pixels
 match that output's frozen frame, and Enter returns that exact output.
+Another test makes the fake portal ask first through a permission-dialog
+stand-in (the helper's `dialog`, an ordinary toplevel that answers on Enter
+and denies after 5 s): Enter must reach the dialog, not a selection overlay.
 Five screen captures print end-to-end latency samples. Missing grim skips
 unless `QUICKSCOPE_E2E=1`. Unit tests cover negative origins, fractional
 scales, layout gaps, filters, incompatible raster dimensions and responses.

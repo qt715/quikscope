@@ -187,7 +187,10 @@ When the snapshot arrives each overlay receives its output's tiles and
 starts dimming; if an output has no early overlay (hotplug during the
 capture) they close and the regular path opens fresh ones. X11 and Windows
 popups would capture as black without a compositor and fullscreen toplevels
-animate in, so those open after the capture as before.
+animate in, so those open after the capture as before. Portal captures never
+get early overlays, even on layer-shell (KDE): the desktop may show a
+permission dialog first, and an overlay's exclusive keyboard would keep the
+user from answering it.
 
 Precision aids share the overlay's frozen tiles. Fractional global pointer
 coordinates are retained separately from integer selection corners, then
