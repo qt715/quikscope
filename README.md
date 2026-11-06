@@ -243,6 +243,11 @@ quickscope ping | quit
 | `window` | The active window (Hyprland or X11/EWMH). |
 | `screen` | All outputs composed in their layout. |
 
+Region selection shows crosshair guides and an 8× pixel loupe from the frozen
+capture, with a centre-pixel marker, physical pixel coordinates relative to
+the current output and its `#rrggbb` colour. The loupe flips away from screen
+edges; the bottom shortcut hint disappears when a drag starts.
+
 | Option | Effect |
 | --- | --- |
 | `--edit` / `--no-edit` | Open the editor immediately instead of on notification click. |
@@ -298,7 +303,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quickscope notifications tog
 | Stroke / text size | `[` `]` or the toolbar dots |
 | Duplicate selection | `Ctrl+D` — new copies offset by 10 logical pixels, selected together; `Ctrl+C` still copies the image |
 | Bring selection to front / send to back | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
-| Shortcut help | `?` / `F1` or the toolbar `?`; `Esc` dismisses help without closing the editor |
+| Shortcut help | `?` / `F1` or the toolbar `?`; `Esc` dismisses help without closing the editor. Fits small windows with scrolling and a single-column layout; `F1` also works while editing text |
 | Text format (while typing or with text selected) | `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+Shift+.` / `Ctrl+Shift+,` bigger / smaller |
 | Zoom | `Ctrl`+scroll (one level per wheel notch), `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels. Levels are 10% steps up to 100% and 25% steps above (100% = actual pixels); zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
 | Close | `Esc` (when nothing is selected), `Ctrl+W` |

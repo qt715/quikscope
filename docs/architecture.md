@@ -189,6 +189,18 @@ capture) they close and the regular path opens fresh ones. X11 and Windows
 popups would capture as black without a compositor and fullscreen toplevels
 animate in, so those open after the capture as before.
 
+Precision aids share the overlay's frozen tiles. Fractional global pointer
+coordinates are retained separately from integer selection corners, then
+mapped through the output scale and physical-to-viewport factor. The loupe
+samples the retained BGRA bytes directly and paints a fixed 15×15 grid of
+8-pixel solid cells: nearest-neighbour magnification without new captures,
+image allocations or texture uploads on pointer motion. It samples the
+undimmed source, clamps neighbourhoods at image edges, and flips its panel
+to remain on screen. All overlay decorations wait for a ready frozen frame.
+Debug `overlay frame CPU` logs measure render/layout/paint preparation
+through the final overlay child; they do not include GPU rendering or
+compositor presentation.
+
 ## Shots, documents and the editor
 
 A `Shot` is an immutable capture (`Arc<Image>`, scale, time). Its GPU tiles

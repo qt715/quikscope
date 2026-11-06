@@ -28,6 +28,9 @@ First release.
 - Capture modes: frozen-screen region selection across all outputs, focused
   output, active window, whole screen and fixed geometry.
 - On layer-shell, selection overlays are created while the capture runs.
+- Region precision aids: full-surface crosshair guides, a nearest-neighbour
+  8× loupe with physical pixel coordinates and colour, and a pre-drag hint.
+  All sample the existing frozen frame, including early and fullscreen overlays.
 - Desktop notification with a thumbnail whose click opens the editor;
   `quickscope notifications on|off|toggle|status` switches them at runtime
   and saves the change to the config file.
@@ -51,7 +54,8 @@ First release.
   transparent margin; crops may include them.
 - Color picker (hue/saturation wheel, value and alpha sliders, hex and RGBA
   fields) with live recoloring as one undo step.
-- Shortcut help from `?`, `F1` or the toolbar.
+- Shortcut help from `?`, `F1` or the toolbar; constrained to the window with
+  scrolling and narrow-window reflow, including during text editing with `F1`.
 
 ### Text
 
