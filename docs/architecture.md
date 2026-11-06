@@ -170,14 +170,24 @@ one-line protocol, liveness probe and second-daemon refusal.
 
 ## Region selection
 
-All outputs are captured *before* the overlays open, so the selection shows a
-frozen screen and the final crop comes from that snapshot, not from the
-dimmed overlay. Each output gets a full-screen `wlr-layer-shell` surface on
-the overlay layer with exclusive keyboard focus, painting the frozen image
-from GPU tiles that were built on the background pool while the Hyprland
-window list was fetched. All overlays share one `Selection` entity in global
-logical coordinates; because Wayland keeps delivering motion to the surface
-that received the button press, a drag can cross outputs.
+The selection always shows a frozen screen, and the final crop comes from
+that snapshot, not from the dimmed overlay. Each output gets a full-screen
+`wlr-layer-shell` surface on the overlay layer with exclusive keyboard focus,
+painting the frozen image from GPU tiles that were built on the background
+pool while the window list was fetched. All overlays share one `Selection`
+entity in global logical coordinates; because Wayland keeps delivering motion
+to the surface that received the button press, a drag can cross outputs.
+
+Creating a window costs about as much as the capture itself (~12 ms each,
+mostly surface and swapchain setup), so on layer-shell the two overlap: the
+capture is started first, then one overlay per display opens *transparent*
+and ignoring input while the compositor produces the frame. A frame that
+happens to include the new surface therefore shows the desktop unchanged.
+When the snapshot arrives each overlay receives its output's tiles and
+starts dimming; if an output has no early overlay (hotplug during the
+capture) they close and the regular path opens fresh ones. X11 and Windows
+popups would capture as black without a compositor and fullscreen toplevels
+animate in, so those open after the capture as before.
 
 ## Shots, documents and the editor
 
