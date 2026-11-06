@@ -3,10 +3,10 @@ name = "quickscope"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-description = "Fast Wayland screenshot daemon with a GPUI annotation editor"
+description = "Fast cross-platform screenshot tool with a GPUI annotation editor"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-keywords = ["screenshot", "wayland", "gpui", "annotation"]
+keywords = ["screenshot", "wayland", "x11", "windows", "annotation"]
 categories = ["multimedia::images", "gui"]
 default-run = "quickscope"
 
