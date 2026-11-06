@@ -4,64 +4,70 @@
 
 First release.
 
-- Native Windows 10/11 backend: resident DXGI/GDI capture, per-monitor-v2 DPI,
-  DWM window snapping, delayed PNG/DIB clipboard, tray, configurable global
-  hotkeys, clickable shell notifications and per-user `autostart` management.
-  Windows paths use AppData and the Pictures known folder; IPC retains the
-  line protocol over AF_UNIX. Linux-only dependencies are target-specific.
-- Daemon with line-based IPC over a Unix socket, started on demand by any command.
-- Screenshot portal fallback for Wayland desktops without wlr-screencopy,
-  including layer-shell selection where offered, or a single fullscreen
-  selection tracking its actual output on GNOME; clear permission errors,
-  Xwayland clipboard fallback, and `QUICKSCOPE_BACKEND=portal` selection.
-  Portal cursor, mixed-scale and focus/animation limitations are documented.
-- Capture modes: frozen-screen region selection across all outputs (with
-  window snapping on Hyprland), focused output, active window, whole screen,
-  and fixed geometry.
-- Clipboard ownership through `wlr-data-control`; desktop notification with a
-  thumbnail whose click opens the editor.
-- X11 backend: persistent MIT-SHM capture with GetImage fallback, RandR monitors,
-  XFixes cursor, EWMH window snapping, override-redirect region overlays, and
+### Platforms
+
+- wlroots compositors (Hyprland, sway, river, labwc, …): `wlr-screencopy`
+  capture, layer-shell selection overlays and `wlr-data-control` clipboard
+  ownership; window snapping, `window` mode and focused output via Hyprland
+  IPC.
+- GNOME and KDE Plasma through the Screenshot portal: layer-shell selection
+  where offered, otherwise a single fullscreen selection tracking the output
+  it lands on; clear permission errors; data-control or Xwayland clipboard.
+- X11: persistent MIT-SHM capture with GetImage fallback, RandR monitors,
+  XFixes cursor, EWMH window snapping, override-redirect overlays, and
   PNG/text CLIPBOARD ownership with large-image INCR transfers.
-- GPUI annotation editor: rectangle, ellipse, arrow, line, pen, highlighter,
-  text, numbered steps, pixelate, crop; select/move, undo/redo, zoom/pan with
-  cubic-bezier eased zoom transitions; refits to the window on resize;
-  `Ctrl+S` to `~/Pictures/Screenshots`, `Ctrl+C` to copy.
-- `open-last` and `open <file>`; annotations survive closing the editor. The
-  last-capture cache has a single ordered writer, so rapid or overlapping
-  captures always leave the newest one, and `quit` waits for it.
-- `quickscope notifications on|off|toggle|status`: switch capture notifications
-  at runtime; the change is saved to the config file.
-- Color picker (hue/saturation wheel, value and alpha sliders, hex and RGBA
-  fields) behind the palette button; live recoloring of the selection as one
-  undo step.
-- Font customization for text: family (installed fonts plus bundled Inter
-  variable/italic), weight, italic and size from a font bar above the text,
-  `Ctrl+B`/`Ctrl+I`/`Ctrl+Shift+.`/`Ctrl+Shift+,` shortcuts, and
-  `[editor] font_*` defaults in the config.
-- Text in any language: input methods (fcitx5, IBus) compose into the text
-  tool and the font search field, with the pre-edit underlined in place and
-  the candidate window at the caret; shaping with rustybuzz (kerning,
-  ligatures, Arabic joining, Indic conjuncts), bidirectional text, per-grapheme
-  fallback to installed fonts (CJK variant chosen from the text or locale),
-  colour emoji, and caret movement and deletion by grapheme.
-- Text extraction (Tesseract, loaded at run time): `capture … --text` and
-  `Ctrl+Shift+C` / the scan button in the editor copy a screenshot's text.
-  Each line is read in its own language (English first, then every
-  installed model re-reads doubtful lines in parallel); CJK and Thai
-  spacing, mixed dark/light layouts, `[ocr] languages` in the config.
+- Windows 10/11: resident DXGI capture with GDI fallback, per-monitor-v2 DPI,
+  DWM window snapping, delayed PNG/DIB clipboard, tray menu, configurable
+  global hotkeys, clickable shell notifications and per-user `autostart`.
+- `QUICKSCOPE_BACKEND=wlroots|portal|x11` forces a Linux backend.
+
+### Capture and daemon
+
+- Daemon with line-based IPC over a local socket, started on demand by any
+  command.
+- Capture modes: frozen-screen region selection across all outputs, focused
+  output, active window, whole screen and fixed geometry.
+- On layer-shell, selection overlays are created while the capture runs.
+- Desktop notification with a thumbnail whose click opens the editor;
+  `quickscope notifications on|off|toggle|status` switches them at runtime
+  and saves the change to the config file.
+- `open-last` (with the tool used last) and `open <file>`; annotations
+  survive closing the editor. The last-capture cache has a single ordered
+  writer, so rapid or overlapping captures always leave the newest one, and
+  `quit` waits for it.
+
+### Editor
+
+- Rectangle, ellipse, arrow, line, pen, highlighter, text, numbered steps,
+  pixelate and crop; undo/redo; `Ctrl+S` to `~/Pictures/Screenshots`,
+  `Ctrl+C` to copy.
+- Zoom between fixed levels (10% steps up to 100%, 25% above, 100% = actual
+  pixels) with cubic-bezier eased transitions; the view refits on resize.
+- Select tool: multi-selection by marquee (fully contained), Shift-click and
+  select-all; group move, nudge, style and delete as one undo step;
+  duplicate with `Ctrl+D`; bring to front / send to back; hover cursor and
+  outline on the item a press would grab.
 - Drawings that extend past the screenshot grow the saved image, with a
-  transparent margin; the editor refits to show them and crops may include
-  them.
-- Zoom moves between fixed levels (10% steps up to 100%, 25% above, 100% =
-  actual pixels), one level per wheel notch, still eased; fitting snaps to
-  a level.
-- `open-last` opens the editor with the tool used last.
-- Select tool: hand cursor and an outline on the item a press would grab,
-  and a selected item drags from anywhere inside its box.
-- Editor multi-selection: fully-contained marquee, Shift-click, select-all,
-  group move/nudge/style/delete as one undo step, offset duplication with
-  `Ctrl+D`, stable front/back stacking, per-item outlines and a group box.
-- Grouped shortcut help from `?`, `F1`, or the toolbar help button.
-- Unit, golden-image, GPU/CPU parity, editor interaction, text extraction
-  and headless end-to-end test suites; CI.
+  transparent margin; crops may include them.
+- Color picker (hue/saturation wheel, value and alpha sliders, hex and RGBA
+  fields) with live recoloring as one undo step.
+- Shortcut help from `?`, `F1` or the toolbar.
+
+### Text
+
+- Font bar for text: family (installed fonts plus bundled Inter
+  variable/italic), weight, italic and size; `Ctrl+B`/`Ctrl+I`/
+  `Ctrl+Shift+.`/`Ctrl+Shift+,`; `[editor] font_*` defaults.
+- Text in any language: input methods (fcitx5, IBus) compose into the text
+  tool and the font search field; shaping with rustybuzz, bidirectional
+  text, per-grapheme fallback to installed fonts, colour emoji, and caret
+  movement and deletion by grapheme.
+- Text extraction (Tesseract, loaded at run time): `capture … --text` and
+  `Ctrl+Shift+C` copy a screenshot's text, each line read in its own
+  language; `[ocr] languages` in the config.
+
+### Quality
+
+- Unit, golden-image, GPU/CPU parity, editor interaction, text extraction,
+  Wayland and X11 end-to-end suites; CI on Linux and Windows with release
+  packages for both.
