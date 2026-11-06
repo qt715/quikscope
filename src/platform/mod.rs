@@ -240,7 +240,14 @@ impl Platform {
     /// transparent until the frozen frame arrives, so a capture that sees it
     /// sees the desktop unchanged. X11 and Windows popups would capture as
     /// black without a compositor, and fullscreen toplevels animate in.
-    pub fn early_overlay_options(&self, display: DisplayId) -> Option<WindowOptions> {
+    /// `size` is the display's logical size: anchored to every edge the
+    /// compositor stretches the surface anyway, but GPUI sizes its first
+    /// buffer from it, and its default would leave a centred window.
+    pub fn early_overlay_options(
+        &self,
+        display: DisplayId,
+        size: gpui::Size<gpui::Pixels>,
+    ) -> Option<WindowOptions> {
         match self.surfaces {
             #[cfg(target_os = "linux")]
             Surfaces::LayerShell => {
@@ -248,6 +255,10 @@ impl Platform {
                 Some(WindowOptions {
                     titlebar: None,
                     focus: true,
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size,
+                    })),
                     display_id: Some(display),
                     app_id: Some("quickscope".into()),
                     window_background: WindowBackgroundAppearance::Transparent,

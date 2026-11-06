@@ -1013,3 +1013,35 @@ fn portal_layer_shell_selects_across_outputs() {
         "layer-shell offered by compositor must be used"
     );
 }
+
+#[test]
+fn selection_overlay_covers_a_large_output_edge_to_edge() {
+    // Overlays are created while the capture runs; they must still span
+    // the whole output rather than GPUI's default window size.
+    let big = |s: &Session| {
+        s.helper(&["output", "HEADLESS-1", "0", "1", "2560x1440"]);
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let Some(mut s) = Session::start_with(1, big) else {
+        return;
+    };
+    s.start_daemon();
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    s.wait_overlay(1);
+    let grim = s.root().join("overlay.png");
+    assert!(s.command("grim").arg(&grim).status().unwrap().success());
+    let shot = decode_png(&grim);
+    assert_eq!((shot.width, shot.height), (2560, 1440));
+    // Away from the pointer guides, near every corner: dimmed, not live.
+    for (x, y) in [(40, 1400), (2520, 40), (2520, 1400), (1280, 1400)] {
+        let (seen, live) = (shot.pixel(x, y), pattern_pixel(x, y));
+        let sum = |p: [u8; 4]| p[..3].iter().map(|&c| c as u32).sum::<u32>();
+        assert!(
+            sum(seen) < sum(live),
+            "({x},{y}) not dimmed: {seen:?} vs live {live:?}"
+        );
+    }
+    s.keys(&["escape"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    assert_eq!(out.status.code(), Some(1));
+}

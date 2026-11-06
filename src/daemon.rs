@@ -428,7 +428,7 @@ fn begin_selection(platform: &Platform, cx: &mut App) -> Result<Option<EarlyOver
     let displays = cx.displays();
     if displays
         .first()
-        .and_then(|d| platform.early_overlay_options(d.id()))
+        .and_then(|d| platform.early_overlay_options(d.id(), d.bounds().size))
         .is_none()
     {
         return Ok(None);
@@ -438,7 +438,7 @@ fn begin_selection(platform: &Platform, cx: &mut App) -> Result<Option<EarlyOver
     let mut windows = Vec::with_capacity(displays.len());
     for display in displays {
         let id = display.id();
-        let Some(options) = platform.early_overlay_options(id) else {
+        let Some(options) = platform.early_overlay_options(id, display.bounds().size) else {
             continue;
         };
         let selection = selection.clone();
