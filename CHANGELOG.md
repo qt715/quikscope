@@ -44,5 +44,7 @@ First release.
   actual pixels), one level per wheel notch, still eased; fitting snaps to
   a level.
 - `open-last` opens the editor with the tool used last.
+- Select tool: hand cursor and an outline on the item a press would grab,
+  and a selected item drags from anywhere inside its box.
 - Unit, golden-image, GPU/CPU parity, editor interaction, text extraction
   and headless end-to-end test suites; CI.

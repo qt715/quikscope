@@ -142,7 +142,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("moment notifications toggle"
 
 | Tool | Keys |
 | --- | --- |
-| Select / move | `V` `1` — click to select, drag to move, `Del` deletes, arrows nudge (`Shift` ×10), double-click text to edit |
+| Select / move | `V` `1` — drag any item (text, shapes, strokes, steps, pixelation) to move it; the cursor turns into a hand and the item is outlined when a press would grab it. A selected item also drags from anywhere inside its box (handy for hollow rectangles and thin arrows). `Del` deletes, arrows nudge (`Shift` ×10), double-click text to edit; each move is one undo step |
 | Pan | `H`, `Space`+drag, middle drag, scroll |
 | Rectangle | `R` `2` (`Shift` = square) |
 | Ellipse | `O` `3` (`Shift` = circle) |
