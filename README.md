@@ -78,7 +78,7 @@ instead of fading in. On sway, add `for_window [app_id="moment"] floating enable
 
 ```text
 moment capture <region|output|window|screen> [options]
-moment open-last          open the latest capture in the editor
+moment open-last          open the latest capture in the editor, with the tool you used last
 moment open <FILE>        annotate any PNG/JPEG/WebP
 moment notifications <on|off|toggle|status>
 moment daemon             run the daemon in the foreground

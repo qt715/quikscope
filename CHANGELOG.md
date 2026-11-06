@@ -38,5 +38,6 @@ First release.
 - Zoom moves between fixed levels (10% steps up to 100%, 25% above, 100% =
   actual pixels), one level per wheel notch, still eased; fitting snaps to
   a level.
+- `open-last` opens the editor with the tool used last.
 - Unit, golden-image, GPU/CPU parity, editor interaction and headless
   end-to-end test suites; CI.

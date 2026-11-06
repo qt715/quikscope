@@ -82,7 +82,8 @@ the cache; malformed requests; rotated + scaled outputs against `grim`; and
 two outputs, including a selection dragged across them; and input methods:
 inactive while the editor is focused but no text is being typed, active
 with the text tool, pre-edit drawn in place, commits (CJK and single-byte)
-replacing it, and the saved text measuring exactly the committed string.
+replacing it, and the saved text measuring exactly the committed string;
+and `open-last` reopening with the last tool used.
 
 Set `MOMENT_E2E_KEEP=1` to keep a session's directory (compositor and daemon
 logs) after the test, and `MOMENT_E2E_COMPOSITOR=sway` to pick the
