@@ -1,9 +1,8 @@
 # quickscope
 
-A fast screenshot tool for X11, Wayland desktops and Windows 10/11, with a
-built-in annotation editor written in [GPUI](https://gpui.rs). Native
-wlroots capture is preferred; GNOME and KDE Plasma use the desktop
-Screenshot portal.
+A fast screenshot tool for Linux (wlroots compositors such as Hyprland and
+sway, GNOME, KDE Plasma, X11) and Windows 10/11, with a built-in annotation
+editor written in [GPUI](https://gpui.rs).
 
 ```text
 keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
@@ -15,12 +14,16 @@ keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ c
                                                  ~/Pictures/Screenshots/screenshot_*.png
 ```
 
-- **Fast.** A resident daemon keeps the Wayland connection, GPU device and
-  shared-memory buffers warm. A 2560×1440 capture reaches the clipboard in
-  ~15 ms end to end, and the editor paints its first frame ~5 ms after it is
-  created (see [Performance](#performance)).
+- **Fast.** A resident daemon keeps the display connection, capture buffers
+  and GPU device warm. A 2560×1440 capture reaches the clipboard in ~15 ms
+  end to end, and the editor paints its first frame ~5 ms after it is created
+  (see [Performance](#performance)).
+- **Native on each desktop.** `wlr-screencopy` on wlroots compositors, the
+  Screenshot portal on GNOME and KDE Plasma, MIT-SHM on X11, DXGI on Windows;
+  the backend is picked at start-up ([details](#desktops)).
 - **Freeze-frame region selection** on every output at once, with window
-  snapping on Hyprland (click a window to take exactly that window).
+  snapping on Hyprland, X11 and Windows (click a window to take exactly that
+  window).
 - **Excalidraw-style editor**: rectangle, ellipse, arrow, line, pen,
   highlighter, text, numbered steps, pixelate (redaction) and crop, with
   undo/redo, zoom and pan. What you see is exactly what gets saved — the
@@ -29,17 +32,13 @@ keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ c
   English and other European languages, Chinese, Japanese, Korean,
   Vietnamese, Thai and Arabic, each line read in its own language
   ([details](docs/text-extraction.md)).
-- **Plain IPC**: one text line over a Unix socket; usable from keybinds,
+- **Plain IPC**: one text line over a local socket; usable from keybinds,
   scripts or `socat`.
 
 ## Install
 
-Requires an X11 server with a 24/32-bit TrueColor root visual or a Wayland
-compositor, and Rust ≥ 1.95 to build. Native Wayland capture uses
-`wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`. Other desktops
-need a session D-Bus, `xdg-desktop-portal` and their matching backend
-(`xdg-desktop-portal-gnome` or `xdg-desktop-portal-kde`; install through
-your distribution). A session D-Bus notification server is optional.
+Build with Rust ≥ 1.95. On Linux, see [Desktops](#desktops) for what each
+desktop needs; on Windows, see [Windows 10/11](#windows-1011).
 
 ```sh
 cargo install --locked --path .
@@ -53,16 +52,6 @@ install -Dm644 packaging/quickscope.desktop ~/.local/share/applications/quicksco
 The daemon is optional at login: any `quickscope` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
 
-On X11, `DISPLAY` selects the backend when `WAYLAND_DISPLAY` is unset.
-`QUICKSCOPE_BACKEND=x11` explicitly selects it (including on Xwayland).
-MIT-SHM accelerates local captures; remote servers fall back to GetImage.
-RandR 1.5 monitor names identify outputs; older servers expose one `screen-N`
-output. X11 coordinates are physical pixels (scale 1). An EWMH window manager
-enables active-window capture, window snapping and focused-output detection;
-without one those queries are unknown. No X11 command-line helpers are needed
-at runtime. Clipboard PNGs are served without re-encoding, including large
-images via the X11 INCR protocol.
-
 Text extraction additionally needs Tesseract and a model per language,
 loaded at run time (nothing extra to build):
 
@@ -75,7 +64,130 @@ sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-jpn tesseract-ocr
   tesseract-ocr-kor tesseract-ocr-vie tesseract-ocr-tha tesseract-ocr-ara
 ```
 
-## Windows 10/11
+## Desktops
+
+The daemon picks a backend at start-up and logs it (`platform backend: …`);
+`QUICKSCOPE_BACKEND=wlroots|portal|x11` on the daemon forces one.
+
+| Desktop | Capture | Region overlay | Window snapping, `window` mode |
+| --- | --- | --- | --- |
+| Hyprland, sway, river, labwc, … | `wlr-screencopy` | layer-shell, all outputs | Hyprland only |
+| KDE Plasma | Screenshot portal | layer-shell, all outputs | no |
+| GNOME | Screenshot portal | one fullscreen window, one output | no |
+| X11 | MIT-SHM (GetImage remotely) | override-redirect popups | EWMH window managers |
+| Windows 10/11 | DXGI duplication (GDI fallback) | topmost popups | yes |
+
+### wlroots compositors
+
+Needs `wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`, which every
+wlroots compositor and Hyprland provide. Bind keys as shown for
+[Hyprland](#hyprland); on sway:
+
+```ini
+bindsym Print exec quickscope capture region
+bindsym Shift+Print exec quickscope capture screen
+bindsym $mod+Shift+e exec quickscope open-last
+for_window [app_id="quickscope"] floating enable
+```
+
+### Hyprland
+
+`hyprland.lua`:
+
+```lua
+hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("quickscope capture region"), { description = "Screenshot region" })
+hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("quickscope capture output"), { description = "Screenshot monitor" })
+hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quickscope capture region --edit"), { description = "Annotate region" })
+hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quickscope open-last"), { description = "Edit last screenshot" })
+hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quickscope capture region --text"), { description = "Copy text from region" })
+
+hl.window_rule({ match = { class = "^(quickscope)$" }, float = true, center = true })
+hl.layer_rule({ match = { namespace = "^(quickscope-selection)$" }, no_anim = true })
+```
+
+`hyprland.conf`:
+
+```ini
+bind = $mainMod SHIFT, S, exec, quickscope capture region
+bind = $mainMod SHIFT CTRL, S, exec, quickscope capture output
+bind = $mainMod SHIFT ALT, S, exec, quickscope capture region --edit
+bind = $mainMod SHIFT, E, exec, quickscope open-last
+bind = $mainMod SHIFT, X, exec, quickscope capture region --text
+windowrule = float on, match:class ^(quickscope)$
+windowrule = center on, match:class ^(quickscope)$
+layerrule = no_anim on, match:namespace ^(quickscope-selection)$
+```
+
+`no_anim` on the selection layer makes the frozen overlay appear instantly
+instead of fading in.
+
+### GNOME / KDE Plasma (portal)
+
+Needs a session D-Bus, `xdg-desktop-portal` and the desktop's backend
+(`xdg-desktop-portal-gnome` or `xdg-desktop-portal-kde`), which those
+desktops install by default. Bind keys in Settings → Keyboard → Custom
+Shortcuts (GNOME) or System Settings → Shortcuts → Add New → Command (KDE)
+with commands such as `quickscope capture region`. On GNOME from a terminal:
+
+```sh
+p=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/quickscope/
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$p']"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p name 'Screenshot region'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p command 'quickscope capture region'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p binding '<Shift><Super>s'
+```
+
+(The first command replaces existing custom shortcuts; merge the list by hand
+if you have some.)
+
+The daemon falls back to `org.freedesktop.portal.Screenshot` when
+`wlr-screencopy` is unavailable. Set `QUICKSCOPE_BACKEND=portal` on the
+daemon to force it (or `QUICKSCOPE_BACKEND=wlroots` to require native capture).
+The desktop can still ask permission despite `interactive=false`; accept
+its permission dialog to capture. Cancelling or denying returns a clear error.
+
+Portal capture decodes a PNG file and is slower than native screencopy.
+The portal controls cursor inclusion: `--cursor` / `--no-cursor` cannot
+override it. On KDE and other desktops offering layer-shell, region
+selection spans all outputs. Without layer-shell (normally GNOME), a
+single fullscreen normal window shows the frozen frame of the output
+where the compositor places it; selection is confined to that output.
+`screen` and fixed geometry captures can still span outputs. Desktop
+fullscreen/focus animations can delay appearance; disable them in desktop
+settings if needed. There is no window list/snapping or active-window
+capture; `output` defaults to the first output. The portal raster must
+cover the logical desktop at a uniform scale; incompatible mixed-scale
+rasters are rejected rather than cropped incorrectly.
+
+Clipboard uses data-control where available (including supported KDE
+versions), otherwise Xwayland CLIPBOARD when DISPLAY is set. GNOME normally
+bridges that selection to native Wayland apps. Without either backend, use
+`--no-clipboard --save` (or edit/save). Notifications still work.
+For diagnostics, `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
+the single-output fullscreen path, even on a layer-shell compositor.
+Portal PNGs are not deleted: the API does not transfer ownership, and
+GNOME/KDE may save into Pictures rather than create disposable files.
+
+### X11
+
+On X11, `DISPLAY` selects the backend when `WAYLAND_DISPLAY` is unset.
+`QUICKSCOPE_BACKEND=x11` explicitly selects it (including on Xwayland).
+MIT-SHM accelerates local captures; remote servers fall back to GetImage.
+RandR 1.5 monitor names identify outputs; older servers expose one `screen-N`
+output. X11 coordinates are physical pixels (scale 1). An EWMH window manager
+enables active-window capture, window snapping and focused-output detection;
+without one those queries are unknown. No X11 command-line helpers are needed
+at runtime. Clipboard PNGs are served without re-encoding, including large
+images via the X11 INCR protocol.
+
+Bind keys in your window manager or desktop settings, e.g. i3:
+
+```ini
+bindsym Print exec --no-startup-id quickscope capture region
+bindsym Shift+Print exec --no-startup-id quickscope capture screen
+```
+
+### Windows 10/11
 
 Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Studio C++ Build Tools:
 
@@ -112,67 +224,6 @@ boundary, so mixed-DPI monitors retain their actual desktop layout and saved
 pixel resolution. Protected/secure desktops and protected video cannot be
 captured. Text extraction optionally needs Tesseract's `libtesseract-5.dll`
 (or `tesseract55.dll` / `libtesseract.dll`) on `PATH` and traineddata models.
-
-## Hyprland
-
-`hyprland.lua`:
-
-```lua
-hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("quickscope capture region"), { description = "Screenshot region" })
-hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("quickscope capture output"), { description = "Screenshot monitor" })
-hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quickscope capture region --edit"), { description = "Annotate region" })
-hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quickscope open-last"), { description = "Edit last screenshot" })
-hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quickscope capture region --text"), { description = "Copy text from region" })
-
-hl.window_rule({ match = { class = "^(quickscope)$" }, float = true, center = true })
-hl.layer_rule({ match = { namespace = "^(quickscope-selection)$" }, no_anim = true })
-```
-
-`hyprland.conf`:
-
-```ini
-bind = $mainMod SHIFT, S, exec, quickscope capture region
-bind = $mainMod SHIFT CTRL, S, exec, quickscope capture output
-bind = $mainMod SHIFT ALT, S, exec, quickscope capture region --edit
-bind = $mainMod SHIFT, E, exec, quickscope open-last
-bind = $mainMod SHIFT, X, exec, quickscope capture region --text
-windowrule = float on, match:class ^(quickscope)$
-windowrule = center on, match:class ^(quickscope)$
-layerrule = no_anim on, match:namespace ^(quickscope-selection)$
-```
-
-`no_anim` on the selection layer makes the frozen overlay appear instantly
-instead of fading in. On sway, add `for_window [app_id="quickscope"] floating enable`.
-
-## GNOME / KDE Plasma (portal)
-
-The daemon falls back to `org.freedesktop.portal.Screenshot` when
-`wlr-screencopy` is unavailable. Set `QUICKSCOPE_BACKEND=portal` on the
-daemon to force it (or `QUICKSCOPE_BACKEND=wlroots` to require native capture).
-The desktop can still ask permission despite `interactive=false`; accept
-its permission dialog to capture. Cancelling or denying returns a clear error.
-
-Portal capture decodes a PNG file and is slower than native screencopy.
-The portal controls cursor inclusion: `--cursor` / `--no-cursor` cannot
-override it. On KDE and other desktops offering layer-shell, region
-selection spans all outputs. Without layer-shell (normally GNOME), a
-single fullscreen normal window shows the frozen frame of the output
-where the compositor places it; selection is confined to that output.
-`screen` and fixed geometry captures can still span outputs. Desktop
-fullscreen/focus animations can delay appearance; disable them in desktop
-settings if needed. There is no window list/snapping or active-window
-capture; `output` defaults to the first output. The portal raster must
-cover the logical desktop at a uniform scale; incompatible mixed-scale
-rasters are rejected rather than cropped incorrectly.
-
-Clipboard uses data-control where available (including supported KDE
-versions), otherwise Xwayland CLIPBOARD when DISPLAY is set. GNOME normally
-bridges that selection to native Wayland apps. Without either backend, use
-`--no-clipboard --save` (or edit/save). Notifications still work.
-For diagnostics, `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
-the single-output fullscreen path, even on a layer-shell compositor.
-Portal PNGs are not deleted: the API does not transfer ownership, and
-GNOME/KDE may save into Pictures rather than create disposable files.
 
 ## Usage
 
@@ -294,7 +345,7 @@ build); a real GPU and a high-refresh compositor are faster still.
 | `quickscope ping` round trip (client start-up + IPC) | ~1 ms |
 | `quickscope capture screen` round trip | ~15 ms (13 ms is the compositor delivering the next frame) |
 | Clipboard PNG ready (encoded in the background) | ~22 ms after capture |
-| Region overlay windows open after the freeze | ~15 ms |
+| Region overlay shows the frozen frame after the request | ~17 ms (window creation overlaps the capture on layer-shell) |
 | Editor first frame after its window is created | ~5 ms |
 
 How: no per-capture setup (bound globals, reused `wl_shm` buffers), all
@@ -312,9 +363,11 @@ test described in [docs/testing.md](docs/testing.md).
 
 ## Limitations
 
-- Wayland capture needs wlroots protocols; GNOME and KDE lack `wlr-screencopy`.
-- On Wayland, window snapping, `window` mode and focused-output detection need Hyprland.
+- On Wayland, window snapping, `window` mode and focused-output detection need
+  Hyprland. GNOME confines region selection to one output (see
+  [GNOME / KDE Plasma](#gnome--kde-plasma-portal)).
 - X11 capture supports 24/32-bit TrueColor; monitors have no independent scale.
+- macOS is not supported.
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.
 

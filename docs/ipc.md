@@ -2,9 +2,9 @@
 
 The daemon listens on `$XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock`
 (mode 0600); on X11 the name is `quickscope-x11-<display>.sock`, e.g.
-`quickscope-x11-0.sock` for `DISPLAY=:0`. `QUICKSCOPE_SOCKET` overrides the
-path for both sides. Each
-connection carries exactly one request line and one response line, UTF-8,
+`quickscope-x11-0.sock` for `DISPLAY=:0`. On Windows it is an AF_UNIX
+socket at `%LOCALAPPDATA%\quickscope\ipc.sock`. `QUICKSCOPE_SOCKET`
+overrides the path for both sides. Each connection carries exactly one request line and one response line, UTF-8,
 `\n`-terminated.
 
 ```sh
