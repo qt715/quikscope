@@ -50,7 +50,9 @@ dispatch (key and mouse events, painted between steps so hit-testing uses
 current layout): text formatting shortcuts while typing and on a selected
 text shape, a color-picker wheel drag that must recolor the selection as
 exactly one undo step, an input-method composition (pre-edit, candidate
-window position, commit) through the editor's `EntityInputHandler`.
+window position, commit) through the editor's `EntityInputHandler`, and a
+text field receiving Backspace mid-composition (its pre-edit range must not
+outlive the text).
 
 ## End to end
 
