@@ -4,6 +4,11 @@
 
 First release.
 
+- Native Windows 10/11 backend: resident DXGI/GDI capture, per-monitor-v2 DPI,
+  DWM window snapping, delayed PNG/DIB clipboard, tray, configurable global
+  hotkeys, clickable shell notifications and per-user `autostart` management.
+  Windows paths use AppData and the Pictures known folder; IPC retains the
+  line protocol over AF_UNIX. Linux-only dependencies are target-specific.
 - Daemon with line-based IPC over a Unix socket, started on demand by any command.
 - Capture modes: frozen-screen region selection across all outputs (with
   window snapping on Hyprland), focused output, active window, whole screen,

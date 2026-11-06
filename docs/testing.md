@@ -43,6 +43,30 @@ checks; `QUICKSCOPE_REQUIRE_OCR=1` (set in CI) makes it a failure. CI installs
 Debian's "fast" models without `chi_tra`, see
 [text extraction](text-extraction.md#limits).
 
+## Windows
+
+Native gates are `cargo build --release`, `cargo clippy --all-targets -- -D
+warnings`, and `cargo test`. The `windows-latest` CI job runs those gates
+with `--locked`: library tests, CLI parsing, CPU golden-image regressions and
+optional OCR tests. Missing Tesseract/models skip OCR unless
+`QUICKSCOPE_REQUIRE_OCR=1`. `editor_render` and `editor_ui` are cfg-excluded:
+GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
+The Wayland-only `e2e` feature is not enabled by Windows CI.
+
+Interactive verification must use a private Windows VM desktop, never a
+non-interactive service session or another user's live desktop. Check the tray,
+screen capture PNG against the real desktop, delayed image clipboard,
+region drag, Esc cancellation, PrintScreen, notification click to editor,
+and editor Ctrl+S to the Pictures known folder's `Screenshots` directory.
+Native verification is distinct from a Linux `cargo xwin check` pre-check.
+
+For capture-method timings, run the ignored native test in that interactive
+session: `cargo test --release capture_latency -- --ignored --nocapture`.
+It reports resolution and median/p95 for 100 warm captures after ten
+warmups, separately for GDI and DXGI. DXGI availability fallback is explicitly
+labeled; do not call fallback timings duplication measurements. No latency
+numbers are asserted without running the benchmark on the target desktop.
+
 ## Golden images
 
 `render_regression` renders a fixed scene containing every annotation kind

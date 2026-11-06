@@ -54,6 +54,7 @@ socket.
 | --- | --- | --- | --- | --- |
 | `wlroots` | `wlr-screencopy` | `wlr-data-control` | layer-shell | Hyprland IPC when present |
 | `x11` | MIT-SHM GetImage, core GetImage fallback | CLIPBOARD selection, PNG/text, INCR | override-redirect PopUp | EWMH |
+| `windows` | resident DXGI Desktop Duplication, reusable GDI fallback | delayed PNG + DIBV5/DIB/Unicode | borderless topmost GPUI popup | DWM foreground bounds and filtered top-level Z order |
 
 X11 keeps separate persistent connections for capture, EWMH queries and
 clipboard ownership. The capture thread reuses a SysV shared-memory segment;
@@ -64,6 +65,30 @@ the same encoded bytes; large transfers advance only when the requestor deletes
 the previous INCR property. Popups bypass the window manager, so region selection
 sets native keyboard focus after they map and restores the prior focus on exit.
 There is no X11 GPU prewarm window because it could flash on the desktop.
+
+
+GPUI's executable manifest requests per-monitor-v2 DPI awareness; quickscope
+verifies it (and sets it if absent) before creating any HWND. Its
+snapshot coordinate unit is a physical desktop pixel (scale = 1), preserving
+the virtual desktop lattice at mixed DPI, including negative origins.
+GPUI 0.3.10 instead divides each monitor's global origin by its own scale;
+using those origins for composition would introduce gaps/overlaps. The
+Windows monitor placement maps physical bounds to GPUI DIPs; the shared overlay
+viewport mapping converts pointer positions and selection highlights between
+physical pixels and surface DIPs for both X11 and Windows.
+Thus cross-monitor crops and DWM window bounds retain native pixels.
+
+All DXGI COM/GDI resources stay on one capture thread. Duplication, device,
+staging texture, DC and DIB allocations survive requests; timeout reuses a
+valid last frame, while access loss discards duplication resources for
+recreation. Unsupported duplication falls back to GDI. Cursor-free captures
+use GDI when DXGI reports an already-embedded pointer; requested cursors are
+drawn with their actual hotspot. The hidden shell window owns the tray,
+registered hotkeys and delayed clipboard formats. PNG encoding starts once
+with `PendingPng`, and WM_RENDERFORMAT serves those same encoded bytes.
+The Windows IPC transport is AF_UNIX (Windows 10 1803+), under the current
+user's LocalAppData directory and its inherited ACL, retaining the same
+one-line protocol, liveness probe and second-daemon refusal.
 
 ## Capture path
 

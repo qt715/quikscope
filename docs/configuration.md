@@ -1,6 +1,8 @@
 # Configuration
 
 `$XDG_CONFIG_HOME/quickscope/config.toml` (usually `~/.config/quickscope/config.toml`).
+On Windows: `%APPDATA%\quickscope\config.toml`; the default save directory
+is the Pictures known folder plus `Screenshots`, and `~` means `%USERPROFILE%`.
 Every key is optional; unknown keys are rejected so typos do not pass
 silently. The daemon reads the file at start-up (`quickscope quit` to reload).
 
@@ -47,6 +49,15 @@ font_italic = false
 # everything, the others re-read lines it is unsure of. Empty (the default):
 # English first, then every installed model.
 languages = []
+
+[hotkeys]
+# Windows-only global shortcuts; accepted/validated but unused on Linux.
+# Empty string disables a shortcut. Modifiers: Ctrl, Alt, Shift, Win.
+# Keys: PrintScreen, F1–F24, A–Z, 0–9. Duplicate bindings are rejected.
+region = "PrintScreen"
+screen = "Ctrl+PrintScreen"
+window = "Alt+PrintScreen"
+open_last = "Shift+PrintScreen"
 ```
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,
@@ -65,3 +76,5 @@ change would make invalid is left untouched and the command fails).
 | `QUICKSCOPE_LOG` | Log filter (`env_logger` syntax), e.g. `quickscope=debug` for per-step timings. |
 | `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | Standard locations. |
 | `HYPRLAND_INSTANCE_SIGNATURE` | Hyprland instance to query; when unset, a single running instance is found automatically. |
+| `APPDATA`, `LOCALAPPDATA`, `USERPROFILE` | Windows config, cache/IPC and home locations. |
+| `QUICKSCOPE_WINDOWS_CAPTURE` | Windows capture method: `dxgi` (default with GDI availability fallback) or forced `gdi`, for measurements. |

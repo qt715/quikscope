@@ -1,8 +1,8 @@
 # quickscope
 
-A fast screenshot tool for X11 and wlroots-based Wayland desktops (Hyprland,
-sway, labwc, river, …) with a built-in annotation editor written in
-[GPUI](https://gpui.rs).
+A fast screenshot tool for X11, wlroots-based Wayland desktops (Hyprland,
+sway, labwc, river, …) and Windows 10/11, with a built-in annotation editor
+written in [GPUI](https://gpui.rs).
 
 ```text
 keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
@@ -71,6 +71,44 @@ sudo pacman -S tesseract tesseract-data-eng tesseract-data-jpn tesseract-data-ch
 sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-jpn tesseract-ocr-chi-sim \
   tesseract-ocr-kor tesseract-ocr-vie tesseract-ocr-tha tesseract-ocr-ara
 ```
+
+## Windows 10/11
+
+Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Studio C++ Build Tools:
+
+```powershell
+cargo install --locked --path .
+quickscope autostart on
+quickscope capture screen --save
+```
+
+`autostart on|off|status` manages only the current user's `quickscope` value
+under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The daemon has no
+console window; commands attach to the invoking terminal.
+
+The notification-area icon offers region, screen and window capture, the
+latest screenshot, notifications on/off and quit. Default global shortcuts:
+`PrintScreen` = region, `Ctrl+PrintScreen` = screen, `Alt+PrintScreen` =
+foreground window, `Shift+PrintScreen` = open last. Configure or disable them
+in [`[hotkeys]`](docs/configuration.md); Windows or another application can
+reserve a shortcut, in which case startup logs the registration error.
+
+Configuration is `%APPDATA%\quickscope\config.toml`, cache/log/IPC live in
+`%LOCALAPPDATA%\quickscope`, and saves use the Windows Pictures known folder
+plus `Screenshots` (including redirected Pictures folders). Clipboard images
+offer registered `PNG`, `CF_DIBV5` and `CF_DIB`; text uses `CF_UNICODETEXT`.
+Capture notifications use Windows shell balloons; their display duration and
+visibility follow Windows notification settings.
+
+Capture retains DXGI duplication resources and falls back to reusable GDI
+buffers when duplication is unavailable (including some virtual displays).
+`QUICKSCOPE_WINDOWS_CAPTURE=gdi` forces GDI for comparison. Coordinates passed
+to `--geometry` on Windows are **physical desktop pixels**, including negative
+monitor origins. The per-monitor-v2-aware overlay converts surface DIPs at its
+boundary, so mixed-DPI monitors retain their actual desktop layout and saved
+pixel resolution. Protected/secure desktops and protected video cannot be
+captured. Text extraction optionally needs Tesseract's `libtesseract-5.dll`
+(or `tesseract55.dll` / `libtesseract.dll`) on `PATH` and traineddata models.
 
 ## Hyprland
 
