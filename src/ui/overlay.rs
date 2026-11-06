@@ -46,6 +46,12 @@ impl Selection {
         )
     }
 
+    /// Windows to snap to; for overlays opened before the window list was
+    /// known.
+    pub fn set_windows(&mut self, windows: Vec<WindowRect>) {
+        self.windows = windows;
+    }
+
     pub fn finish(&mut self, result: Option<IRect>) {
         if let Some(tx) = self.done.take() {
             let _ = tx.send(result);
@@ -113,6 +119,10 @@ pub struct Overlay {
     pointer_seen: bool,
     fullscreen: Option<Vec<FullscreenFrame>>,
     display: Option<DisplayId>,
+    /// False while an overlay opened ahead of the capture waits for its
+    /// frozen frame ([`Overlay::pending`]); it then paints nothing and
+    /// ignores input, so the live desktop shows through unchanged.
+    has_frame: bool,
 }
 
 impl Overlay {
@@ -138,7 +148,37 @@ impl Overlay {
             pointer_seen: false,
             fullscreen: None,
             display: None,
+            has_frame: true,
         }
+    }
+
+    /// An overlay opened before its output's frame exists; see
+    /// [`Overlay::set_frame`].
+    pub fn pending(
+        selection: Entity<Selection>,
+        window: &mut Window,
+        cx: &mut Context<Overlay>,
+    ) -> Overlay {
+        let mut overlay = Self::new(selection, IRect::default(), 1, Arc::from([]), window, cx);
+        overlay.has_frame = false;
+        overlay
+    }
+
+    /// Shows the frozen frame of the output covering `output` (global
+    /// logical coordinates).
+    pub fn set_frame(
+        &mut self,
+        output: IRect,
+        image_width: u32,
+        tiles: Arc<[Tile]>,
+        cx: &mut Context<Self>,
+    ) {
+        self.output = output;
+        self.image_width = image_width;
+        self.scale = image_width as f32 / output.w.max(1) as f32;
+        self.tiles = tiles;
+        self.has_frame = true;
+        cx.notify();
     }
 
     pub fn fullscreen(
@@ -207,8 +247,13 @@ impl Overlay {
         }
     }
 
+    /// Whether the frozen frame is on screen and input means something.
+    fn ready(&self) -> bool {
+        self.has_frame && (self.fullscreen.is_none() || self.display.is_some())
+    }
+
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.fullscreen.is_some() && self.display.is_none() {
+        if !self.ready() {
             return;
         }
         let (x, y) = self.global(ev.position, window);
@@ -226,7 +271,7 @@ impl Overlay {
         match ev.keystroke.key.as_str() {
             "escape" | "q" => self.cancel(cx),
             // Enter takes the whole output under the keyboard focus.
-            "enter" if self.fullscreen.is_none() || self.display.is_some() => {
+            "enter" if self.ready() => {
                 let out = self.output;
                 self.selection.update(cx, |s, _| s.finish(Some(out)));
             }
@@ -253,7 +298,8 @@ impl Render for Overlay {
         let image_width = self.image_width;
         // A fullscreen surface can land on any output; never flash the first
         // candidate's frozen frame before Wayland tells us where it mapped.
-        let ready = self.fullscreen.is_none() || self.display.is_some();
+        let ready = self.ready();
+        let has_frame = self.has_frame;
         let scale = self.scale;
         let highlight = self.selection.read(cx).highlight();
         if let Some(opened) = self.opened.take() {
@@ -317,7 +363,11 @@ impl Render for Overlay {
                         if ready {
                             paint_tiles(window, &tiles, xf, bounds);
                         }
-                        paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
+                        // Dimming before the frame exists would darken the
+                        // live desktop, and the capture still being taken.
+                        if has_frame {
+                            paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
+                        }
 
                         let sel = selection.clone();
                         let overlay = this.clone();
@@ -325,12 +375,17 @@ impl Render for Overlay {
                             if phase != DispatchPhase::Bubble {
                                 return;
                             }
-                            let (x, y) = overlay.update(cx, |o, _| {
+                            let Some((x, y)) = overlay.update(cx, |o, _| {
+                                if !o.ready() {
+                                    return None;
+                                }
                                 if !std::mem::replace(&mut o.pointer_seen, true) {
                                     log::debug!("overlay has the pointer");
                                 }
-                                o.global(ev.position, window)
-                            });
+                                Some(o.global(ev.position, window))
+                            }) else {
+                                return;
+                            };
                             sel.update(cx, |s, cx| {
                                 s.motion(x, y);
                                 cx.notify();
@@ -342,7 +397,11 @@ impl Render for Overlay {
                             if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
                                 return;
                             }
-                            let (x, y) = overlay.read(cx).global(ev.position, window);
+                            let o = overlay.read(cx);
+                            if !o.ready() {
+                                return;
+                            }
+                            let (x, y) = o.global(ev.position, window);
                             sel.update(cx, |s, cx| {
                                 s.release(x, y, output);
                                 cx.notify();

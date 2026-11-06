@@ -234,6 +234,39 @@ pub fn connect(events: EventSink) -> Platform {
 }
 
 impl Platform {
+    /// Options for a selection overlay opened on `display` *before* the
+    /// capture finishes, so window creation overlaps with the compositor
+    /// producing the frame. Only layer-shell qualifies: the surface is
+    /// transparent until the frozen frame arrives, so a capture that sees it
+    /// sees the desktop unchanged. X11 and Windows popups would capture as
+    /// black without a compositor, and fullscreen toplevels animate in.
+    pub fn early_overlay_options(&self, display: DisplayId) -> Option<WindowOptions> {
+        match self.surfaces {
+            #[cfg(target_os = "linux")]
+            Surfaces::LayerShell => {
+                use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
+                Some(WindowOptions {
+                    titlebar: None,
+                    focus: true,
+                    display_id: Some(display),
+                    app_id: Some("quickscope".into()),
+                    window_background: WindowBackgroundAppearance::Transparent,
+                    kind: WindowKind::LayerShell(LayerShellOptions {
+                        namespace: "quickscope-selection".into(),
+                        layer: Layer::Overlay,
+                        anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                        exclusive_zone: Some(px(-1.)),
+                        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            }
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
     /// Window options for the selection overlay covering `logical` (global
     /// logical coordinates) on the output called `name`.
     pub fn overlay_options(&self, name: &str, logical: IRect, _cx: &App) -> WindowOptions {

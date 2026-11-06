@@ -18,8 +18,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use gpui::{
-    App, AppContext as _, AsyncApp, BorrowAppContext as _, Entity, Global, QuitMode, WindowBounds,
-    WindowHandle, WindowOptions, px, size,
+    App, AppContext as _, AsyncApp, BorrowAppContext as _, DisplayId, Entity, Global, QuitMode,
+    WindowBounds, WindowHandle, WindowOptions, px, size,
 };
 
 use crate::cache::LastCapture;
@@ -373,8 +373,25 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
                     .context("the active window is not on any output")?
             }
             Mode::Region => {
-                let snap = snapshot(&capturer, None, cursor, cx).await?;
-                let Some(rect) = select_region(&snap, &platform, cx).await? else {
+                // The capture runs while the overlays are being created.
+                let snap = {
+                    let capturer = capturer.clone();
+                    cx.background_spawn(async move { capturer.capture(None, cursor) })
+                };
+                let early = cx.update(|cx| begin_selection(&platform, cx))?;
+                log::debug!(
+                    "selection claimed {:.1}ms after the request",
+                    started.elapsed().as_secs_f64() * 1e3
+                );
+                let snap = match snap.await {
+                    Ok(snap) => snap,
+                    Err(e) => {
+                        let windows = early.map(|e| e.windows.into_iter().map(|(_, w)| w));
+                        end_selection(windows.into_iter().flatten(), cx);
+                        return Err(e);
+                    }
+                };
+                let Some(rect) = select_region(&snap, &platform, early, cx).await? else {
                     return Ok(None);
                 };
                 cx.background_spawn(async move { snap.compose(rect) })
@@ -393,17 +410,80 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
     finish_capture(shot, opts, config, cx).await.map(Some)
 }
 
+/// Selection overlays opened while the capture is still in flight.
+struct EarlyOverlays {
+    selection: Entity<Selection>,
+    done: oneshot::Receiver<Option<IRect>>,
+    windows: Vec<(DisplayId, WindowHandle<Overlay>)>,
+}
+
+/// Claims the (single) interactive selection and, where the platform allows
+/// it, opens a transparent overlay per display right away: creating the
+/// windows then overlaps with the compositor producing the frame instead of
+/// following it.
+fn begin_selection(platform: &Platform, cx: &mut App) -> Result<Option<EarlyOverlays>> {
+    if cx.update_global::<Daemon, _>(|d, _| std::mem::replace(&mut d.selecting, true)) {
+        bail!("a selection is already in progress");
+    }
+    let displays = cx.displays();
+    if displays
+        .first()
+        .and_then(|d| platform.early_overlay_options(d.id()))
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let (selection, done) = Selection::new(Vec::new());
+    let selection = cx.new(|_| selection);
+    let mut windows = Vec::with_capacity(displays.len());
+    for display in displays {
+        let id = display.id();
+        let Some(options) = platform.early_overlay_options(id) else {
+            continue;
+        };
+        let selection = selection.clone();
+        match cx.open_window(options, |window, cx| {
+            cx.new(|cx| Overlay::pending(selection, window, cx))
+        }) {
+            Ok(window) => windows.push((id, window)),
+            Err(e) => {
+                // The regular path opens its own overlays after the capture.
+                log::debug!("opening an early selection overlay: {e:#}");
+                for (_, window) in windows {
+                    let _ = window.update(cx, |_, window, _| window.remove_window());
+                }
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(EarlyOverlays {
+        selection,
+        done,
+        windows,
+    }))
+}
+
+/// Closes selection overlays and releases the selection claim.
+fn end_selection(overlays: impl IntoIterator<Item = WindowHandle<Overlay>>, cx: &mut AsyncApp) {
+    cx.update(|cx| {
+        for o in overlays {
+            let _ = o.update(cx, |_, window, _| window.remove_window());
+        }
+        cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
+    });
+}
+
 /// Shows the frozen overlays and waits for a selection in global logical
-/// coordinates. `None` means the user cancelled.
+/// coordinates. `None` means the user cancelled. The caller has claimed the
+/// selection with [`begin_selection`]; `early` overlays get their frames
+/// when every output has one, otherwise they close and fresh ones open.
 async fn select_region(
     snap: &Snapshot,
     platform: &Arc<Platform>,
+    early: Option<EarlyOverlays>,
     cx: &mut AsyncApp,
 ) -> Result<Option<IRect>> {
     let started = Instant::now();
-    if daemon(cx, |d, _| std::mem::replace(&mut d.selecting, true)) {
-        bail!("a selection is already in progress");
-    }
     // The window list and each output's GPU tiles are prepared in parallel;
     // neither depends on the other.
     let desktop = platform.desktop.clone();
@@ -424,6 +504,21 @@ async fn select_region(
         outputs.push(task.await);
     }
     let windows = windows.await;
+
+    if let Some(early) = early {
+        match cx.update(|cx| adopt_early(early, &outputs, windows.clone(), cx)) {
+            Ok((overlays, done)) => {
+                log::debug!(
+                    "selection overlays opened {:.1}ms after the snapshot (early)",
+                    started.elapsed().as_secs_f64() * 1e3
+                );
+                let rect = done.await.ok().flatten();
+                end_selection(overlays, cx);
+                return Ok(rect.filter(|r| !r.is_empty()));
+            }
+            Err(unused) => end_selection_windows(unused, cx),
+        }
+    }
 
     let (selection, done) = Selection::new(windows);
     let result: Result<Vec<WindowHandle<Overlay>>> = cx.update(|cx| {
@@ -532,6 +627,55 @@ async fn select_region(
         cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
     });
     Ok(rect.filter(|r| !r.is_empty()))
+}
+
+/// Hands each output's frozen frame to the early overlay on its display.
+/// Fails (returning the windows to close) when an output has no early
+/// overlay, e.g. one was hotplugged during the capture.
+#[allow(clippy::type_complexity)]
+fn adopt_early(
+    early: EarlyOverlays,
+    outputs: &[(String, IRect, u32, Arc<[ui::Tile]>)],
+    windows: Vec<platform::WindowRect>,
+    cx: &mut App,
+) -> Result<
+    (Vec<WindowHandle<Overlay>>, oneshot::Receiver<Option<IRect>>),
+    Vec<WindowHandle<Overlay>>,
+> {
+    let all: Vec<WindowHandle<Overlay>> = early.windows.iter().map(|(_, w)| *w).collect();
+    let mut matched = Vec::with_capacity(outputs.len());
+    for (name, logical, width, tiles) in outputs {
+        let display = platform::display_for(name, *logical, cx);
+        let Some((_, window)) = early.windows.iter().find(|(id, _)| Some(*id) == display) else {
+            return Err(all);
+        };
+        matched.push((*window, *logical, *width, tiles.clone()));
+    }
+    for (window, logical, width, tiles) in &matched {
+        let (logical, width, tiles) = (*logical, *width, tiles.clone());
+        if window
+            .update(cx, |o, _, cx| o.set_frame(logical, width, tiles, cx))
+            .is_err()
+        {
+            return Err(all);
+        }
+    }
+    let used: Vec<WindowHandle<Overlay>> = matched.iter().map(|(w, ..)| *w).collect();
+    for window in all.iter().filter(|w| !used.contains(w)) {
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+    }
+    early.selection.update(cx, |s, _| s.set_windows(windows));
+    Ok((used, early.done))
+}
+
+/// Closes early overlays that could not be used; the selection stays
+/// claimed for the overlays that replace them.
+fn end_selection_windows(overlays: Vec<WindowHandle<Overlay>>, cx: &mut AsyncApp) {
+    cx.update(|cx| {
+        for o in overlays {
+            let _ = o.update(cx, |_, window, _| window.remove_window());
+        }
+    });
 }
 
 fn add_shot(
