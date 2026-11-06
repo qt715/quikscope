@@ -35,5 +35,8 @@ First release.
 - Drawings that extend past the screenshot grow the saved image, with a
   transparent margin; the editor refits to show them and crops may include
   them.
+- Zoom moves between fixed levels (10% steps up to 100%, 25% above, 100% =
+  actual pixels), one level per wheel notch, still eased; fitting snaps to
+  a level.
 - Unit, golden-image, GPU/CPU parity, editor interaction and headless
   end-to-end test suites; CI.

@@ -144,7 +144,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("moment notifications toggle"
 | Fill shapes | `F` |
 | Stroke / text size | `[` `]` or the toolbar dots |
 | Text format (while typing or with text selected) | `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+Shift+.` / `Ctrl+Shift+,` bigger / smaller |
-| Zoom | `Ctrl`+scroll, `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels; zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
+| Zoom | `Ctrl`+scroll (one level per wheel notch), `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels. Levels are 10% steps up to 100% and 25% steps above (100% = actual pixels); zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
 | Close | `Esc` (when nothing is selected), `Ctrl+W` |
 
 Style changes (color, size, fill, font) apply to the selected shape. Closing the
