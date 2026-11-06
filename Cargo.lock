@@ -4207,6 +4207,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-script",
  "unicode-segmentation",
+ "url",
  "uuid",
  "wayland-client",
  "wayland-protocols",

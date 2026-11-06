@@ -5,6 +5,9 @@
 
 #![allow(dead_code)]
 
+#[path = "portal.rs"]
+mod portal;
+
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};

@@ -23,6 +23,8 @@ pub mod hyprland;
 #[cfg(windows)]
 pub mod windows;
 #[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(target_os = "linux")]
 pub mod wlroots;
 #[cfg(target_os = "linux")]
 pub mod x11;
@@ -116,6 +118,9 @@ pub enum Surfaces {
     X11,
     #[cfg(windows)]
     Windows,
+    /// Fullscreen xdg-toplevel windows where layer-shell is unavailable.
+    #[cfg(target_os = "linux")]
+    Fullscreen,
 }
 
 /// The backends for this session.
@@ -170,21 +175,46 @@ pub fn connect(events: EventSink) -> Platform {
         } else {
             Arc::new(NoDesktop)
         };
-        let capture = wlroots::Screencopy::spawn()
-            .map(|c| Arc::new(c) as Arc<dyn Capture>)
-            .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
-            .ok();
+        let forced = std::env::var("QUICKSCOPE_BACKEND").ok();
+        let native = if forced.as_deref() == Some("portal") {
+            None
+        } else {
+            wlroots::Screencopy::spawn()
+                .map_err(|e| log::debug!("wlr-screencopy unavailable: {e:#}"))
+                .ok()
+        };
+        let use_portal = forced.as_deref() == Some("portal")
+            || (forced.is_none()
+                && native.is_none()
+                && std::env::var_os("WAYLAND_DISPLAY").is_some());
+        let capture = if use_portal {
+            portal::Screenshot::connect().map(|c| Arc::new(c) as Arc<dyn Capture>)
+        } else {
+            native
+                .map(|c| Arc::new(c) as Arc<dyn Capture>)
+                .ok_or_else(|| anyhow::anyhow!("wlr-screencopy unavailable"))
+        }
+        .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
+        .ok();
         let clipboard = wlroots::DataControl::spawn()
             .map(|c| Arc::new(c) as Arc<dyn Clipboard>)
             .map_err(|e| log::warn!("clipboard unavailable: {e:#}"))
             .ok();
         Platform {
-            name: "wlroots",
+            name: if use_portal { "portal" } else { "wlroots" },
             capture,
-            desktop,
+            desktop: if use_portal {
+                Arc::new(NoDesktop)
+            } else {
+                desktop
+            },
             clipboard,
             notifier,
-            surfaces: Surfaces::LayerShell,
+            surfaces: if use_portal {
+                Surfaces::Fullscreen
+            } else {
+                Surfaces::LayerShell
+            },
         }
     }
     #[cfg(windows)]
@@ -205,6 +235,16 @@ impl Platform {
             size: size(px(logical.w as f32), px(logical.h as f32)),
         };
         match self.surfaces {
+            #[cfg(target_os = "linux")]
+            Surfaces::Fullscreen => WindowOptions {
+                titlebar: None,
+                focus: true,
+                window_bounds: Some(WindowBounds::Fullscreen(bounds)),
+                display_id,
+                app_id: Some("quickscope".into()),
+                window_background: WindowBackgroundAppearance::Opaque,
+                ..Default::default()
+            },
             #[cfg(target_os = "linux")]
             Surfaces::X11 => WindowOptions {
                 titlebar: None,
@@ -265,6 +305,8 @@ impl Platform {
     /// capture needs a window. `None` where that would flash on screen.
     pub fn prewarm_options(&self) -> Option<WindowOptions> {
         match self.surfaces {
+            #[cfg(target_os = "linux")]
+            Surfaces::Fullscreen => None,
             #[cfg(target_os = "linux")]
             Surfaces::X11 => None,
             #[cfg(target_os = "linux")]

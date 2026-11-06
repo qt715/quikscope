@@ -781,3 +781,83 @@ fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
     );
     assert!(n.body.contains("quick brown fox"), "{n:?}");
 }
+
+#[test]
+fn portal_capture_fullscreen_selection_and_denial() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    if !s.has("grim") {
+        assert!(
+            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            "grim required for portal e2e"
+        );
+        eprintln!("skipped: portal e2e requires grim");
+        return;
+    }
+    let response = s.enable_portal();
+    s.start_daemon();
+    assert!(s.daemon_log().contains("platform backend: portal"));
+    let reference = s.root().join("reference.png");
+    assert!(
+        s.command("grim")
+            .arg(&reference)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut times = Vec::new();
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        let out = s.quickscope(&[
+            "capture",
+            "screen",
+            "--save",
+            "--no-notify",
+            "--no-clipboard",
+        ]);
+        times.push(start.elapsed().as_secs_f64() * 1000.);
+        assert_eq!(decode_png(&saved_path(&out)), decode_png(&reference));
+    }
+    eprintln!("fake portal capture screen end-to-end ms: {times:?}");
+    let child = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    s.helper(&["drag", "100", "100", "420", "330"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    let selected = decode_png(&saved_path(&out));
+    assert_eq!(
+        selected,
+        decode_png(&reference).crop(quickscope::geom::IRect::new(100, 100, 320, 230))
+    );
+
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify", "--no-clipboard"]);
+    s.wait_overlay(2);
+    s.keys(&["escape"]);
+    assert_eq!(
+        s.finish(child, Duration::from_secs(15)).status.code(),
+        Some(1)
+    );
+
+    let child = s.spawn_quickscope(&["capture", "region", "--no-notify", "--no-clipboard"]);
+    s.wait_overlay(3);
+    s.keys(&["enter"]);
+    assert!(
+        s.finish(child, Duration::from_secs(15)).status.success(),
+        "Enter captures focused output"
+    );
+    for code in [1, 2] {
+        response.store(code, std::sync::atomic::Ordering::Relaxed);
+        let out = s.quickscope(&["capture", "screen", "--no-notify", "--no-clipboard"]);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("permission denied"),
+            "{out:?}"
+        );
+    }
+}
