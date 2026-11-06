@@ -151,6 +151,12 @@ Style changes (color, size, fill, font) apply to the selected shape. Closing the
 editor keeps its annotations in the daemon: `moment open-last` or another
 notification click brings them back.
 
+**Drawing past the edges.** Annotations may extend beyond the screenshot,
+for example a label written beside it. The saved and copied image grows to
+include them, with a transparent margin where there is no screenshot, and
+the editor refits the view to show everything (until you zoom or pan
+yourself). A crop can include that margin.
+
 **Colors.** Besides the eight swatches, the palette button opens a color
 picker: a hue/saturation wheel, value and alpha sliders, a hex field
 (`#rrggbb` or `#rrggbbaa`) and R, G, B, A fields (Up/Down step by 1,

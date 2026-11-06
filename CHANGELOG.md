@@ -32,5 +32,8 @@ First release.
   ligatures, Arabic joining, Indic conjuncts), bidirectional text, per-grapheme
   fallback to installed fonts (CJK variant chosen from the text or locale),
   colour emoji, and caret movement and deletion by grapheme.
+- Drawings that extend past the screenshot grow the saved image, with a
+  transparent margin; the editor refits to show them and crops may include
+  them.
 - Unit, golden-image, GPU/CPU parity, editor interaction and headless
   end-to-end test suites; CI.
