@@ -41,7 +41,8 @@ editor's transform already fails it. On failure both images are written to
 
 `editor_ui` drives the same offscreen editor through GPUI's real event
 dispatch (key and mouse events, painted between steps so hit-testing uses
-current layout): a color-picker wheel drag that must recolor the selection
+current layout): text formatting shortcuts while typing and on a selected
+text shape, and a color-picker wheel drag that must recolor the selection
 as exactly one undo step.
 
 ## End to end

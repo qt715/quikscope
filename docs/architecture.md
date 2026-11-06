@@ -81,8 +81,11 @@ which is why closing and reopening the editor keeps annotations.
 
 - every stroke is converted to its **filled outline** with tiny-skia's
   stroker (round caps and joins);
-- text is laid out from the bundled Inter font with `ttf-parser` and emitted
-  as glyph outlines;
+- text is laid out with `ttf-parser` from the chosen face and emitted as
+  glyph outlines. `fonts` indexes system fonts with `fontdb` on a background
+  thread at daemon start, resolves family/weight/italic to font data (variable
+  fonts get their `wght` axis set; missing italics are sheared), and falls
+  back to the bundled Inter per glyph;
 - pixelation is a precomputed patch of mosaic pixels.
 
 The editor fills those outlines with GPUI paths (non-zero winding, 4× MSAA);

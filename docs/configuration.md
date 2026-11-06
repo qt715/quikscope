@@ -35,6 +35,12 @@ color = "#e03131"
 stroke = 1
 # Close the editor after a successful Ctrl+S.
 close_on_save = false
+# Starting font for new text: any installed family (unknown families fall
+# back to the bundled "Inter"), weight 1-1000, size 4-512 logical pixels.
+font_family = "Inter"
+font_weight = 600
+font_size = 28
+font_italic = false
 ```
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,

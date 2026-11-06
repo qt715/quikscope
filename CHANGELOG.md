@@ -22,5 +22,9 @@ First release.
 - Color picker (hue/saturation wheel, value and alpha sliders, hex and RGBA
   fields) behind the palette button; live recoloring of the selection as one
   undo step.
+- Font customization for text: family (installed fonts plus bundled Inter
+  variable/italic), weight, italic and size from a font bar above the text,
+  `Ctrl+B`/`Ctrl+I`/`Ctrl+Shift+.`/`Ctrl+Shift+,` shortcuts, and
+  `[editor] font_*` defaults in the config.
 - Unit, golden-image, GPU/CPU parity, editor interaction and headless
   end-to-end test suites; CI.

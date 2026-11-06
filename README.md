@@ -143,10 +143,11 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("moment notifications toggle"
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
 | Fill shapes | `F` |
 | Stroke / text size | `[` `]` or the toolbar dots |
+| Text format (while typing or with text selected) | `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+Shift+.` / `Ctrl+Shift+,` bigger / smaller |
 | Zoom | `Ctrl`+scroll, `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels; zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
 | Close | `Esc` (when nothing is selected), `Ctrl+W` |
 
-Style changes (color, size, fill) apply to the selected shape. Closing the
+Style changes (color, size, fill, font) apply to the selected shape. Closing the
 editor keeps its annotations in the daemon: `moment open-last` or another
 notification click brings them back.
 
@@ -156,6 +157,12 @@ picker: a hue/saturation wheel, value and alpha sliders, a hex field
 Shift+Up/Down by 10). Dragging recolors the selected shape live and counts as
 a single undo step. While the current color is not one of the swatches, the
 palette button shows it.
+
+**Fonts.** While text is being edited or a text shape is selected, a font bar
+appears above it: family (every installed font plus the bundled Inter,
+filterable by typing), weight, italic and size. A font without an italic
+face gets a slanted version. New text uses the last font chosen; the starting
+font comes from the [configuration](docs/configuration.md).
 
 ## Performance
 
@@ -181,8 +188,9 @@ Details in [docs/architecture.md](docs/architecture.md).
 
 - wlroots-protocol compositors only; GNOME and KDE lack `wlr-screencopy`.
 - Window snapping, `window` mode and focused-output detection need Hyprland.
-- Text uses the bundled Inter font; characters it lacks (CJK, emoji) render
-  as `?`. Input-method composition is not supported in the text tool.
+- Characters missing from the chosen font are drawn from the bundled Inter;
+  ones Inter also lacks (CJK, emoji) render as `?`. Input-method composition
+  is not supported in the text tool.
 
 ## Development
 
@@ -197,6 +205,6 @@ See [docs/testing.md](docs/testing.md), [docs/ipc.md](docs/ipc.md) and
 
 ## License
 
-MIT or Apache-2.0, at your option. Bundled assets: Inter (SIL Open Font
-License, `assets/fonts/INTER-LICENSE.txt`) and Lucide icons (ISC,
-`assets/icons/LICENSE`).
+MIT or Apache-2.0, at your option. Bundled assets: Inter variable and Inter
+italic (SIL Open Font License, `assets/fonts/INTER-LICENSE.txt`) and Lucide
+icons (ISC, `assets/icons/LICENSE`).
