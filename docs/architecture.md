@@ -202,6 +202,14 @@ snapshots are vectors of pointers and each shape caches its render
 primitives for its whole life. Documents live in the daemon keyed by shot,
 which is why closing and reopening the editor keeps annotations.
 
+The editor keeps selection membership in an ordered set of shape IDs.
+Document batch operations checkpoint once per user action; live drag and
+color-picker updates reuse that snapshot, so undo never exposes a partially
+moved or recolored group. Gesture membership is immutable and shared across
+pointer events. Marquee selection uses full shape bounds rather than
+intersection, and stacking commands preserve relative order within both
+the selection and the remaining shapes.
+
 ### One geometry, two renderers
 
 `render::shape_prims` turns a shape into primitives in image space:

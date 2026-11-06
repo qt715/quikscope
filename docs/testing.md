@@ -100,6 +100,15 @@ window position, commit) through the editor's `EntityInputHandler`, and a
 text field receiving Backspace mid-composition (its pre-edit range must not
 outlive the text).
 
+Selection regressions dispatch real marquee, Shift-click, move, nudge,
+delete, duplicate and stacking shortcuts. Multi-shape actions must restore
+every member with one undo, with the next undo reaching the preceding user
+action. Help toggling and Escape are checked without closing the window.
+Mutation checks: forcing a checkpoint on every live `translate_all` /
+`style_all` update must fail the drag-undo tests; adding a checkpoint after
+`style_all` / `duplicate_all` must fail the palette/picker and duplicate
+single-undo tests. Restore each mutation before running the full suite.
+
 ## End to end
 
 Each test builds a private desktop in a temporary directory and never

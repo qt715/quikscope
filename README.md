@@ -224,7 +224,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quickscope notifications tog
 
 | Tool | Keys |
 | --- | --- |
-| Select / move | `V` `1` — drag any item (text, shapes, strokes, steps, pixelation) to move it; the cursor turns into a hand and the item is outlined when a press would grab it. A selected item also drags from anywhere inside its box (handy for hollow rectangles and thin arrows). `Del` deletes, arrows nudge (`Shift` ×10), double-click text to edit; each move is one undo step |
+| Select / move | `V` `1` — drag empty canvas to select fully-contained items; `Shift`+click toggles membership, `Ctrl+A` selects all. Drag any selected item to move the whole selection (including from inside its box); `Del` deletes, arrows nudge (`Shift` ×10), double-click text to edit. Each gesture is one undo step |
 | Pan | `H`, `Space`+drag, middle drag, scroll |
 | Rectangle | `R` `2` (`Shift` = square) |
 | Ellipse | `O` `3` (`Shift` = circle) |
@@ -245,11 +245,15 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quickscope notifications tog
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
 | Fill shapes | `F` |
 | Stroke / text size | `[` `]` or the toolbar dots |
+| Duplicate selection | `Ctrl+D` — new copies offset by 10 logical pixels, selected together; `Ctrl+C` still copies the image |
+| Bring selection to front / send to back | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
+| Shortcut help | `?` / `F1` or the toolbar `?`; `Esc` dismisses help without closing the editor |
 | Text format (while typing or with text selected) | `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+Shift+.` / `Ctrl+Shift+,` bigger / smaller |
 | Zoom | `Ctrl`+scroll (one level per wheel notch), `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels. Levels are 10% steps up to 100% and 25% steps above (100% = actual pixels); zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
 | Close | `Esc` (when nothing is selected), `Ctrl+W` |
 
-Style changes (color, size, fill, font) apply to the selected shape. Closing the
+Style changes (color, size, fill) apply to every selected shape as one undo step.
+The font bar targets exactly one selected text shape (or text being edited). Closing the
 editor keeps its annotations in the daemon: `quickscope open-last` or another
 notification click brings them back.
 
@@ -262,7 +266,7 @@ yourself). A crop can include that margin.
 **Colors.** Besides the eight swatches, the palette button opens a color
 picker: a hue/saturation wheel, value and alpha sliders, a hex field
 (`#rrggbb` or `#rrggbbaa`) and R, G, B, A fields (Up/Down step by 1,
-Shift+Up/Down by 10). Dragging recolors the selected shape live and counts as
+Shift+Up/Down by 10). Dragging recolors the selected shapes live and counts as
 a single undo step. While the current color is not one of the swatches, the
 palette button shows it.
 

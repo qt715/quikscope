@@ -59,5 +59,9 @@ First release.
 - `open-last` opens the editor with the tool used last.
 - Select tool: hand cursor and an outline on the item a press would grab,
   and a selected item drags from anywhere inside its box.
+- Editor multi-selection: fully-contained marquee, Shift-click, select-all,
+  group move/nudge/style/delete as one undo step, offset duplication with
+  `Ctrl+D`, stable front/back stacking, per-item outlines and a group box.
+- Grouped shortcut help from `?`, `F1`, or the toolbar help button.
 - Unit, golden-image, GPU/CPU parity, editor interaction, text extraction
   and headless end-to-end test suites; CI.
