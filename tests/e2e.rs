@@ -930,6 +930,12 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
         .parse()
         .unwrap();
     s.wait_overlay_at(1, logical.x + 1, logical.y + 1);
+    // Precision guides follow the pointer; keep them outside the frozen-frame probes.
+    s.helper(&[
+        "move",
+        &(logical.x + 8).to_string(),
+        &(logical.y + 8).to_string(),
+    ]);
     for (i, name) in ["HEADLESS-1", "HEADLESS-2"].into_iter().enumerate() {
         let path = s.root().join(format!("overlay-{name}.png"));
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1032,8 +1038,8 @@ fn selection_overlay_covers_a_large_output_edge_to_edge() {
     assert!(s.command("grim").arg(&grim).status().unwrap().success());
     let shot = decode_png(&grim);
     assert_eq!((shot.width, shot.height), (2560, 1440));
-    // Away from the pointer guides, near every corner: dimmed, not live.
-    for (x, y) in [(40, 1400), (2520, 40), (2520, 1400), (1280, 1400)] {
+    // Away from pointer guides and the bottom-centre hint: dimmed, not live.
+    for (x, y) in [(40, 1400), (2520, 40), (2520, 1400), (1280, 1380)] {
         let (seen, live) = (shot.pixel(x, y), pattern_pixel(x, y));
         let sum = |p: [u8; 4]| p[..3].iter().map(|&c| c as u32).sum::<u32>();
         assert!(
