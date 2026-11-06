@@ -213,6 +213,10 @@ impl Field {
                     return;
                 };
                 self.selected = submit;
+                // A key the input method let through ends its composition:
+                // the pre-edit is plain text now, and `marked` must never
+                // outlive the text it indexes.
+                self.marked = None;
                 if text != self.text {
                     self.text = text;
                     cx.emit(FieldEvent::Changed(self.text.clone()));

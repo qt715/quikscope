@@ -307,3 +307,76 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     ui.key("escape", None, Modifiers::default());
     assert!(!ui.editor(|e, _| e.picker_open()));
 }
+
+/// Regression: a key the input method lets through while it is composing
+/// (Backspace with a pre-edit showing) used to leave the field's marked range
+/// pointing past its shortened text, and the next render panicked slicing it.
+#[test]
+fn field_key_edits_end_ime_composition() {
+    use moment::ui::field::{Field, FieldKind};
+
+    let text = gpui_platform::current_platform(true).text_system();
+    let mut cx = HeadlessAppContext::with_platform(
+        text,
+        Arc::new(Assets),
+        gpui_platform::current_headless_renderer,
+    );
+    cx.update(moment::ui::init);
+    let window = cx
+        .open_window(size(px(300.), px(60.)), |window, cx| {
+            cx.new(|cx| Field::new(FieldKind::Text, 0.0, window, cx))
+        })
+        .unwrap();
+    let any: AnyWindowHandle = window.into();
+    let field =
+        |cx: &mut HeadlessAppContext,
+         f: &mut dyn FnMut(&mut Field, &mut gpui::Window, &mut gpui::Context<Field>)| {
+            cx.update_window(any, |view, window, cx| {
+                view.downcast::<Field>()
+                    .unwrap()
+                    .update(cx, |fl, cx| f(fl, window, cx))
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.capture_screenshot(any).unwrap();
+        };
+    field(&mut cx, &mut |f, w, cx| f.focus(w, cx));
+    field(&mut cx, &mut |f, w, cx| {
+        f.replace_and_mark_text_in_range(None, "に", None, w, cx)
+    });
+    assert_eq!(
+        cx.update_window(any, |view, w, cx| view
+            .downcast::<Field>()
+            .unwrap()
+            .update(cx, |f, cx| f.marked_text_range(w, cx)))
+            .unwrap(),
+        Some(0..1)
+    );
+    // Backspace reaches the field and deletes the pre-edit; rendering the
+    // result must not panic, and composition is over.
+    cx.update_window(any, |_, window, cx| {
+        window.dispatch_event(
+            PlatformInput::KeyDown(KeyDownEvent {
+                keystroke: Keystroke {
+                    modifiers: Modifiers::default(),
+                    key: "backspace".into(),
+                    key_char: None,
+                },
+                is_held: false,
+                prefer_character_input: false,
+            }),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.capture_screenshot(any).unwrap();
+    let (text, marked) = cx
+        .update_window(any, |view, w, cx| {
+            view.downcast::<Field>().unwrap().update(cx, |f, cx| {
+                (f.text().to_string(), f.marked_text_range(w, cx))
+            })
+        })
+        .unwrap();
+    assert_eq!((text.as_str(), marked), ("", None));
+}
