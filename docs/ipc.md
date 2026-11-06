@@ -26,7 +26,12 @@ quit
 `screen` (aliases `all`, `fullscreen`).
 
 Flags override the configuration for one request: `edit`, `notify`,
-`clipboard`, `cursor`, each optionally prefixed with `no-`, and `save`.
+`clipboard`, `cursor`, `freeze`, each optionally prefixed with `no-`, and `save`.
+Omitting a boolean flag uses the config value; repeated flags use the last
+value. `freeze` defaults to true. `capture region no-freeze` selects over the
+live desktop, then captures pixels after the selection overlay closes;
+`capture region freeze` retains the frozen snapshot behavior. These flags
+affect interactive region selection only, not fixed geometry or other modes.
 `text` extracts the capture's text instead of copying the image (see
 [text extraction](text-extraction.md)).
 

@@ -22,6 +22,10 @@ flowchart LR
     editor -- Ctrl+S --> export[CPU exporter\ntiny-skia] --> png[(PNG)]
 ```
 
+The diagram shows the default frozen region path. Live region selection opens
+overlays from output geometry first and requests pixels only after selection
+and synchronized overlay teardown.
+
 ## Threads
 
 | Thread | Owns | Notes |
@@ -88,12 +92,12 @@ interface has no cursor option), permission dialogs and capture flashes.
 
 Overlay protocol selection is independent of capture: use layer-shell when
 the compositor advertises `zwlr_layer_shell_v1` (including supported KDE
-versions). Each output then gets its own frozen overlay, with cross-output
-dragging. Without layer-shell, open just one fullscreen xdg-toplevel.
+versions). Each output then gets its own overlay, with cross-output dragging.
+Without layer-shell, open just one fullscreen xdg-toplevel.
 GPUI 0.3.10 does not forward the requested output to `set_fullscreen`, so
 the compositor chooses its placement. `Window::display()` tracks the
-actual surface-enter output; the overlay switches to that output's
-already-prepared frozen frame and maps input in that output's coordinates.
+actual surface-enter output; the overlay maps input in that output's
+coordinates and, in frozen mode, switches to its already-prepared frame.
 Selection is confined to that output. This is the GNOME multi-monitor
 limitation, not a silent crop of the first output.
 
@@ -170,13 +174,14 @@ one-line protocol, liveness probe and second-daemon refusal.
 
 ## Region selection
 
-The selection always shows a frozen screen, and the final crop comes from
-that snapshot, not from the dimmed overlay. Each output gets a full-screen
-`wlr-layer-shell` surface on the overlay layer with exclusive keyboard focus,
-painting the frozen image from GPU tiles that were built on the background
-pool while the window list was fetched. All overlays share one `Selection`
-entity in global logical coordinates; because Wayland keeps delivering motion
-to the surface that received the button press, a drag can cross outputs.
+With `freeze = true` (the default), selection shows a frozen screen, and the
+final crop comes from that snapshot, not from the dimmed overlay. Each output
+gets a full-screen `wlr-layer-shell` surface on the overlay layer with
+exclusive keyboard focus, painting the frozen image from GPU tiles that were
+built on the background pool while the window list was fetched. All overlays
+share one `Selection` entity in global logical coordinates; because Wayland
+keeps delivering motion to the surface that received the button press, a drag
+can cross outputs.
 
 Creating a window costs about as much as the capture itself (~12 ms each,
 mostly surface and swapchain setup), so on layer-shell the two overlap: the
@@ -187,10 +192,43 @@ When the snapshot arrives each overlay receives its output's tiles and
 starts dimming; if an output has no early overlay (hotplug during the
 capture) they close and the regular path opens fresh ones. X11 and Windows
 popups would capture as black without a compositor and fullscreen toplevels
-animate in, so those open after the capture as before. Portal captures never
-get early overlays, even on layer-shell (KDE): the desktop may show a
+animate in, so those open after the capture as before. Frozen portal captures
+never get early overlays, even on layer-shell (KDE): the desktop may show a
 permission dialog first, and an overlay's exclusive keyboard would keep the
 user from answering it.
+
+With `freeze = false` (CLI `--no-freeze`, IPC `no-freeze`), overlays use output
+geometry without taking an initial screenshot. They paint translucent dimming
+outside the selected rectangle and leave a transparent hole inside. Selection
+gestures and window snapping are shared with frozen mode. Once selection
+finishes, all overlays close before capture; the resulting new snapshot is
+cropped to the selected rectangle. Cancellation takes no screenshot. Fixed
+geometry and noninteractive modes bypass this choice.
+
+Closing a GPUI window alone is not a compositor teardown barrier:
+
+- Wayland records GPUI's raw display before closing and, after GPUI has
+  destroyed the surfaces, performs a private-queue roundtrip on that **same**
+  borrowed display. The compositor has therefore processed surface destruction
+  before the separate capture connection requests screencopy or a portal
+  screenshot. Native screencopy supplies the next rendered frame.
+- X11 subscribes to overlay `DestroyNotify` before closing, waits for
+  destruction, then waits for an X Present vblank barrier before capture.
+  Live selection requires a compositor, an alpha visual and Present; without
+  them it logs the limitation and falls back to the existing frozen path.
+- Windows synchronously hides the overlay HWNDs (GPUI defers native window
+  destruction), then uses `DwmFlush` before capture.
+  This path compiles but has not been verified on a native Windows desktop.
+
+Portal live captures ask permission only after selection and teardown, so the
+overlays cannot intercept the permission dialog's keyboard input. Without
+layer-shell (normally GNOME), selection remains confined to the output where
+the fullscreen window lands; transparency depends on the compositor allowing
+transparent fullscreen windows.
+
+The interactive selection claim remains held until the live capture finishes,
+including any portal permission dialog. Another selector cannot steal the
+keyboard or contaminate that pending capture with new dimming overlays.
 
 
 ## Shots, documents and the editor

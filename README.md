@@ -21,9 +21,10 @@ keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ c
 - **Native on each desktop.** `wlr-screencopy` on wlroots compositors, the
   Screenshot portal on GNOME and KDE Plasma, MIT-SHM on X11, DXGI on Windows;
   the backend is picked at start-up ([details](#desktops)).
-- **Freeze-frame region selection** on every output at once, with window
-  snapping on Hyprland, X11 and Windows (click a window to take exactly that
-  window).
+- **Frozen or live region selection** on every output at once (frozen by
+  default), with window snapping on Hyprland, X11 and Windows (click a window
+  to take exactly that window). Live selection dims outside the rectangle and
+  leaves a transparent hole; pixels are captured after selection closes.
 - **Excalidraw-style editor**: rectangle, ellipse, arrow, line, pen,
   highlighter, text, numbered steps, pixelate (redaction) and crop, with
   undo/redo, zoom and pan. What you see is exactly what gets saved — the
@@ -145,13 +146,17 @@ The daemon falls back to `org.freedesktop.portal.Screenshot` when
 daemon to force it (or `QUICKSCOPE_BACKEND=wlroots` to require native capture).
 The desktop can still ask permission despite `interactive=false`; accept
 its permission dialog to capture. Cancelling or denying returns a clear error.
+With live region selection (`--no-freeze`), the permission dialog appears
+only after selection closes; denying it still fails the capture.
 
 Portal capture decodes a PNG file and is slower than native screencopy.
 The portal controls cursor inclusion: `--cursor` / `--no-cursor` cannot
 override it. On KDE and other desktops offering layer-shell, region
 selection spans all outputs. Without layer-shell (normally GNOME), a
-single fullscreen normal window shows the frozen frame of the output
-where the compositor places it; selection is confined to that output.
+single fullscreen normal window shows the output where the compositor
+places it; selection is confined to that output. Frozen mode shows its
+snapshot; live mode is transparent only when the compositor permits
+transparent fullscreen windows.
 `screen` and fixed geometry captures can still span outputs. Desktop
 fullscreen/focus animations can delay appearance; disable them in desktop
 settings if needed. There is no window list/snapping or active-window
@@ -179,6 +184,8 @@ enables active-window capture, window snapping and focused-output detection;
 without one those queries are unknown. No X11 command-line helpers are needed
 at runtime. Clipboard PNGs are served without re-encoding, including large
 images via the X11 INCR protocol.
+Live selection requires a compositor, an alpha visual and the X Present
+extension; otherwise quickscope logs the limitation and uses frozen selection.
 
 Bind keys in your window manager or desktop settings, e.g. i3:
 
@@ -238,7 +245,7 @@ quickscope ping | quit
 
 | Mode | Captures |
 | --- | --- |
-| `region` | Freezes all outputs; drag a rectangle, click a window (Hyprland or X11/EWMH) or click empty space for the whole output. Right click, `Esc` or `q` cancels; `Enter` takes the output under the keyboard focus. |
+| `region` | Freezes all outputs by default (`--no-freeze` selects over the live desktop); drag a rectangle, click a window (Hyprland or X11/EWMH) or click empty space for the whole output. Right click, `Esc` or `q` cancels; `Enter` takes the output under the keyboard focus. |
 | `output` | The focused output on Hyprland or X11/EWMH, the first output elsewhere, or `-o NAME`. |
 | `window` | The active window (Hyprland or X11/EWMH). |
 | `screen` | All outputs composed in their layout. |
@@ -249,6 +256,7 @@ quickscope ping | quit
 | `--notify` / `--no-notify` | Desktop notification with a thumbnail; clicking it opens the editor. |
 | `--clipboard` / `--no-clipboard` | Put the capture on the clipboard as `image/png`. |
 | `--cursor` / `--no-cursor` | Include the pointer. |
+| `--freeze` / `--no-freeze` | Freeze before region selection (default) / select over the live desktop and capture after the overlay closes. Overrides `freeze` in the config. |
 | `--save` | Also write the raw capture to the screenshots folder (prints the path). |
 | `--text` | Extract the capture's text: copy it as plain text (instead of the image), print it, and show it in the notification. Exit status 1 when no text was found. |
 | `-o, --output NAME` | Output for `output` mode. |
@@ -367,6 +375,7 @@ test described in [docs/testing.md](docs/testing.md).
   Hyprland. GNOME confines region selection to one output (see
   [GNOME / KDE Plasma](#gnome--kde-plasma-portal)).
 - X11 capture supports 24/32-bit TrueColor; monitors have no independent scale.
+- Live selection on Windows compiles but has not been verified natively.
 - macOS is not supported.
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.

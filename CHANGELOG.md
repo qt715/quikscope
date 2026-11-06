@@ -27,6 +27,14 @@ First release.
   command.
 - Capture modes: frozen-screen region selection across all outputs, focused
   output, active window, whole screen and fixed geometry.
+- Optional live region selection (`freeze = false`, CLI `--no-freeze`, IPC
+  `no-freeze`): dim outside the rectangle, keep its interior transparent, and
+  capture pixels after the overlays close and teardown is synchronized.
+  Frozen selection remains the default (`--freeze` / IPC `freeze` overrides).
+  Portal permission dialogs appear after live selection; fullscreen GNOME
+  transparency depends on the compositor. X11 without compositing, an alpha
+  visual or X Present falls back to frozen selection. The Windows path
+  compiles but has not been verified natively.
 - With native wlroots capture, selection overlays are created while the
   capture runs.
 - Desktop notification with a thumbnail whose click opens the editor;

@@ -27,6 +27,10 @@ open_editor = false
 # Include the pointer in captures.
 cursor = false
 
+# Freeze before region selection. False selects over the live desktop and
+# captures pixels only after the selection overlay closes.
+freeze = true
+
 # Notification timeout in milliseconds (-1: the server's default).
 notification_timeout_ms = 8000
 
@@ -61,7 +65,14 @@ open_last = "Shift+PrintScreen"
 ```
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,
-`--cursor`) override these defaults for one request.
+`--cursor`, `--freeze` / `--no-freeze`) override these defaults for one request.
+`freeze` affects interactive region selection only; fixed geometry and other
+capture modes do not open a selection overlay. Live selection dims outside
+the selected rectangle and leaves the inside transparent. Portal permission
+dialogs appear after live selection closes. GNOME's fullscreen overlay is
+transparent only when its compositor permits it. On X11 without a compositor,
+an alpha visual or X Present, live requests fall back to frozen selection
+with a log message. Windows live selection compiles but is unverified natively.
 
 `quickscope notifications on|off|toggle` is the one setting that changes
 without a restart: the daemon applies it immediately and rewrites only the

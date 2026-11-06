@@ -28,6 +28,10 @@ is checked when the server supports monitor creation. The
 `capture_latency_2560x1440` test compares SHM and plain GetImage pixels and
 prints warm-capture median/p95 timings with `-- --nocapture`.
 
+Xvfb has no compositor, so a requested live region must fall back to frozen
+selection; it does not verify composited X11 transparency or the Present
+teardown barrier. Those require a private composited X11 desktop.
+
 The text-shaping unit tests (Japanese, Arabic, Hebrew, Devanagari, emoji)
 need a font for each script, which they find among installed fonts; without
 one a test prints `skipped:` and passes. `QUICKSCOPE_REQUIRE_FONTS=1` (set in CI,
@@ -52,6 +56,11 @@ optional OCR tests. Missing Tesseract/models skip OCR unless
 `QUICKSCOPE_REQUIRE_OCR=1`. `editor_render` and `editor_ui` are cfg-excluded:
 GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
 The Wayland-only `e2e` feature is not enabled by Windows CI.
+
+Live region selection compiles for Windows but is unverified natively.
+In a private Windows VM, also check that changing content during selection
+appears in the final live capture, that no dimming/selection border remains,
+and that `--freeze` still captures the original frame.
 
 Interactive verification must use a private Windows VM desktop, never a
 non-interactive service session or another user's live desktop. Check the tray,
@@ -145,6 +154,21 @@ replacing it, and the saved text measuring exactly the committed string;
 `Ctrl+Shift+C` in the editor pasted back as `text/plain`, and
 `capture screen --text` printing, copying and notifying the text.
 
+Live-selection cases repaint the resident wallpaper while selection is open
+and compare exact final pixels: frozen mode keeps the old frame, live mode
+captures the new one after teardown. `grim` checks the live overlay's outside
+dimming and clear selected hole, including the fullscreen toplevel path on
+labwc. Cases exercise live click/Enter, right-click/Esc cancellation,
+`freeze = false`, per-request `--freeze` overrides, composition across two
+outputs, and rejection of another selector during portal permission.
+Mutation checks force live requests down the frozen path, then ignore the
+config freeze value: the repaint/hole and config-default tests respectively
+must fail. Restore each mutation before running the full suite.
+
+Unit and CLI parsing tests cover the true config default, explicit boolean
+config values and invalid types, omitted per-request overrides, both freeze
+flags, last-flag-wins parsing and IPC serialization roundtrips.
+
 Set `QUICKSCOPE_E2E_KEEP=1` to keep a session's directory (compositor and daemon
 logs) after the test, and `QUICKSCOPE_E2E_COMPOSITOR=sway` to pick the
 compositor.
@@ -165,6 +189,9 @@ match that output's frozen frame, and Enter returns that exact output.
 Another test makes the fake portal ask first through a permission-dialog
 stand-in (the helper's `dialog`, an ordinary toplevel that answers on Enter
 and denies after 5 s): Enter must reach the dialog, not a selection overlay.
+The live portal case checks that no permission request occurs while selection
+is open, completes selection before answering the permission-dialog stand-in,
+then compares the final capture against the updated desktop pixels.
 Five screen captures print end-to-end latency samples. Missing grim skips
 unless `QUICKSCOPE_E2E=1`. Unit tests cover negative origins, fractional
 scales, layout gaps, filters, incompatible raster dimensions and responses.
