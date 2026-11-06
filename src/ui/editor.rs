@@ -1,5 +1,6 @@
 //! The annotation editor window.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -156,9 +157,14 @@ enum Drag {
         start: Pt,
     },
     Move {
-        id: ShapeId,
+        ids: Arc<BTreeSet<ShapeId>>,
         last: Pt,
         moved: bool,
+    },
+    Marquee {
+        start: Pt,
+        end: Pt,
+        initial: Arc<BTreeSet<ShapeId>>,
     },
     Crop {
         start: Pt,
@@ -217,7 +223,7 @@ pub struct Editor {
     drag: Drag,
     draft: Option<Shape>,
     crop_draft: Option<RectF>,
-    pub selected: Option<ShapeId>,
+    pub selected: BTreeSet<ShapeId>,
     pub text: Option<TextEdit>,
     space_held: bool,
     /// With the select tool: the item a press would pick up (open-hand
@@ -238,7 +244,7 @@ pub struct Editor {
     picker_at: Option<Pixels>,
     /// Shape whose color a picker drag is changing: the drag's first change
     /// records undo, the rest replace it in place.
-    color_session: Option<ShapeId>,
+    color_session: Option<BTreeSet<ShapeId>>,
 }
 
 const MIN_ZOOM: f32 = 0.02;
@@ -301,7 +307,7 @@ impl Editor {
             drag: Drag::None,
             draft: None,
             crop_draft: None,
-            selected: None,
+            selected: BTreeSet::new(),
             text: None,
             space_held: false,
             hover: None,
@@ -432,7 +438,7 @@ impl Editor {
         self.tool = tool;
         cx.set_global(LastTool(tool));
         if tool != Tool::Select {
-            self.selected = None;
+            self.selected.clear();
         }
         self.crop_draft = None;
         self.hover = None;
@@ -447,7 +453,7 @@ impl Editor {
         let doc = self.doc.read(cx);
         let tolerance = 6.0 / self.zoom();
         doc.hit_test(p, tolerance).or_else(|| {
-            self.selected.filter(|id| {
+            self.selected.iter().copied().rev().find(|id| {
                 doc.shape(*id)
                     .is_some_and(|s| s.bounds().inflate(tolerance).contains(p))
             })
@@ -466,20 +472,17 @@ impl Editor {
         self.style = style;
         if let Some(t) = &mut self.text {
             t.style = style;
-        } else if let Some(id) = self.selected {
-            let in_session = self.color_session == Some(id);
-            self.doc.update(cx, |d, _| {
-                if let Some(s) = d.shape(id).cloned()
-                    && s.style != style
-                {
-                    if in_session {
-                        d.replace_live(s.with_style(style));
-                    } else {
-                        d.replace(s.with_style(style));
-                    }
-                }
-            });
-            self.color_session = live.then_some(id);
+        } else if !self.selected.is_empty() {
+            let in_session = self.color_session.as_ref() == Some(&self.selected);
+            let changed = self
+                .doc
+                .update(cx, |d, _| d.style_all(&self.selected, style, in_session));
+            // A no-op first picker event must not swallow the real checkpoint.
+            if !live {
+                self.color_session = None;
+            } else if changed {
+                self.color_session = Some(self.selected.clone());
+            }
         }
         cx.notify();
     }
@@ -524,7 +527,7 @@ impl Editor {
             let shape = Shape::new(0, t.kind(), t.style, doc.scale);
             return Some((t.font.clone(), shape.bounds()));
         }
-        let s = self.doc.read(cx).shape(self.selected?)?;
+        let s = self.doc.read(cx).shape(self.single_selected()?)?;
         match &s.kind {
             ShapeKind::Text { font, .. } => Some((font.clone(), s.bounds())),
             _ => None,
@@ -536,7 +539,7 @@ impl Editor {
         self.font = font.clone();
         if let Some(t) = &mut self.text {
             t.font = font;
-        } else if let Some(id) = self.selected {
+        } else if let Some(id) = self.single_selected() {
             self.doc.update(cx, |d, _| {
                 let Some(s) = d.shape(id).cloned() else {
                     return;
@@ -620,33 +623,36 @@ impl Editor {
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
         self.text = None;
-        self.selected = None;
+        self.selected.clear();
+        self.color_session = None;
         self.doc.update(cx, |d, _| d.undo());
         cx.notify();
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
         self.text = None;
-        self.selected = None;
+        self.selected.clear();
+        self.color_session = None;
         self.doc.update(cx, |d, _| d.redo());
         cx.notify();
     }
 
     fn delete_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected.take() {
-            self.doc.update(cx, |d, _| d.remove(id));
+        if !self.selected.is_empty() {
+            self.doc.update(cx, |d, _| d.remove_all(&self.selected));
+            self.selected.clear();
             cx.notify();
         }
     }
 
     fn nudge(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected {
-            self.doc.update(cx, |d, _| {
-                if let Some(s) = d.shape(id).cloned() {
-                    d.replace(s.translated(dx, dy));
-                }
-            });
-        }
+        self.doc
+            .update(cx, |d, _| d.translate_all(&self.selected, dx, dy, false));
+        cx.notify();
+    }
+
+    fn single_selected(&self) -> Option<ShapeId> {
+        (self.selected.len() == 1).then(|| *self.selected.first().unwrap())
     }
 
     // ── text editing ────────────────────────────────────────────────────
@@ -676,7 +682,7 @@ impl Editor {
             style,
             font,
         });
-        self.selected = None;
+        self.selected.clear();
         cx.notify();
     }
 
@@ -788,6 +794,12 @@ impl Editor {
                     if self.update_font(|f| f.with_size(next_size(f.size, true)), cx) => {}
                 ("," | "<", true)
                     if self.update_font(|f| f.with_size(next_size(f.size, false)), cx) => {}
+                ("a", false) => {
+                    self.set_tool(Tool::Select, cx);
+                    self.color_session = None;
+                    self.selected = self.doc.read(cx).shapes().iter().map(|s| s.id).collect();
+                    cx.notify();
+                }
                 ("s", shift) => self.save(shift, window, cx),
                 ("c", false) => self.copy(cx),
                 ("c", true) => self.copy_text(cx),
@@ -822,8 +834,9 @@ impl Editor {
                     self.drag = Drag::None;
                     self.draft = None;
                     self.crop_draft = None;
-                } else if self.selected.is_some() {
-                    self.selected = None;
+                    self.selected.clear();
+                } else if !self.selected.is_empty() {
+                    self.selected.clear();
                 } else {
                     window.remove_window();
                     return;
@@ -840,7 +853,7 @@ impl Editor {
             "]" => self.set_size(self.style.size + 1, cx),
             "enter" => {
                 // Enter on a selected text shape starts editing it.
-                let id = self.selected;
+                let id = self.single_selected();
                 let is_text = id.is_some_and(|id| {
                     matches!(
                         self.doc.read(cx).shape(id).map(|s| &s.kind),
@@ -917,19 +930,37 @@ impl Editor {
                 }
                 match self.grab_target(p, cx) {
                     Some(id) => {
-                        self.selected = Some(id);
+                        self.color_session = None;
+                        if ev.modifiers.shift {
+                            if !self.selected.insert(id) {
+                                self.selected.remove(&id);
+                                cx.notify();
+                                return;
+                            }
+                        } else if !self.selected.contains(&id) {
+                            self.selected = BTreeSet::from([id]);
+                        }
                         if let Some(s) = self.doc.read(cx).shape(id) {
                             self.style = s.style;
                         }
                         self.drag = Drag::Move {
-                            id,
+                            ids: Arc::new(self.selected.clone()),
                             last: p,
                             moved: false,
                         };
                     }
                     None => {
-                        self.selected = None;
-                        self.start_pan(ev.position);
+                        let initial = if ev.modifiers.shift {
+                            self.selected.clone()
+                        } else {
+                            BTreeSet::new()
+                        };
+                        self.selected = initial.clone();
+                        self.drag = Drag::Marquee {
+                            start: p,
+                            end: p,
+                            initial: Arc::new(initial),
+                        };
                     }
                 }
             }
@@ -1035,23 +1066,30 @@ impl Editor {
                 };
                 self.draft = Some(Shape::new(draft.id, kind, draft.style, draft.scale));
             }
-            Drag::Move { id, last, moved } => {
+            Drag::Move { ids, last, moved } => {
                 let (dx, dy) = (p.x - last.x, p.y - last.y);
                 if dx == 0.0 && dy == 0.0 {
                     return;
                 }
                 self.doc.update(cx, |d, _| {
-                    if !moved {
-                        d.checkpoint();
-                    }
-                    if let Some(s) = d.shape(id).cloned() {
-                        d.replace_live(s.translated(dx, dy));
-                    }
+                    d.translate_all(&ids, dx, dy, moved);
                 });
                 self.drag = Drag::Move {
-                    id,
+                    ids,
                     last: p,
                     moved: true,
+                };
+            }
+            Drag::Marquee { start, initial, .. } => {
+                self.selected = self
+                    .doc
+                    .read(cx)
+                    .shapes_within(RectF::from_points(start, p));
+                self.selected.extend(initial.iter().copied());
+                self.drag = Drag::Marquee {
+                    start,
+                    end: p,
+                    initial,
                 };
             }
             Drag::Crop { start } => {
@@ -1082,7 +1120,7 @@ impl Editor {
                 self.doc.update(cx, |d, _| d.set_crop(crop));
             }
             Drag::None => return,
-            Drag::Pan { .. } | Drag::Move { .. } => {}
+            Drag::Pan { .. } | Drag::Move { .. } | Drag::Marquee { .. } => {}
         }
         cx.notify();
     }
@@ -1410,9 +1448,8 @@ impl Editor {
                 window.paint_quad(o);
             }
 
-            if let Some(id) = self.selected
-                && let Some(s) = doc.shape(id)
-            {
+            for id in &self.selected {
+                let Some(s) = doc.shape(*id) else { continue };
                 let r = xf.rect_to_screen(s.bounds());
                 let r = Bounds {
                     origin: r.origin - point(px(4.), px(4.)),
@@ -1423,10 +1460,43 @@ impl Editor {
                 o.corner_radii = px(3.).into();
                 window.paint_quad(o);
             }
+            if self.selected.len() > 1 {
+                let bounds = doc
+                    .shapes()
+                    .iter()
+                    .filter(|s| self.selected.contains(&s.id))
+                    .map(|s| s.bounds())
+                    .reduce(|a, b| {
+                        let x = a.x.min(b.x);
+                        let y = a.y.min(b.y);
+                        RectF::new(
+                            x,
+                            y,
+                            a.right().max(b.right()) - x,
+                            a.bottom().max(b.bottom()) - y,
+                        )
+                    });
+                if let Some(bounds) = bounds {
+                    window.paint_quad(outline(
+                        xf.rect_to_screen(bounds.inflate(5.0 / zoom)),
+                        theme::selection(),
+                        gpui::BorderStyle::Solid,
+                    ));
+                }
+            }
+            if let Drag::Marquee { start, end, .. } = &self.drag {
+                let bounds = xf.rect_to_screen(RectF::from_points(*start, *end));
+                window.paint_quad(fill(bounds, theme::selection().opacity(0.08)));
+                window.paint_quad(outline(
+                    bounds,
+                    theme::selection(),
+                    gpui::BorderStyle::Dashed,
+                ));
+            }
             // What a press would pick up, before it is selected.
             if self.tool == Tool::Select
                 && self.drag == Drag::None
-                && let Some(id) = self.hover.filter(|h| Some(*h) != self.selected)
+                && let Some(id) = self.hover.filter(|h| !self.selected.contains(h))
                 && let Some(s) = doc.shape(id)
             {
                 let r = xf.rect_to_screen(s.bounds());

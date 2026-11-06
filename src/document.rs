@@ -480,6 +480,79 @@ impl Document {
         true
     }
 
+    /// Removes a selection without exposing intermediate states to undo.
+    pub fn remove_all(&mut self, ids: &std::collections::BTreeSet<ShapeId>) {
+        if !self.state.shapes.iter().any(|s| ids.contains(&s.id)) {
+            return;
+        }
+        self.checkpoint();
+        self.state.shapes.retain(|s| !ids.contains(&s.id));
+        self.revision += 1;
+    }
+
+    /// A gesture checkpoints once; subsequent updates reuse that checkpoint.
+    pub fn translate_all(
+        &mut self,
+        ids: &std::collections::BTreeSet<ShapeId>,
+        dx: f32,
+        dy: f32,
+        live: bool,
+    ) {
+        if ids.is_empty() || (dx == 0.0 && dy == 0.0) {
+            return;
+        }
+        if !live {
+            self.checkpoint();
+        }
+        for s in &mut self.state.shapes {
+            if ids.contains(&s.id) {
+                *s = Arc::new(s.translated(dx, dy));
+            }
+        }
+        self.revision += 1;
+    }
+
+    pub fn style_all(
+        &mut self,
+        ids: &std::collections::BTreeSet<ShapeId>,
+        style: Style,
+        live: bool,
+    ) -> bool {
+        if !self
+            .state
+            .shapes
+            .iter()
+            .any(|s| ids.contains(&s.id) && s.style != style)
+        {
+            return false;
+        }
+        if !live {
+            self.checkpoint();
+        }
+        for s in &mut self.state.shapes {
+            if ids.contains(&s.id) && s.style != style {
+                *s = Arc::new(s.with_style(style));
+            }
+        }
+        self.revision += 1;
+        true
+    }
+
+    pub fn shapes_within(&self, rect: RectF) -> std::collections::BTreeSet<ShapeId> {
+        self.state
+            .shapes
+            .iter()
+            .filter(|s| {
+                let b = s.bounds();
+                b.x >= rect.x
+                    && b.y >= rect.y
+                    && b.right() <= rect.right()
+                    && b.bottom() <= rect.bottom()
+            })
+            .map(|s| s.id)
+            .collect()
+    }
+
     pub fn clear(&mut self) {
         if self.is_pristine() {
             return;

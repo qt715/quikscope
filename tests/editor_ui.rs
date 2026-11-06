@@ -5,6 +5,7 @@
 // to the interactive VM smoke suite rather than this WGPU-specific harness.
 #![cfg(not(windows))]
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gpui::EntityInputHandler as _;
@@ -251,7 +252,7 @@ fn formatting_shortcuts_apply_while_typing_and_to_selected_text() {
     let id = ui.doc(|d| d.shapes()[0].id);
     ui.editor(|e, cx| {
         e.set_tool(quickscope::ui::editor::Tool::Select, cx);
-        e.selected = Some(id);
+        e.selected = BTreeSet::from([id]);
     });
     ui.ctrl("b", false);
     assert_eq!(ui.doc(text_font).weight, 400);
@@ -272,10 +273,18 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
         Style::default(),
     );
     let id = doc.add(rect);
+    let second = doc.make_shape(
+        ShapeKind::Rect {
+            a: Pt::new(300., 200.),
+            b: Pt::new(400., 300.),
+        },
+        Style::default(),
+    );
+    let second = doc.add(second);
     let mut ui = Ui::new(doc);
     ui.editor(|e, cx| {
         e.set_tool(quickscope::ui::editor::Tool::Select, cx);
-        e.selected = Some(id);
+        e.selected = BTreeSet::from([id, second]);
         e.toggle_picker(px(500.), cx);
     });
     ui.frame();
@@ -291,6 +300,7 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     // Left edge of the wheel is cyan.
     assert!(color.r < 40 && color.g > 200 && color.b > 200, "{color:?}");
     assert_eq!(ui.editor(|e, _| e.style.color), color, "tool color follows");
+    assert!(ui.doc(|d| d.shapes().iter().all(|s| s.style.color == color)));
 
     let undo_steps = ui.doc(|d| d.can_undo());
     assert!(undo_steps);
@@ -300,10 +310,11 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
         PALETTE[0],
         "one undo restores the color from before the drag"
     );
+    assert!(ui.doc(|d| d.shapes().iter().all(|s| s.style.color == PALETTE[0])));
     ui.ctrl("z", false);
     assert!(
-        ui.doc(|d| d.shape(id).is_none()),
-        "next undo removes the rect itself"
+        ui.doc(|d| d.shape(second).is_none() && d.shape(id).is_some()),
+        "next undo removes the last original shape, not a partial recolor"
     );
 
     // Escape closes the picker without touching the drawing.
@@ -514,7 +525,7 @@ fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
     // Clicking its outline selects it; then the interior drags it.
     let edge = ui.screen(Pt::new(300.0, 200.0));
     ui.click(edge);
-    assert_eq!(ui.editor(|e, _| e.selected), Some(rect));
+    assert_eq!(ui.editor(|e, _| e.selected.clone()), BTreeSet::from([rect]));
     let interior = ui.screen(Pt::new(400.0, 150.0));
     drag(&mut ui, interior, by);
     let r1 = bounds(&mut ui, rect);
@@ -524,7 +535,124 @@ fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
     let inner_before = bounds(&mut ui, inner);
     let at = ui.screen(inner_before.center());
     drag(&mut ui, at, by);
-    assert_eq!(ui.editor(|e, _| e.selected), Some(inner));
+    assert_eq!(
+        ui.editor(|e, _| e.selected.clone()),
+        BTreeSet::from([inner])
+    );
     assert_eq!(bounds(&mut ui, rect), r1, "the rectangle stayed");
     assert!(bounds(&mut ui, inner).x > inner_before.x);
+}
+
+fn selection_scene() -> (Ui, Vec<u64>) {
+    let mut doc = blank();
+    let ids = (0..3)
+        .map(|i| {
+            let shape = doc.make_shape(
+                ShapeKind::Rect {
+                    a: Pt::new(100. + i as f32 * 100., 140.),
+                    b: Pt::new(150. + i as f32 * 100., 190.),
+                },
+                Style {
+                    fill: true,
+                    ..Style::default()
+                },
+            );
+            doc.add(shape)
+        })
+        .collect();
+    let mut ui = Ui::new(doc);
+    ui.typ("v");
+    (ui, ids)
+}
+
+fn selection_bounds(ui: &mut Ui) -> Vec<quickscope::geom::RectF> {
+    ui.doc(|d| d.shapes().iter().map(|s| s.bounds()).collect())
+}
+
+#[test]
+fn marquee_contains_bounds_and_shift_click_toggles() {
+    let (mut ui, ids) = selection_scene();
+    let a = ui.screen(Pt::new(80., 120.));
+    let b = ui.screen(Pt::new(230., 210.));
+    ui.mouse("down", a);
+    ui.mouse("move", b);
+    ui.mouse("up", b);
+    assert_eq!(
+        ui.editor(|e, _| e.selected.clone()),
+        BTreeSet::from([ids[0]])
+    );
+    for id in [ids[1], ids[0]] {
+        let p = ui.doc(|d| d.shape(id).unwrap().bounds().center());
+        let at = ui.screen(p);
+        ui.input(PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            click_count: 1,
+            first_mouse: false,
+        }));
+        ui.mouse("up", at);
+    }
+    assert_eq!(
+        ui.editor(|e, _| e.selected.clone()),
+        BTreeSet::from([ids[1]])
+    );
+}
+
+#[test]
+fn multi_move_and_nudge_each_record_one_undo_step() {
+    let (mut ui, ids) = selection_scene();
+    let before = selection_bounds(&mut ui);
+    ui.ctrl("a", false);
+    let at = ui.screen(Pt::new(120., 160.));
+    ui.mouse("down", at);
+    ui.mouse("move", at + point(px(15.), px(10.)));
+    ui.mouse("move", at + point(px(30.), px(20.)));
+    ui.mouse("up", at + point(px(30.), px(20.)));
+    let after = selection_bounds(&mut ui);
+    for (a, b) in before.iter().zip(&after) {
+        assert!(b.x > a.x && b.y > a.y);
+    }
+    ui.ctrl("z", false);
+    assert_eq!(selection_bounds(&mut ui), before);
+    ui.ctrl("a", false);
+    ui.key(
+        "right",
+        None,
+        Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+    );
+    for (a, b) in before.iter().zip(selection_bounds(&mut ui)) {
+        assert_eq!(b.x, a.x + 10.);
+    }
+    ui.ctrl("z", false);
+    assert_eq!(selection_bounds(&mut ui), before);
+    ui.ctrl("z", false);
+    assert!(
+        ui.doc(|d| d.shape(ids[2]).is_none()),
+        "no hidden gesture checkpoints"
+    );
+}
+
+#[test]
+fn multi_style_and_delete_are_atomic() {
+    let (mut ui, ids) = selection_scene();
+    ui.ctrl("a", false);
+    let before = selection_bounds(&mut ui);
+    ui.editor(|e, cx| e.set_color(PALETTE[2], cx));
+    assert!(ui.doc(|d| d.shapes().iter().all(|s| s.style.color == PALETTE[2])));
+    ui.ctrl("z", false);
+    assert!(ui.doc(|d| d.shapes().iter().all(|s| s.style.color == PALETTE[0])));
+    ui.ctrl("a", false);
+    ui.key("delete", None, Modifiers::default());
+    assert!(ui.doc(|d| d.shapes().is_empty()));
+    ui.ctrl("z", false);
+    assert_eq!(selection_bounds(&mut ui), before);
+    ui.ctrl("z", false);
+    assert!(ui.doc(|d| d.shape(ids[2]).is_none()));
 }
