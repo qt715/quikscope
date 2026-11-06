@@ -10,6 +10,9 @@ First release.
   and fixed geometry.
 - Clipboard ownership through `wlr-data-control`; desktop notification with a
   thumbnail whose click opens the editor.
+- X11 backend: persistent MIT-SHM capture with GetImage fallback, RandR monitors,
+  XFixes cursor, EWMH window snapping, override-redirect region overlays, and
+  PNG/text CLIPBOARD ownership with large-image INCR transfers.
 - GPUI annotation editor: rectangle, ellipse, arrow, line, pen, highlighter,
   text, numbered steps, pixelate, crop; select/move, undo/redo, zoom/pan with
   cubic-bezier eased zoom transitions; refits to the window on resize;

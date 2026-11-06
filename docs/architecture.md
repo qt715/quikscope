@@ -53,6 +53,17 @@ socket.
 | Backend | Capture | Clipboard | Overlay | Window knowledge |
 | --- | --- | --- | --- | --- |
 | `wlroots` | `wlr-screencopy` | `wlr-data-control` | layer-shell | Hyprland IPC when present |
+| `x11` | MIT-SHM GetImage, core GetImage fallback | CLIPBOARD selection, PNG/text, INCR | override-redirect PopUp | EWMH |
+
+X11 keeps separate persistent connections for capture, EWMH queries and
+clipboard ownership. The capture thread reuses a SysV shared-memory segment;
+RandR monitor rectangles use physical root coordinates, with no output scale.
+TrueColor pixels become opaque BGRA, and XFixes optionally supplies the cursor.
+The selection owner claims CLIPBOARD before the PNG encoder finishes and serves
+the same encoded bytes; large transfers advance only when the requestor deletes
+the previous INCR property. Popups bypass the window manager, so region selection
+sets native keyboard focus after they map and restores the prior focus on exit.
+There is no X11 GPU prewarm window because it could flash on the desktop.
 
 ## Capture path
 

@@ -1,7 +1,7 @@
 # quickscope
 
-A fast screenshot tool for wlroots-based Wayland compositors (Hyprland, sway,
-labwc, river, …) with a built-in annotation editor written in
+A fast screenshot tool for X11 and wlroots-based Wayland desktops (Hyprland,
+sway, labwc, river, …) with a built-in annotation editor written in
 [GPUI](https://gpui.rs).
 
 ```text
@@ -33,9 +33,10 @@ keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ c
 
 ## Install
 
-Requires a compositor with `wlr-screencopy`, `wlr-layer-shell` and
-`wlr-data-control` (all wlroots compositors and Hyprland), a session D-Bus
-with a notification server, and Rust ≥ 1.95 to build.
+Requires either an X11 server with a 24/32-bit TrueColor root visual, or a
+compositor with `wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`
+(all wlroots compositors and Hyprland), plus Rust ≥ 1.95 to build.
+A session D-Bus notification server is optional.
 
 ```sh
 cargo install --locked --path .
@@ -48,6 +49,16 @@ install -Dm644 packaging/quickscope.desktop ~/.local/share/applications/quicksco
 
 The daemon is optional at login: any `quickscope` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
+
+On X11, `DISPLAY` selects the backend when `WAYLAND_DISPLAY` is unset.
+`QUICKSCOPE_BACKEND=x11` explicitly selects it (including on Xwayland).
+MIT-SHM accelerates local captures; remote servers fall back to GetImage.
+RandR 1.5 monitor names identify outputs; older servers expose one `screen-N`
+output. X11 coordinates are physical pixels (scale 1). An EWMH window manager
+enables active-window capture, window snapping and focused-output detection;
+without one those queries are unknown. No X11 command-line helpers are needed
+at runtime. Clipboard PNGs are served without re-encoding, including large
+images via the X11 INCR protocol.
 
 Text extraction additionally needs Tesseract and a model per language,
 loaded at run time (nothing extra to build):
@@ -105,9 +116,9 @@ quickscope ping | quit
 
 | Mode | Captures |
 | --- | --- |
-| `region` | Freezes all outputs; drag a rectangle, click a window (Hyprland) or click empty space for the whole output. Right click, `Esc` or `q` cancels; `Enter` takes the output under the keyboard focus. |
-| `output` | The focused output on Hyprland, the first output elsewhere, or `-o NAME`. |
-| `window` | The active window (Hyprland). |
+| `region` | Freezes all outputs; drag a rectangle, click a window (Hyprland or X11/EWMH) or click empty space for the whole output. Right click, `Esc` or `q` cancels; `Enter` takes the output under the keyboard focus. |
+| `output` | The focused output on Hyprland or X11/EWMH, the first output elsewhere, or `-o NAME`. |
+| `window` | The active window (Hyprland or X11/EWMH). |
 | `screen` | All outputs composed in their layout. |
 
 | Option | Effect |
@@ -218,10 +229,17 @@ GPU tiles built off the main thread before the editor asks for them, a GPU
 prewarm at daemon start, and the clipboard claimed before its PNG is encoded.
 Details in [docs/architecture.md](docs/architecture.md).
 
+On a private Xvfb server at 2560×1440 (optimized test profile), 30 warm
+captures measured a median of 1.36 ms with MIT-SHM (p95 1.69 ms), versus
+2.51 ms with plain GetImage (p95 4.40 ms). These capture-only numbers exclude
+PNG encoding and IPC. Reproduce with the `capture_latency_2560x1440` X11
+test described in [docs/testing.md](docs/testing.md).
+
 ## Limitations
 
-- wlroots-protocol compositors only; GNOME and KDE lack `wlr-screencopy`.
-- Window snapping, `window` mode and focused-output detection need Hyprland.
+- Wayland capture needs wlroots protocols; GNOME and KDE lack `wlr-screencopy`.
+- On Wayland, window snapping, `window` mode and focused-output detection need Hyprland.
+- X11 capture supports 24/32-bit TrueColor; monitors have no independent scale.
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.
 

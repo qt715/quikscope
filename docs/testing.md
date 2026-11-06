@@ -9,12 +9,24 @@
 | Editor interaction | `tests/editor_ui.rs` | Vulkan or GL, as above |
 | Text extraction | `tests/ocr.rs` | Tesseract and its language models; skips without them |
 | End to end | `tests/e2e.rs` (feature `e2e`) | `labwc` or `sway`, `dbus-daemon`; `grim` for reference comparisons; `bwrap` optional; Tesseract for the text extraction test |
+| X11 end to end | `tests/x11_e2e.rs` (feature `e2e`) | Xvfb, Mesa software GL/Vulkan |
 
 ```sh
 cargo test                                    # everything but e2e
 cargo test --features e2e --test e2e          # e2e (skips without a compositor)
 QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
 ```
+
+`cargo test --features e2e --test x11_e2e` starts its own Xvfb server and
+isolates HOME and XDG directories. It draws a known root pattern, compares
+screen and dragged-region captures pixel-for-pixel, reads PNGs through the
+real CLIPBOARD protocol (including INCR), and checks Escape/Enter keyboard
+input on override-redirect overlays at 2× UI scale. Set `QUICKSCOPE_XVFB` to
+an absolute Xvfb binary path when it is not installed in PATH;
+`QUICKSCOPE_E2E=1` makes its absence a failure. RandR multi-monitor composition
+is checked when the server supports monitor creation. The
+`capture_latency_2560x1440` test compares SHM and plain GetImage pixels and
+prints warm-capture median/p95 timings with `-- --nocapture`.
 
 The text-shaping unit tests (Japanese, Arabic, Hebrew, Devanagari, emoji)
 need a font for each script, which they find among installed fonts; without
@@ -105,5 +117,6 @@ compositor.
 
 `.github/workflows/ci.yml` runs formatting and clippy (`-D warnings`), the
 test suite with Mesa lavapipe, Noto fonts and Tesseract on Ubuntu, an MSRV
-check, the e2e suite in an Arch Linux container with labwc and Tesseract,
-and a release build that is attached to `v*` tags.
+check, the Wayland e2e suite in an Arch Linux container with labwc and
+Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, and a
+release build that is attached to `v*` tags.
