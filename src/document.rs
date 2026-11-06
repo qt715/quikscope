@@ -553,6 +553,31 @@ impl Document {
             .collect()
     }
 
+    pub fn duplicate_all(
+        &mut self,
+        ids: &std::collections::BTreeSet<ShapeId>,
+        offset: f32,
+    ) -> std::collections::BTreeSet<ShapeId> {
+        let copies: Vec<_> = self
+            .state
+            .shapes
+            .iter()
+            .filter(|s| ids.contains(&s.id))
+            .map(|s| s.translated(offset, offset))
+            .collect();
+        if copies.is_empty() {
+            return Default::default();
+        }
+        self.checkpoint();
+        let mut selected = std::collections::BTreeSet::new();
+        for mut shape in copies {
+            shape.id = self.new_id();
+            selected.insert(shape.id);
+            self.state.shapes.push(Arc::new(shape));
+        }
+        self.revision += 1;
+        selected
+    }
     pub fn clear(&mut self) {
         if self.is_pristine() {
             return;

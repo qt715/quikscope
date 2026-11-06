@@ -656,3 +656,30 @@ fn multi_style_and_delete_are_atomic() {
     ui.ctrl("z", false);
     assert!(ui.doc(|d| d.shape(ids[2]).is_none()));
 }
+
+#[test]
+fn duplicate_selection_has_offset_new_ids_and_one_undo_step() {
+    let (mut ui, ids) = selection_scene();
+    let before = selection_bounds(&mut ui);
+    ui.ctrl("a", false);
+    let zoom = ui.editor(|e, _| e.zoom());
+    ui.ctrl("d", false);
+    assert_eq!(ui.doc(|d| d.shapes().len()), 6);
+    let selected = ui.editor(|e, _| e.selected.clone());
+    assert_eq!(selected.len(), 3);
+    assert!(ids.iter().all(|id| !selected.contains(id)));
+    let copies = ui.doc(|d| {
+        d.shapes()[3..]
+            .iter()
+            .map(|s| s.bounds())
+            .collect::<Vec<_>>()
+    });
+    for (a, b) in before.iter().zip(copies) {
+        assert!((b.x - a.x - 10. / zoom).abs() < 0.01);
+        assert!((b.y - a.y - 10. / zoom).abs() < 0.01);
+    }
+    ui.ctrl("z", false);
+    assert_eq!(selection_bounds(&mut ui), before);
+    ui.ctrl("z", false);
+    assert!(ui.doc(|d| d.shape(ids[2]).is_none()));
+}

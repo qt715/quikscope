@@ -800,6 +800,13 @@ impl Editor {
                     self.selected = self.doc.read(cx).shapes().iter().map(|s| s.id).collect();
                     cx.notify();
                 }
+                ("d", false) => {
+                    let offset = 10.0 / self.zoom();
+                    self.selected = self
+                        .doc
+                        .update(cx, |d, _| d.duplicate_all(&self.selected, offset));
+                    cx.notify();
+                }
                 ("s", shift) => self.save(shift, window, cx),
                 ("c", false) => self.copy(cx),
                 ("c", true) => self.copy_text(cx),
