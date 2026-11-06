@@ -95,6 +95,7 @@ impl AssetSource for Assets {
             "redo-2",
             "save",
             "copy",
+            "scan-text",
             "paint-bucket",
             "palette",
             "italic",

@@ -44,10 +44,19 @@ jobs:
         run: scripts/ci-deps-ubuntu.sh
       - name: Fonts for the shaping and fallback tests (CJK, Arabic, Hebrew, Devanagari, emoji)
         run: sudo apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+      # One Chinese variant only: Debian's fast models read simplified text as
+      # traditional when both are installed (see docs/text-extraction.md).
+      - name: Tesseract and language models for the text extraction tests
+        run: |
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+            tesseract-ocr-jpn tesseract-ocr-chi-sim tesseract-ocr-kor tesseract-ocr-ara \
+            tesseract-ocr-tha tesseract-ocr-vie tesseract-ocr-deu
       - name: Tests
         env:
-          # Script tests fail instead of skipping when a font is missing.
+          # Script and OCR tests fail instead of skipping when a font,
+          # Tesseract or a language model is missing.
           MOMENT_REQUIRE_FONTS: "1"
+          MOMENT_REQUIRE_OCR: "1"
         run: cargo test --locked
       - name: Upload regression diffs
         if: failure()
@@ -84,7 +93,7 @@ jobs:
       - name: System dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel git rustup labwc grim dbus \
-            mesa vulkan-swrast wayland libxkbcommon fontconfig
+            mesa vulkan-swrast wayland libxkbcommon fontconfig tesseract tesseract-data-eng
           rustup default stable
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -94,6 +103,7 @@ jobs:
         env:
           MOMENT_E2E: "1"
           MOMENT_E2E_COMPOSITOR: labwc
+          MOMENT_REQUIRE_OCR: "1"
         run: cargo test --locked --features e2e --test e2e -- --test-threads=4
 
   release:

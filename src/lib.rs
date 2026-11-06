@@ -12,6 +12,7 @@ pub mod fonts;
 pub mod geom;
 pub mod ipc;
 pub mod notify;
+pub mod ocr;
 pub mod raster;
 pub mod render;
 pub mod text;

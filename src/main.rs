@@ -22,6 +22,7 @@ CAPTURE OPTIONS:
     --clipboard / --no-clipboard Copy the capture to the clipboard
     --cursor / --no-cursor       Include the pointer
     --save                       Also save the raw capture to the screenshots directory
+    --text                       Extract the text in the capture: copy it and print it
     -o, --output <NAME>          Output for `output` mode (default: focused output)
     -g, --geometry <\"X,Y WxH\">   Capture this logical rectangle (slurp format), no selection
 
@@ -125,6 +126,14 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Response::Text { text, .. } if text.is_empty() => {
+            eprintln!("moment: no text found");
+            Ok(ExitCode::from(1))
+        }
+        Response::Text { text, .. } => {
+            println!("{text}");
+            Ok(ExitCode::SUCCESS)
+        }
         Response::Pong => {
             println!("ok");
             Ok(ExitCode::SUCCESS)
@@ -168,6 +177,7 @@ fn parse_capture(args: &[String]) -> anyhow::Result<Request> {
             "--cursor" => o.cursor = Some(true),
             "--no-cursor" => o.cursor = Some(false),
             "--save" => o.save = true,
+            "--text" => o.text = true,
             "-o" | "--output" => o.output = Some(value(a)?),
             "-g" | "--geometry" => {
                 o.geometry = Some(value(a)?.parse().map_err(anyhow::Error::msg)?)
@@ -201,8 +211,10 @@ mod tests {
 
     #[test]
     fn capture_flags_map_to_request_options() {
-        let req =
-            parse_capture(&args("output --edit --no-notify --cursor -o DP-2 --save")).unwrap();
+        let req = parse_capture(&args(
+            "output --edit --no-notify --cursor -o DP-2 --save --text",
+        ))
+        .unwrap();
         let Request::Capture(Mode::Output, o) = req else {
             panic!("{req:?}")
         };
@@ -212,6 +224,7 @@ mod tests {
         assert_eq!(o.clipboard, None);
         assert_eq!(o.output.as_deref(), Some("DP-2"));
         assert!(o.save);
+        assert!(o.text);
     }
 
     #[test]

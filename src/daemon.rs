@@ -87,6 +87,9 @@ pub fn run(socket: PathBuf) -> Result<()> {
     let config = Arc::new(Config::load()?);
     // Index system fonts off the main thread before the font menu needs them.
     crate::fonts::warm();
+    // The primary OCR model loads in the background and stays loaded, so
+    // text extraction starts reading immediately.
+    crate::ocr::warm(&config.ocr.languages);
     let listener = bind(&socket)?;
     let (tx, rx) = mpsc::unbounded::<Msg>();
     spawn_listener(listener, tx.clone());
@@ -507,7 +510,7 @@ async fn finish_capture(
 ) -> Result<Response> {
     let (clipboard, notifier) = daemon(cx, |d, _| (d.clipboard.clone(), d.notifier.clone()));
 
-    if opts.clipboard.unwrap_or(config.copy_to_clipboard) {
+    if !opts.text && opts.clipboard.unwrap_or(config.copy_to_clipboard) {
         match &clipboard {
             Some(c) => {
                 c.set_image(shot.image.clone());
@@ -532,6 +535,10 @@ async fn finish_capture(
     } else {
         None
     };
+
+    if opts.text {
+        return extract_text(shot, &opts, config, clipboard, notifier, cx).await;
+    }
 
     if opts.notify.unwrap_or(daemon(cx, |d, _| d.notify)) {
         match notifier {
@@ -564,6 +571,90 @@ async fn finish_capture(
         height: shot.image.height,
         saved,
     })
+}
+
+/// `capture … text`: reads the capture's text and copies it in place of
+/// the image. The notification shows what was read, so a keybind user
+/// sees the result (or why there is none) without a terminal.
+async fn extract_text(
+    shot: Arc<Shot>,
+    opts: &CaptureOptions,
+    config: Arc<Config>,
+    clipboard: Option<Clipboard>,
+    notifier: Option<Notifier>,
+    cx: &mut AsyncApp,
+) -> Result<Response> {
+    let (image, scale) = (shot.image.clone(), shot.scale);
+    let languages = config.ocr.languages.clone();
+    let result = cx
+        .background_spawn(async move {
+            crate::ocr::extract(
+                &image,
+                image.bounds(),
+                crate::ocr::upscale_for(scale),
+                &languages,
+            )
+        })
+        .await;
+    let notify = opts.notify.unwrap_or(daemon(cx, |d, _| d.notify));
+    let message = match &result {
+        Ok(found) if found.text.is_empty() => ("No text found".to_string(), String::new()),
+        Ok(found) => (
+            format!("Copied {} of text", plural(found.lines.len(), "line")),
+            preview(&found.text),
+        ),
+        Err(e) => ("Text extraction failed".to_string(), format!("{e:#}")),
+    };
+    if notify && let Some(n) = notifier {
+        cx.background_spawn(async move {
+            if let Err(e) = n.message(&message.0, &message.1) {
+                log::warn!("notification failed: {e:#}");
+            }
+        })
+        .detach();
+    }
+    let found = result?;
+    if !found.text.is_empty() && opts.clipboard.unwrap_or(config.copy_to_clipboard) {
+        match &clipboard {
+            Some(c) => c.set_text(&found.text),
+            None => log::warn!("clipboard unavailable; text not copied"),
+        }
+    }
+    if opts.edit.unwrap_or(config.open_editor) {
+        let id = shot.id;
+        cx.update(|cx| open_editor(id, EditorTool::Default, cx))?;
+    }
+    Ok(Response::Text {
+        id: shot.id,
+        text: found.text,
+    })
+}
+
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 {
+        format!("1 {word}")
+    } else {
+        format!("{n} {word}s")
+    }
+}
+
+/// The first lines of `text`, short enough for a notification body.
+fn preview(text: &str) -> String {
+    const MAX_LINES: usize = 4;
+    const MAX_CHARS: usize = 240;
+    let mut out: String = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(MAX_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some((cut, _)) = out.char_indices().nth(MAX_CHARS) {
+        out.truncate(cut);
+        out.push('…');
+    } else if text.lines().filter(|l| !l.trim().is_empty()).count() > MAX_LINES {
+        out.push('…');
+    }
+    out
 }
 
 /// `moment notifications on|off|toggle|status`. Changes are written to the
@@ -663,7 +754,7 @@ fn newest_image(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Logical size for a new editor window: the image at 1:1 plus toolbar and
-/// margins, at least 960×480 (one toolbar row) where the screen allows,
+/// margins, at least 1040×480 (one toolbar row) where the screen allows,
 /// never more than 90% of the screen. Unlike `clamp`, the preferred minimum
 /// yields to the screen limit, so small or HiDPI-scaled displays (1024 px,
 /// 1920 px at 2×) get a smaller window instead of a panic; the toolbar then
@@ -672,7 +763,7 @@ fn editor_window_size(image_w: f32, image_h: f32, screen_w: f32, screen_h: f32) 
     let max_w = (screen_w * 0.9).max(1.0);
     let max_h = (screen_h * 0.9).max(1.0);
     (
-        (image_w + 48.0).max(960.0).min(max_w),
+        (image_w + 48.0).max(1040.0).min(max_w),
         (image_h + 112.0).max(480.0).min(max_h),
     )
 }
@@ -809,7 +900,7 @@ mod tests {
     fn editor_window_size_prefers_one_to_one_with_a_toolbar_row() {
         assert_eq!(
             editor_window_size(100.0, 50.0, 2560.0, 1440.0),
-            (960.0, 480.0)
+            (1040.0, 480.0)
         );
         assert_eq!(
             editor_window_size(1200.0, 700.0, 2560.0, 1440.0),

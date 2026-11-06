@@ -3076,6 +3076,7 @@ dependencies = [
  "gpui-pre-platform",
  "image",
  "libc",
+ "libloading",
  "log",
  "lyon",
  "memmap2",

@@ -209,6 +209,11 @@ pub struct Editor {
     fitted_for: (Size<Pixels>, IRect),
     /// Ctrl+scroll accumulated into zoom steps.
     wheel: zoom::Wheel,
+    /// A text extraction is running.
+    reading_text: bool,
+    /// Lines the last extraction read (image pixels) and when, for the
+    /// highlight that fades over [`TEXT_FLASH`].
+    text_flash: Option<(Vec<RectF>, Instant)>,
     canvas: Bounds<Pixels>,
     drag: Drag,
     draft: Option<Shape>,
@@ -241,6 +246,8 @@ const MARGIN: f32 = 24.0;
 /// Wheel/touchpad zoom steps arrive in bursts; each retargets a short
 /// transition so continuous zooming stays fluid.
 const WHEEL_ZOOM: Duration = Duration::from_millis(160);
+/// How long the lines found by text extraction stay highlighted.
+const TEXT_FLASH: Duration = Duration::from_millis(1600);
 /// Discrete jumps (fit, 100%, Ctrl+=/-) travel further and get more time.
 const STEP_ZOOM: Duration = Duration::from_millis(260);
 
@@ -286,6 +293,8 @@ impl Editor {
             auto_fit: true,
             fitted_for: Default::default(),
             wheel: zoom::Wheel::default(),
+            reading_text: false,
+            text_flash: None,
             canvas: Bounds::default(),
             drag: Drag::None,
             draft: None,
@@ -761,7 +770,8 @@ impl Editor {
                 ("," | "<", true)
                     if self.update_font(|f| f.with_size(next_size(f.size, false)), cx) => {}
                 ("s", shift) => self.save(shift, window, cx),
-                ("c", _) => self.copy(cx),
+                ("c", false) => self.copy(cx),
+                ("c", true) => self.copy_text(cx),
                 ("z", false) => self.undo(cx),
                 ("z", true) | ("y", _) => self.redo(cx),
                 ("w", _) | ("q", _) => window.remove_window(),
@@ -1159,6 +1169,75 @@ impl Editor {
         .detach();
     }
 
+    /// Ctrl+Shift+C: reads the screenshot's text (inside the crop, if any;
+    /// annotations are not read) and copies it, briefly highlighting the
+    /// lines that were read.
+    pub fn copy_text(&mut self, cx: &mut Context<Self>) {
+        self.commit_text(cx);
+        if self.reading_text {
+            return;
+        }
+        let services = cx.try_global::<EditorServices>().cloned();
+        let languages = services
+            .as_ref()
+            .map(|s| s.config.ocr.languages.clone())
+            .unwrap_or_default();
+        let clipboard = services.and_then(|s| s.clipboard);
+        let image = self.shot.image.clone();
+        let region = self
+            .doc
+            .read(cx)
+            .crop()
+            .map(|c| c.round_out())
+            .unwrap_or(image.bounds());
+        let upscale = crate::ocr::upscale_for(self.shot.scale);
+        self.reading_text = true;
+        self.show_toast("Reading text…".into(), false, cx);
+        let task =
+            cx.background_spawn(
+                async move { crate::ocr::extract(&image, region, upscale, &languages) },
+            );
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |e, cx| {
+                e.reading_text = false;
+                match result {
+                    Ok(found) if found.text.is_empty() => {
+                        e.show_toast("No text found".into(), false, cx)
+                    }
+                    Ok(found) => {
+                        e.text_flash = Some((
+                            found
+                                .lines
+                                .iter()
+                                .map(|l| {
+                                    let r = l.rect;
+                                    RectF::new(r.x as f32, r.y as f32, r.w as f32, r.h as f32)
+                                })
+                                .collect(),
+                            Instant::now(),
+                        ));
+                        match &clipboard {
+                            Some(c) => {
+                                c.set_text(&found.text);
+                                let n = found.lines.len();
+                                let lines = if n == 1 {
+                                    "1 line".into()
+                                } else {
+                                    format!("{n} lines")
+                                };
+                                e.show_toast(format!("Copied {lines} of text"), false, cx);
+                            }
+                            None => e.show_toast("Clipboard is unavailable".into(), true, cx),
+                        }
+                    }
+                    Err(err) => e.show_toast(format!("{err:#}"), true, cx),
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn saved_path(&self) -> Option<&PathBuf> {
         self.saved.as_ref().map(|(p, _)| p)
     }
@@ -1313,6 +1392,27 @@ impl Editor {
                 o.border_widths = px(1.5).into();
                 o.corner_radii = px(3.).into();
                 window.paint_quad(o);
+            }
+
+            // Lines found by text extraction light up and fade out.
+            if let Some((rects, at)) = &self.text_flash {
+                let t = at.elapsed().as_secs_f32() / TEXT_FLASH.as_secs_f32();
+                if t < 1.0 {
+                    let alpha = 1.0 - t * t;
+                    for r in rects {
+                        let b = xf.rect_to_screen(r.inflate(2.0 / zoom));
+                        let mut q = outline(
+                            b,
+                            theme::selection().opacity(alpha),
+                            gpui::BorderStyle::Solid,
+                        );
+                        q.background = theme::selection().opacity(0.18 * alpha).into();
+                        q.border_widths = px(1.5).into();
+                        q.corner_radii = px(3.).into();
+                        window.paint_quad(q);
+                    }
+                    window.request_animation_frame();
+                }
             }
 
             let crop = self.crop_draft.or(doc.crop());

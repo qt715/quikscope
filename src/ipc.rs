@@ -64,6 +64,8 @@ pub struct CaptureOptions {
     pub output: Option<String>,
     /// Skip interactive selection and capture this logical rectangle.
     pub geometry: Option<IRect>,
+    /// Extract the text in the capture and copy that instead of the image.
+    pub text: bool,
 }
 
 /// Change to the capture-notification setting.
@@ -127,6 +129,12 @@ pub enum Response {
         height: u32,
         saved: Option<PathBuf>,
     },
+    /// Text extracted from shot `id` (`capture … text`); empty when the
+    /// capture had no readable text.
+    Text {
+        id: u64,
+        text: String,
+    },
     Pong,
     /// Capture notifications are now on (`true`) or off.
     Notifications(bool),
@@ -160,6 +168,7 @@ impl Request {
                                 "clipboard" => o.clipboard = Some(value),
                                 "cursor" => o.cursor = Some(value),
                                 "save" if value => o.save = true,
+                                "text" if value => o.text = true,
                                 _ => return Err(format!("unknown capture option {w:?}")),
                             }
                         }
@@ -216,6 +225,9 @@ impl fmt::Display for Request {
                 if o.save {
                     write!(f, " save")?;
                 }
+                if o.text {
+                    write!(f, " text")?;
+                }
                 if let Some(out) = &o.output {
                     write!(f, " output={out}")?;
                 }
@@ -249,6 +261,16 @@ impl Response {
                 _ => Err(format!("malformed response {line:?}")),
             };
         }
+        if let Some(rest) = line.strip_prefix("ok text ") {
+            let (id, text) = rest.split_once(' ').unwrap_or((rest, ""));
+            let id = id
+                .parse()
+                .map_err(|_| format!("malformed shot id in {line:?}"))?;
+            return Ok(Response::Text {
+                id,
+                text: unescape(text),
+            });
+        }
         if let Some(msg) = line.strip_prefix("err ") {
             return Ok(Response::Error(msg.to_string()));
         }
@@ -275,6 +297,39 @@ impl Response {
     }
 }
 
+/// Keeps multi-line text on one protocol line: `\` and line breaks become
+/// `\\`, `\n` and `\r`.
+fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 impl fmt::Display for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -290,6 +345,7 @@ impl fmt::Display for Response {
                 }
                 Ok(())
             }
+            Response::Text { id, text } => write!(f, "ok text {id} {}", escape(text)),
             Response::Pong => write!(f, "ok pong"),
             Response::Notifications(on) => {
                 write!(f, "ok notifications {}", if *on { "on" } else { "off" })
@@ -397,6 +453,7 @@ mod tests {
                     save: true,
                     output: Some("DP-1".into()),
                     geometry: Some(IRect::new(-10, 5, 300, 200)),
+                    text: true,
                 },
             ),
             Request::OpenLast,
@@ -465,10 +522,39 @@ mod tests {
             Response::Error("no outputs".into()),
             Response::Notifications(true),
             Response::Notifications(false),
+            Response::Text {
+                id: 7,
+                text: "日本語\nline two\\n not a break\r\n".into(),
+            },
+            Response::Text {
+                id: 8,
+                text: String::new(),
+            },
         ];
         for r in cases {
             assert_eq!(Response::parse(&format!("{r}\n")), Ok(r.clone()));
         }
+    }
+
+    #[test]
+    fn text_responses_stay_on_one_line() {
+        let r = Response::Text {
+            id: 1,
+            text: "a\nb".into(),
+        };
+        assert_eq!(r.to_string(), "ok text 1 a\\nb");
+        assert_eq!(
+            Request::parse("capture region text no-notify"),
+            Ok(Request::Capture(
+                Mode::Region,
+                CaptureOptions {
+                    text: true,
+                    notify: Some(false),
+                    ..Default::default()
+                }
+            ))
+        );
+        assert!(Request::parse("capture region no-text").is_err());
     }
 
     #[test]

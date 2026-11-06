@@ -26,6 +26,16 @@ pub struct Config {
     /// How long the notification stays up, in milliseconds (-1 = server default).
     pub notification_timeout_ms: i32,
     pub editor: EditorConfig,
+    pub ocr: OcrConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct OcrConfig {
+    /// Tesseract models to read with, e.g. `["eng", "jpn"]`: the first
+    /// reads every line, the rest re-read lines it is unsure of. Empty
+    /// (the default): English first, then every installed model.
+    pub languages: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -68,6 +78,7 @@ impl Default for Config {
             cursor: false,
             notification_timeout_ms: 8000,
             editor: EditorConfig::default(),
+            ocr: OcrConfig::default(),
         }
     }
 }
@@ -114,6 +125,15 @@ impl Config {
             crate::fonts::MIN_SIZE,
             crate::fonts::MAX_SIZE
         );
+        for lang in &config.ocr.languages {
+            anyhow::ensure!(
+                !lang.is_empty()
+                    && lang
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+                "ocr.languages: {lang:?} is not a Tesseract model name like \"eng\" or \"chi_sim\""
+            );
+        }
         Ok(config)
     }
 

@@ -25,6 +25,22 @@ use wayland_protocols_wlr::data_control::v1::client::{
 use crate::raster::{Compression, Image};
 
 const PNG_MIME: &str = "image/png";
+/// Text targets, most specific first; X11-era names keep Xwayland
+/// clients (and older toolkits) able to paste.
+const TEXT_MIMES: [&str; 5] = [
+    "text/plain;charset=utf-8",
+    "text/plain",
+    "UTF8_STRING",
+    "TEXT",
+    "STRING",
+];
+
+/// What the daemon offers on the clipboard.
+#[derive(Clone)]
+enum Content {
+    Png(Arc<PendingPng>),
+    Text(Arc<str>),
+}
 
 /// Encoded PNG that may still be in progress.
 pub struct PendingPng(OnceLock<Result<Vec<u8>, String>>);
@@ -57,7 +73,7 @@ impl PendingPng {
 /// Handle to the clipboard thread.
 #[derive(Clone)]
 pub struct Clipboard {
-    tx: mpsc::Sender<Arc<PendingPng>>,
+    tx: mpsc::Sender<Content>,
     wake: Arc<OwnedFd>,
 }
 
@@ -91,10 +107,19 @@ impl Clipboard {
     /// Offers `image` as `image/png` and takes the selection.
     pub fn set_image(&self, image: Arc<Image>) -> Arc<PendingPng> {
         let png = PendingPng::encode(image);
-        if self.tx.send(png.clone()).is_ok() {
+        self.send(Content::Png(png.clone()));
+        png
+    }
+
+    /// Offers `text` as UTF-8 plain text and takes the selection.
+    pub fn set_text(&self, text: &str) {
+        self.send(Content::Text(text.into()));
+    }
+
+    fn send(&self, content: Content) {
+        if self.tx.send(content).is_ok() {
             let _ = rustix::io::write(&*self.wake, &[1]);
         }
-        png
     }
 }
 
@@ -102,7 +127,7 @@ struct State {
     manager: zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
     current: Option<(
         zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
-        Arc<PendingPng>,
+        Content,
     )>,
     offer: Option<zwlr_data_control_offer_v1::ZwlrDataControlOfferV1>,
 }
@@ -140,13 +165,13 @@ impl Owner {
         })
     }
 
-    fn run(&mut self, rx: mpsc::Receiver<Arc<PendingPng>>, wake: OwnedFd) -> Result<()> {
+    fn run(&mut self, rx: mpsc::Receiver<Content>, wake: OwnedFd) -> Result<()> {
         use rustix::event::{PollFd, PollFlags, poll};
         let qh = self.queue.handle();
         loop {
             loop {
                 match rx.try_recv() {
-                    Ok(png) => self.offer(png, &qh),
+                    Ok(content) => self.offer(content, &qh),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return Ok(()),
                 }
@@ -178,25 +203,41 @@ impl Owner {
         }
     }
 
-    fn offer(&mut self, png: Arc<PendingPng>, qh: &QueueHandle<State>) {
+    fn offer(&mut self, content: Content, qh: &QueueHandle<State>) {
         let source = self.state.manager.create_data_source(qh, ());
-        source.offer(PNG_MIME.into());
+        match &content {
+            Content::Png(_) => source.offer(PNG_MIME.into()),
+            Content::Text(_) => TEXT_MIMES.iter().for_each(|m| source.offer((*m).into())),
+        }
         self.device.set_selection(Some(&source));
-        if let Some((old, _)) = self.state.current.replace((source, png)) {
+        if let Some((old, _)) = self.state.current.replace((source, content)) {
             old.destroy();
         }
     }
 }
 
-fn write_to(fd: OwnedFd, png: Arc<PendingPng>) {
+/// Whether `content` is offered as `mime`.
+fn serves(content: &Content, mime: &str) -> bool {
+    match content {
+        Content::Png(_) => mime == PNG_MIME,
+        Content::Text(_) => TEXT_MIMES.contains(&mime),
+    }
+}
+
+fn write_to(fd: OwnedFd, content: Content) {
     std::thread::spawn(move || {
         let mut file = std::fs::File::from(fd);
-        match png.wait() {
-            Ok(bytes) => {
-                // A reader that hangs up early (EPIPE) is not an error worth logging.
-                let _ = file.write_all(bytes);
+        // A reader that hangs up early (EPIPE) is not an error worth logging.
+        match content {
+            Content::Png(png) => match png.wait() {
+                Ok(bytes) => {
+                    let _ = file.write_all(bytes);
+                }
+                Err(e) => log::error!("clipboard PNG encoding failed: {e}"),
+            },
+            Content::Text(text) => {
+                let _ = file.write_all(text.as_bytes());
             }
-            Err(e) => log::error!("clipboard PNG encoding failed: {e}"),
         }
     });
 }
@@ -213,14 +254,14 @@ impl Dispatch<zwlr_data_control_source_v1::ZwlrDataControlSourceV1, ()> for Stat
         use zwlr_data_control_source_v1::Event;
         match event {
             Event::Send { mime_type, fd } => {
-                let png = state
+                let content = state
                     .current
                     .as_ref()
-                    .filter(|(s, _)| s == source)
-                    .map(|(_, p)| p.clone());
-                match png {
-                    Some(png) if mime_type == PNG_MIME => write_to(fd, png),
-                    _ => drop(fd),
+                    .filter(|(s, c)| s == source && serves(c, &mime_type))
+                    .map(|(_, c)| c.clone());
+                match content {
+                    Some(content) => write_to(fd, content),
+                    None => drop(fd),
                 }
             }
             Event::Cancelled => {
@@ -292,5 +333,16 @@ mod tests {
         let png = PendingPng::encode(img.clone());
         let bytes = png.wait().unwrap();
         assert_eq!(&Image::decode(bytes).unwrap(), img.as_ref());
+    }
+
+    #[test]
+    fn content_is_served_only_under_its_own_types() {
+        let text = Content::Text("hi".into());
+        assert!(serves(&text, "text/plain;charset=utf-8"));
+        assert!(serves(&text, "UTF8_STRING"));
+        assert!(!serves(&text, PNG_MIME));
+        let png = Content::Png(PendingPng::encode(Arc::new(Image::new(1, 1))));
+        assert!(serves(&png, PNG_MIME));
+        assert!(!serves(&png, "text/plain"));
     }
 }

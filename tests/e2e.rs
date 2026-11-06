@@ -676,3 +676,104 @@ fn open_last_keeps_the_last_used_tool() {
         "no rectangle edge: longest red row {longest_row} px"
     );
 }
+
+/// Whether text extraction can run; without Tesseract the OCR tests skip
+/// unless `MOMENT_REQUIRE_OCR=1`.
+fn ocr_available() -> bool {
+    let ok = moment::ocr::tess::version().is_ok() && moment::ocr::tessdata_dir().is_some();
+    if !ok {
+        assert!(
+            std::env::var_os("MOMENT_REQUIRE_OCR").is_none(),
+            "Tesseract or its language data is missing"
+        );
+        eprintln!("skipped: Tesseract is not installed");
+    }
+    ok
+}
+
+/// A small light-theme "screenshot" with two lines of 16 px text, shown
+/// at 100% in the editor.
+fn text_image(path: &std::path::Path) {
+    use moment::document::{Document, Rgba, ShapeKind, Style};
+    let mut d = Document::new(
+        std::sync::Arc::new(Image::filled(560, 90, [250, 250, 250, 255])),
+        1.0,
+    );
+    for (i, line) in [
+        "The quick brown fox jumps over 13 lazy dogs.",
+        "Copy this text, please",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let s = d.make_shape(
+            ShapeKind::Text {
+                origin: moment::geom::Pt::new(14.0, 14.0 + i as f32 * 34.0),
+                text: (*line).into(),
+                font: moment::fonts::FontSpec {
+                    weight: 400,
+                    ..Default::default()
+                }
+                .with_size(16.0),
+            },
+            Style {
+                color: Rgba::rgb(0x111111),
+                size: 1,
+                fill: false,
+            },
+        );
+        d.add(s);
+    }
+    moment::export::render(&d.snapshot())
+        .save_png(path, moment::raster::Compression::Fast)
+        .unwrap();
+}
+
+#[test]
+fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
+    if !ocr_available() {
+        return;
+    }
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+    let png = s.root().join("text.png");
+    text_image(&png);
+    assert!(s.moment(&["open", png.to_str().unwrap()]).status.success());
+    s.wait_for_window("moment");
+    s.wait_log("editor window opened", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Ctrl+Shift+C in the editor: the screenshot's text, as plain text.
+    s.keys(&["ctrl+shift+c"]);
+    s.wait_log("extracted ", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(200));
+    let pasted = s.helper(&["paste", "text/plain;charset=utf-8"]).stdout;
+    assert_eq!(
+        String::from_utf8(pasted).unwrap(),
+        "The quick brown fox jumps over 13 lazy dogs.\nCopy this text, please"
+    );
+
+    // `capture --text` reads the screen (the editor showing that image):
+    // printed, on the clipboard, and summarised in the notification.
+    let out = s.moment(&["capture", "screen", "--text"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = stdout(&out);
+    assert!(
+        printed.contains("The quick brown fox jumps over 13 lazy dogs."),
+        "{printed}"
+    );
+    let clip = String::from_utf8(s.helper(&["paste", "UTF8_STRING"]).stdout).unwrap();
+    assert_eq!(clip, printed);
+    let n = s.wait_notification();
+    assert!(
+        n.summary.starts_with("Copied ") && n.summary.ends_with(" of text"),
+        "{n:?}"
+    );
+    assert!(n.body.contains("quick brown fox"), "{n:?}");
+}
