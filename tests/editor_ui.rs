@@ -683,3 +683,25 @@ fn duplicate_selection_has_offset_new_ids_and_one_undo_step() {
     ui.ctrl("z", false);
     assert!(ui.doc(|d| d.shape(ids[2]).is_none()));
 }
+
+#[test]
+fn selection_stacking_preserves_relative_order_and_undo() {
+    let (mut ui, ids) = selection_scene();
+    let a = ui.screen(Pt::new(80., 120.));
+    let b = ui.screen(Pt::new(280., 210.));
+    ui.mouse("down", a);
+    ui.mouse("move", b);
+    ui.mouse("up", b);
+    ui.ctrl("]", true);
+    assert_eq!(
+        ui.doc(|d| d.shapes().iter().map(|s| s.id).collect::<Vec<_>>()),
+        vec![ids[2], ids[0], ids[1]]
+    );
+    ui.ctrl("[", true);
+    assert_eq!(
+        ui.doc(|d| d.shapes().iter().map(|s| s.id).collect::<Vec<_>>()),
+        ids
+    );
+    ui.ctrl("z", false);
+    assert_eq!(ui.doc(|d| d.shapes().last().unwrap().id), ids[1]);
+}

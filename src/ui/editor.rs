@@ -807,6 +807,12 @@ impl Editor {
                         .update(cx, |d, _| d.duplicate_all(&self.selected, offset));
                     cx.notify();
                 }
+                ("]" | "}", true) | ("[" | "{", true) => {
+                    self.doc.update(cx, |d, _| {
+                        d.reorder_all(&self.selected, matches!(key, "]" | "}"))
+                    });
+                    cx.notify();
+                }
                 ("s", shift) => self.save(shift, window, cx),
                 ("c", false) => self.copy(cx),
                 ("c", true) => self.copy_text(cx),

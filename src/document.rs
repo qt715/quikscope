@@ -578,6 +578,22 @@ impl Document {
         self.revision += 1;
         selected
     }
+
+    /// Stable partition preserves stacking within the selection and its peers.
+    pub fn reorder_all(&mut self, ids: &std::collections::BTreeSet<ShapeId>, front: bool) {
+        let mut ordered = self.state.shapes.clone();
+        ordered.sort_by_key(|s| ids.contains(&s.id) == front);
+        if ordered
+            .iter()
+            .zip(&self.state.shapes)
+            .all(|(a, b)| a.id == b.id)
+        {
+            return;
+        }
+        self.checkpoint();
+        self.state.shapes = ordered;
+        self.revision += 1;
+    }
     pub fn clear(&mut self) {
         if self.is_pristine() {
             return;
