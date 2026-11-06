@@ -221,6 +221,9 @@ pub struct Editor {
     pub selected: Option<ShapeId>,
     pub text: Option<TextEdit>,
     space_held: bool,
+    /// With the select tool: the item a press would pick up (open-hand
+    /// cursor and a faint outline).
+    hover: Option<ShapeId>,
     patches: PatchCache,
     toast: Option<Toast>,
     toast_generation: u64,
@@ -302,6 +305,7 @@ impl Editor {
             selected: None,
             text: None,
             space_held: false,
+            hover: None,
             patches: PatchCache::default(),
             toast: None,
             toast_generation: 0,
@@ -432,7 +436,23 @@ impl Editor {
             self.selected = None;
         }
         self.crop_draft = None;
+        self.hover = None;
         cx.notify();
+    }
+
+    /// The item a select-tool press at `p` picks up: the topmost item under
+    /// the pointer, otherwise the selected item anywhere inside its box, so
+    /// once selected, hollow shapes and thin strokes drag from inside while
+    /// items lying within them stay directly clickable.
+    fn grab_target(&self, p: Pt, cx: &App) -> Option<ShapeId> {
+        let doc = self.doc.read(cx);
+        let tolerance = 6.0 / self.zoom();
+        doc.hit_test(p, tolerance).or_else(|| {
+            self.selected.filter(|id| {
+                doc.shape(*id)
+                    .is_some_and(|s| s.bounds().inflate(tolerance).contains(p))
+            })
+        })
     }
 
     /// Applies a style change to the tool and to the selected or edited shape.
@@ -886,16 +906,18 @@ impl Editor {
         match self.tool {
             Tool::Select => {
                 let hit = self.doc.read(cx).hit_test(p, tolerance);
-                match hit {
+                let is_text = hit.is_some_and(|id| {
+                    matches!(
+                        self.doc.read(cx).shape(id).map(|s| &s.kind),
+                        Some(ShapeKind::Text { .. })
+                    )
+                });
+                if ev.click_count >= 2 && is_text {
+                    self.begin_text(p, hit, cx);
+                    return;
+                }
+                match self.grab_target(p, cx) {
                     Some(id) => {
-                        let is_text = matches!(
-                            self.doc.read(cx).shape(id).map(|s| &s.kind),
-                            Some(ShapeKind::Text { .. })
-                        );
-                        if ev.click_count >= 2 && is_text {
-                            self.begin_text(p, Some(id), cx);
-                            return;
-                        }
                         self.selected = Some(id);
                         if let Some(s) = self.doc.read(cx).shape(id) {
                             self.style = s.style;
@@ -960,7 +982,16 @@ impl Editor {
     fn mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
         let p = self.transform().to_image(ev.position);
         match self.drag.clone() {
-            Drag::None => return,
+            Drag::None => {
+                let hover = (self.tool == Tool::Select && !self.space_held)
+                    .then(|| self.grab_target(p, cx))
+                    .flatten();
+                if hover != self.hover {
+                    self.hover = hover;
+                    cx.notify();
+                }
+                return;
+            }
             Drag::Pan { mouse, pan } => {
                 let zoom = self.view.zoom;
                 self.set_view(View {
@@ -1393,6 +1424,26 @@ impl Editor {
                 o.corner_radii = px(3.).into();
                 window.paint_quad(o);
             }
+            // What a press would pick up, before it is selected.
+            if self.tool == Tool::Select
+                && self.drag == Drag::None
+                && let Some(id) = self.hover.filter(|h| Some(*h) != self.selected)
+                && let Some(s) = doc.shape(id)
+            {
+                let r = xf.rect_to_screen(s.bounds());
+                let r = Bounds {
+                    origin: r.origin - point(px(4.), px(4.)),
+                    size: r.size + gpui::size(px(8.), px(8.)),
+                };
+                let mut o = outline(
+                    r,
+                    theme::selection().opacity(0.45),
+                    gpui::BorderStyle::Solid,
+                );
+                o.border_widths = px(1.).into();
+                o.corner_radii = px(3.).into();
+                window.paint_quad(o);
+            }
 
             // Lines found by text extraction light up and fade out.
             if let Some((rects, at)) = &self.text_flash {
@@ -1433,8 +1484,9 @@ impl Editor {
         }
 
         let cursor = match (&self.drag, self.space_held) {
-            (Drag::Pan { .. }, _) => CursorStyle::ClosedHand,
+            (Drag::Pan { .. } | Drag::Move { .. }, _) => CursorStyle::ClosedHand,
             (_, true) => CursorStyle::OpenHand,
+            _ if self.tool == Tool::Select && self.hover.is_some() => CursorStyle::OpenHand,
             _ => self.tool.cursor(),
         };
         window.set_cursor_style(cursor, hitbox);

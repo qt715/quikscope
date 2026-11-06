@@ -445,3 +445,82 @@ fn drawing_past_the_edge_refits_the_view_to_the_contents() {
     let right = ui.screen(Pt::new(1600.0, 1000.0));
     assert!(left.x > px(0.) && right.x < px(1000.), "{left:?} {right:?}");
 }
+
+#[test]
+fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
+    let mut doc = blank();
+    let label = doc.make_shape(
+        ShapeKind::Text {
+            origin: Pt::new(40.0, 40.0),
+            text: "Move me".into(),
+            font: moment::fonts::FontSpec::default(),
+        },
+        Style::default(),
+    );
+    let label = doc.add(label);
+    let rect = doc.make_shape(
+        ShapeKind::Rect {
+            a: Pt::new(300.0, 100.0),
+            b: Pt::new(500.0, 300.0),
+        },
+        Style::default(),
+    );
+    let rect = doc.add(rect);
+    // A second label inside the rectangle.
+    let inner = doc.make_shape(
+        ShapeKind::Text {
+            origin: Pt::new(330.0, 250.0),
+            text: "inside".into(),
+            font: moment::fonts::FontSpec::default(),
+        },
+        Style::default(),
+    );
+    let inner = doc.add(inner);
+    let mut ui = Ui::new(doc);
+    ui.typ("v");
+    let bounds = |ui: &mut Ui, id| ui.doc(|d| d.shape(id).unwrap().bounds());
+    let image_at = |ui: &mut Ui, p| ui.editor(|e, _| e.transform().to_image(p));
+    let drag = |ui: &mut Ui, from: Point<gpui::Pixels>, by: Point<gpui::Pixels>| {
+        ui.mouse("down", from);
+        ui.mouse("move", from + by * 0.5);
+        ui.mouse("move", from + by);
+        ui.mouse("up", from + by);
+    };
+
+    // Text moves with the pointer, as one undo step.
+    let before = bounds(&mut ui, label);
+    let from = ui.screen(before.center());
+    let by = point(px(30.), px(20.));
+    let (a, b) = (image_at(&mut ui, from), image_at(&mut ui, from + by));
+    drag(&mut ui, from, by);
+    let after = bounds(&mut ui, label);
+    assert!(
+        (after.x - before.x - (b.x - a.x)).abs() < 0.01,
+        "{before:?} -> {after:?}"
+    );
+    assert!((after.y - before.y - (b.y - a.y)).abs() < 0.01);
+    ui.ctrl("z", false);
+    assert_eq!(bounds(&mut ui, label), before, "one undo puts it back");
+
+    // Pressing inside a hollow, unselected rectangle does not grab it.
+    let r0 = bounds(&mut ui, rect);
+    let interior = ui.screen(Pt::new(400.0, 150.0));
+    drag(&mut ui, interior, by);
+    assert_eq!(bounds(&mut ui, rect), r0);
+    // Clicking its outline selects it; then the interior drags it.
+    let edge = ui.screen(Pt::new(300.0, 200.0));
+    ui.click(edge);
+    assert_eq!(ui.editor(|e, _| e.selected), Some(rect));
+    let interior = ui.screen(Pt::new(400.0, 150.0));
+    drag(&mut ui, interior, by);
+    let r1 = bounds(&mut ui, rect);
+    assert!(r1.x > r0.x && r1.y > r0.y, "{r0:?} -> {r1:?}");
+
+    // Items inside the selected rectangle are still grabbed directly.
+    let inner_before = bounds(&mut ui, inner);
+    let at = ui.screen(inner_before.center());
+    drag(&mut ui, at, by);
+    assert_eq!(ui.editor(|e, _| e.selected), Some(inner));
+    assert_eq!(bounds(&mut ui, rect), r1, "the rectangle stayed");
+    assert!(bounds(&mut ui, inner).x > inner_before.x);
+}
