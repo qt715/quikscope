@@ -2,7 +2,7 @@
 
 | Layer | Where | Needs |
 | --- | --- | --- |
-| Unit | `src/**` `#[cfg(test)]` | nothing |
+| Unit | `src/**` `#[cfg(test)]` | nothing; script shaping tests use installed Noto fonts and skip without them |
 | CLI parsing | `src/main.rs` | nothing |
 | Golden-image regression | `tests/render_regression.rs`, `tests/golden/` | nothing |
 | GPU/CPU parity | `tests/editor_render.rs` | Vulkan or GL (Mesa lavapipe/llvmpipe is enough) |
@@ -14,6 +14,12 @@ cargo test                                    # everything but e2e
 cargo test --features e2e --test e2e          # e2e (skips without a compositor)
 MOMENT_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
 ```
+
+The text-shaping unit tests (Japanese, Arabic, Hebrew, Devanagari, emoji)
+need a font for each script, which they find among installed fonts; without
+one a test prints `skipped:` and passes. `MOMENT_REQUIRE_FONTS=1` (set in CI,
+which installs `fonts-noto-core`, `fonts-noto-cjk` and
+`fonts-noto-color-emoji`) turns a missing font into a failure.
 
 ## Golden images
 
@@ -42,8 +48,9 @@ editor's transform already fails it. On failure both images are written to
 `editor_ui` drives the same offscreen editor through GPUI's real event
 dispatch (key and mouse events, painted between steps so hit-testing uses
 current layout): text formatting shortcuts while typing and on a selected
-text shape, and a color-picker wheel drag that must recolor the selection
-as exactly one undo step.
+text shape, a color-picker wheel drag that must recolor the selection as
+exactly one undo step, an input-method composition (pre-edit, candidate
+window position, commit) through the editor's `EntityInputHandler`.
 
 ## End to end
 
@@ -59,7 +66,9 @@ touches the developer's session:
 - `moment-e2e-helper` (built with the `e2e` feature), which paints a known
   test pattern as wallpaper, keeps a virtual keyboard attached, drives a
   virtual pointer and keyboard, lists toplevels, reads the clipboard through
-  data-control and reconfigures outputs;
+  data-control, reconfigures outputs, and plays a resident input method
+  (`zwp_input_method_v2`, the protocol fcitx5 and IBus use) that reports
+  when the compositor activates it and sends pre-edit and commit strings;
 - the real `moment daemon` and `moment` client binaries.
 
 The suite covers: screen capture → notification, cache and clipboard
@@ -68,7 +77,10 @@ right-click and `Esc`; refusal of concurrent selections; drawing, text,
 `Ctrl+C`, `Ctrl+S`, undo and re-save in the editor; notification clicks
 opening (and refocusing) the editor; `open-last` auto-starting a daemon from
 the cache; malformed requests; rotated + scaled outputs against `grim`; and
-two outputs, including a selection dragged across them.
+two outputs, including a selection dragged across them; and input methods:
+inactive while the editor is focused but no text is being typed, active
+with the text tool, pre-edit drawn in place, commits (CJK and single-byte)
+replacing it, and the saved text measuring exactly the committed string.
 
 Set `MOMENT_E2E_KEEP=1` to keep a session's directory (compositor and daemon
 logs) after the test, and `MOMENT_E2E_COMPOSITOR=sway` to pick the
@@ -77,6 +89,6 @@ compositor.
 ## CI
 
 `.github/workflows/ci.yml` runs formatting and clippy (`-D warnings`), the
-test suite with Mesa lavapipe on Ubuntu, an MSRV check, the e2e suite in an
-Arch Linux container with labwc, and a release build that is attached to
-`v*` tags.
+test suite with Mesa lavapipe and Noto fonts on Ubuntu, an MSRV check, the
+e2e suite in an Arch Linux container with labwc, and a release build that is
+attached to `v*` tags.

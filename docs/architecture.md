@@ -81,12 +81,38 @@ which is why closing and reopening the editor keeps annotations.
 
 - every stroke is converted to its **filled outline** with tiny-skia's
   stroker (round caps and joins);
-- text is laid out with `ttf-parser` from the chosen face and emitted as
-  glyph outlines. `fonts` indexes system fonts with `fontdb` on a background
-  thread at daemon start, resolves family/weight/italic to font data (variable
-  fonts get their `wght` axis set; missing italics are sheared), and falls
-  back to the bundled Inter per glyph;
-- pixelation is a precomputed patch of mosaic pixels.
+- text is shaped and emitted as glyph outlines (see below);
+- pixelation is a precomputed patch of mosaic pixels;
+- colour emoji glyphs are bitmaps (PNG strikes) resampled once to the size
+  they are drawn at and placed as images.
+
+Text layout (`text.rs`): each line is split into bidi runs in visual order
+(`unicode-bidi`), each run into items that share a face and a script, and
+each item is shaped with `rustybuzz` (kerning, ligatures, Arabic joining,
+Indic conjuncts; neighbouring text is passed as context so joins survive
+face changes). Faces are chosen per grapheme: the chosen font, then the
+bundled Inter, then any installed font that has every visible char of the
+grapheme. `fonts` indexes system fonts with `fontdb` on a background thread
+at daemon start; the fallback search ranks Noto families first, prefers colour
+emoji fonts for emoji, and for Han picks the CJK variant (JP, KR, SC, TC,
+HK) the text itself implies (kana, hangul) or else the locale's, else
+Japanese. Results are cached per grapheme. Variable fonts get their `wght`
+(and `opsz`) axes set for both shaping and outlines; missing italics are
+sheared.
+
+### Text input and input methods
+
+While the text tool is editing, the editor registers a GPUI
+`EntityInputHandler`. That is what makes GPUI's Wayland backend enable
+`text-input-v3`, so input methods (fcitx5, IBus) compose into the text:
+pre-edit is shown underlined at the caret, the candidate window is anchored
+there (`bounds_for_range`), and commits replace the pre-edit. When no text is
+being edited the editor registers no handler, so the input method is off and
+single-key tool shortcuts reach the editor. The text buffer
+(`ui/edit_buffer.rs`) keeps byte offsets, converts the platform's UTF-16
+ranges, and moves and deletes by grapheme. The font menu's family search
+field is a text input too; number and hex fields refuse text input so an IME
+cannot turn digits full-width.
 
 The editor fills those outlines with GPUI paths (non-zero winding, 4× MSAA);
 the exporter fills the identical outlines with tiny-skia. Neither renderer's

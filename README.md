@@ -164,6 +164,14 @@ filterable by typing), weight, italic and size. A font without an italic
 face gets a slanted version. New text uses the last font chosen; the starting
 font comes from the [configuration](docs/configuration.md).
 
+**Any language.** The text tool works with input methods (fcitx5 with Mozc,
+Anthy, Hangul, Pinyin…; IBus): pre-edit appears underlined at the caret and
+the candidate window opens there. Text is shaped properly, so Arabic and
+Hebrew run right to left (mixed with left-to-right text), Arabic letters
+join, and Indic scripts form conjuncts. Characters the chosen font lacks are
+drawn from Inter, then from whichever installed font has them, so CJK
+appears in your CJK font and emoji in colour.
+
 ## Performance
 
 Measured in a headless labwc session at 2560×1440 (software GL, release
@@ -188,9 +196,8 @@ Details in [docs/architecture.md](docs/architecture.md).
 
 - wlroots-protocol compositors only; GNOME and KDE lack `wlr-screencopy`.
 - Window snapping, `window` mode and focused-output detection need Hyprland.
-- Characters missing from the chosen font are drawn from the bundled Inter;
-  ones Inter also lacks (CJK, emoji) render as `?`. Input-method composition
-  is not supported in the text tool.
+- Characters no installed font has are drawn as the font's missing-glyph
+  box. Text is always left-aligned, also right-to-left text.
 
 ## Development
 

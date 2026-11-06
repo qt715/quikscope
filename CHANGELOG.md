@@ -26,5 +26,11 @@ First release.
   variable/italic), weight, italic and size from a font bar above the text,
   `Ctrl+B`/`Ctrl+I`/`Ctrl+Shift+.`/`Ctrl+Shift+,` shortcuts, and
   `[editor] font_*` defaults in the config.
+- Text in any language: input methods (fcitx5, IBus) compose into the text
+  tool and the font search field, with the pre-edit underlined in place and
+  the candidate window at the caret; shaping with rustybuzz (kerning,
+  ligatures, Arabic joining, Indic conjuncts), bidirectional text, per-grapheme
+  fallback to installed fonts (CJK variant chosen from the text or locale),
+  colour emoji, and caret movement and deletion by grapheme.
 - Unit, golden-image, GPU/CPU parity, editor interaction and headless
   end-to-end test suites; CI.
