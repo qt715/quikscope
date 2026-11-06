@@ -27,6 +27,13 @@ use windows::core::{PCWSTR, w};
 
 use super::{Capture, Clipboard, Desktop, EventSink, Notifier, Platform, Surfaces};
 
+pub(super) fn selection_outputs() -> Result<Vec<(String, crate::geom::IRect, u32)>> {
+    Ok(desktop::monitors()?
+        .into_iter()
+        .map(|o| (o.name, o.logical, o.physical.w as u32))
+        .collect())
+}
+
 pub fn initialize() -> Result<()> {
     // GPUI's Windows manifest requests PerMonitorV2. Verify it at runtime and
     // also support library callers whose executable has no such manifest.

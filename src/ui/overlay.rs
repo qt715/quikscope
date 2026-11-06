@@ -1,5 +1,5 @@
-//! Frozen-screen region selection: one layer-shell surface per output shows
-//! the snapshot just taken; the user drags a rectangle or clicks a window.
+//! Region selection: live transparent overlays or the snapshot just taken;
+//! the user drags a rectangle or clicks a window.
 //!
 //! All overlays share one [`Selection`] entity in global logical
 //! coordinates. Wayland keeps delivering pointer motion to the surface that
@@ -94,7 +94,7 @@ impl Selection {
     }
 }
 
-/// Frozen candidates for the single fullscreen surface on desktops without layer-shell.
+/// Per-output metadata and optional frozen tiles for a single fullscreen surface.
 pub struct FullscreenFrame {
     pub name: String,
     pub display: Option<DisplayId>,
@@ -119,10 +119,9 @@ pub struct Overlay {
     pointer_seen: bool,
     fullscreen: Option<Vec<FullscreenFrame>>,
     display: Option<DisplayId>,
-    /// False while an overlay opened ahead of the capture waits for its
-    /// frozen frame ([`Overlay::pending`]); it then paints nothing and
-    /// ignores input, so the live desktop shows through unchanged.
-    has_frame: bool,
+    /// Pending early overlays must not dim the desktop being captured or
+    /// accept input until their output metadata and frozen tiles arrive.
+    active: bool,
 }
 
 impl Overlay {
@@ -148,7 +147,7 @@ impl Overlay {
             pointer_seen: false,
             fullscreen: None,
             display: None,
-            has_frame: true,
+            active: true,
         }
     }
 
@@ -160,12 +159,26 @@ impl Overlay {
         cx: &mut Context<Overlay>,
     ) -> Overlay {
         let mut overlay = Self::new(selection, IRect::default(), 1, Arc::from([]), window, cx);
-        overlay.has_frame = false;
+        overlay.active = false;
         overlay
     }
 
-    /// Shows the frozen frame of the output covering `output` (global
-    /// logical coordinates).
+    /// Reuse the pending transparent surface, activating it with geometry
+    /// only. With no frozen tiles the desktop remains visible beneath the dim.
+    pub fn live(
+        selection: Entity<Selection>,
+        output: IRect,
+        image_width: u32,
+        window: &mut Window,
+        cx: &mut Context<Overlay>,
+    ) -> Overlay {
+        let mut overlay = Self::pending(selection, window, cx);
+        overlay.set_frame(output, image_width, Arc::from([]), cx);
+        overlay
+    }
+
+    /// Activates this output using global logical geometry and frozen tiles
+    /// (or an empty tile list for live selection).
     pub fn set_frame(
         &mut self,
         output: IRect,
@@ -177,7 +190,7 @@ impl Overlay {
         self.image_width = image_width;
         self.scale = image_width as f32 / output.w.max(1) as f32;
         self.tiles = tiles;
-        self.has_frame = true;
+        self.active = true;
         cx.notify();
     }
 
@@ -247,9 +260,9 @@ impl Overlay {
         }
     }
 
-    /// Whether the frozen frame is on screen and input means something.
+    /// Input is meaningful once output metadata (and any frozen tiles) is ready.
     fn ready(&self) -> bool {
-        self.has_frame && (self.fullscreen.is_none() || self.display.is_some())
+        self.active && (self.fullscreen.is_none() || self.display.is_some())
     }
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -299,7 +312,7 @@ impl Render for Overlay {
         // A fullscreen surface can land on any output; never flash the first
         // candidate's frozen frame before Wayland tells us where it mapped.
         let ready = self.ready();
-        let has_frame = self.has_frame;
+        let active = self.active;
         let scale = self.scale;
         let highlight = self.selection.read(cx).highlight();
         if let Some(opened) = self.opened.take() {
@@ -363,9 +376,9 @@ impl Render for Overlay {
                         if ready {
                             paint_tiles(window, &tiles, xf, bounds);
                         }
-                        // Dimming before the frame exists would darken the
-                        // live desktop, and the capture still being taken.
-                        if has_frame {
+                        // Pending capture overlays paint nothing; activated live
+                        // overlays dim without covering the desktop with tiles.
+                        if active {
                             paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
                         }
 

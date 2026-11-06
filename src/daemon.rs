@@ -373,30 +373,67 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
                     .context("the active window is not on any output")?
             }
             Mode::Region => {
-                // The capture runs while the overlays are being created.
-                let snap = {
-                    let capturer = capturer.clone();
-                    cx.background_spawn(async move { capturer.capture(None, cursor) })
-                };
-                let early = cx.update(|cx| begin_selection(&platform, cx))?;
-                log::debug!(
-                    "selection claimed {:.1}ms after the request",
-                    started.elapsed().as_secs_f64() * 1e3
-                );
-                let snap = match snap.await {
-                    Ok(snap) => snap,
-                    Err(e) => {
-                        let windows = early.map(|e| e.windows.into_iter().map(|(_, w)| w));
-                        end_selection(windows.into_iter().flatten(), cx);
-                        return Err(e);
+                let live = if opts.freeze.unwrap_or(config.freeze) {
+                    false
+                } else {
+                    let platform = platform.clone();
+                    match cx
+                        .background_spawn(async move { platform.live_selection_unavailable() })
+                        .await
+                    {
+                        Some(reason) => {
+                            log::warn!(
+                                "live region selection unavailable ({reason}); falling back to frozen mode"
+                            );
+                            false
+                        }
+                        None => true,
                     }
                 };
-                let Some(rect) = select_region(&snap, &platform, early, cx).await? else {
-                    return Ok(None);
-                };
-                cx.background_spawn(async move { snap.compose(rect) })
-                    .await
-                    .context("the selection lies outside every output")?
+                if live {
+                    cx.update(claim_selection)?;
+                    let selected = select_region(None, &platform, None, cx).await;
+                    let rect = match selected {
+                        Ok(Some(rect)) => rect,
+                        result => {
+                            daemon(cx, |d, _| d.selecting = false);
+                            result?;
+                            return Ok(None);
+                        }
+                    };
+                    // Keep the claim through capture, including portal permission:
+                    // a second selector must not obscure the desktop or its dialog.
+                    let snap = snapshot(&capturer, None, cursor, cx).await;
+                    daemon(cx, |d, _| d.selecting = false);
+                    snap?
+                        .compose(rect)
+                        .context("the selection lies outside every output")?
+                } else {
+                    // The capture runs while the overlays are being created.
+                    let snap = {
+                        let capturer = capturer.clone();
+                        cx.background_spawn(async move { capturer.capture(None, cursor) })
+                    };
+                    let early = cx.update(|cx| begin_selection(&platform, cx))?;
+                    log::debug!(
+                        "selection claimed {:.1}ms after the request",
+                        started.elapsed().as_secs_f64() * 1e3
+                    );
+                    let snap = match snap.await {
+                        Ok(snap) => snap,
+                        Err(e) => {
+                            let windows = early.map(|e| e.windows.into_iter().map(|(_, w)| w));
+                            end_selection(windows.into_iter().flatten(), cx);
+                            return Err(e);
+                        }
+                    };
+                    let Some(rect) = select_region(Some(&snap), &platform, early, cx).await? else {
+                        return Ok(None);
+                    };
+                    cx.background_spawn(async move { snap.compose(rect) })
+                        .await
+                        .context("the selection lies outside every output")?
+                }
             }
         }
     };
@@ -417,14 +454,19 @@ struct EarlyOverlays {
     windows: Vec<(DisplayId, WindowHandle<Overlay>)>,
 }
 
+fn claim_selection(cx: &mut App) -> Result<()> {
+    if cx.update_global::<Daemon, _>(|d, _| std::mem::replace(&mut d.selecting, true)) {
+        bail!("a selection is already in progress");
+    }
+    Ok(())
+}
+
 /// Claims the (single) interactive selection and, where the platform allows
 /// it, opens a transparent overlay per display right away: creating the
 /// windows then overlaps with the compositor producing the frame instead of
 /// following it.
 fn begin_selection(platform: &Platform, cx: &mut App) -> Result<Option<EarlyOverlays>> {
-    if cx.update_global::<Daemon, _>(|d, _| std::mem::replace(&mut d.selecting, true)) {
-        bail!("a selection is already in progress");
-    }
+    claim_selection(cx)?;
     let displays = cx.displays();
     if displays
         .first()
@@ -473,12 +515,11 @@ fn end_selection(overlays: impl IntoIterator<Item = WindowHandle<Overlay>>, cx: 
     });
 }
 
-/// Shows the frozen overlays and waits for a selection in global logical
-/// coordinates. `None` means the user cancelled. The caller has claimed the
-/// selection with [`begin_selection`]; `early` overlays get their frames
-/// when every output has one, otherwise they close and fresh ones open.
+/// Shows live or frozen overlays and waits for global logical coordinates.
+/// Live selection uses output metadata only, and synchronizes surface teardown
+/// before returning so the caller can safely ask for fresh desktop pixels.
 async fn select_region(
-    snap: &Snapshot,
+    snap: Option<&Snapshot>,
     platform: &Arc<Platform>,
     early: Option<EarlyOverlays>,
     cx: &mut AsyncApp,
@@ -488,21 +529,31 @@ async fn select_region(
     // neither depends on the other.
     let desktop = platform.desktop.clone();
     let windows = cx.background_spawn(async move { desktop.visible_windows() });
-    let tile_tasks: Vec<_> = snap
-        .outputs
-        .iter()
-        .map(|o| {
-            let (name, logical, image) = (o.name.clone(), o.logical, o.image.clone());
-            cx.background_spawn(async move {
-                let tiles = ui::make_tiles(&image);
-                (name, logical, image.width, tiles)
+    let outputs = if let Some(snap) = snap {
+        let tile_tasks: Vec<_> = snap
+            .outputs
+            .iter()
+            .map(|o| {
+                let (name, logical, image) = (o.name.clone(), o.logical, o.image.clone());
+                cx.background_spawn(async move {
+                    let tiles = ui::make_tiles(&image);
+                    (name, logical, image.width, tiles)
+                })
             })
-        })
-        .collect();
-    let mut outputs: Vec<(String, IRect, u32, Arc<[ui::Tile]>)> = Vec::new();
-    for task in tile_tasks {
-        outputs.push(task.await);
-    }
+            .collect();
+        let mut outputs = Vec::with_capacity(tile_tasks.len());
+        for task in tile_tasks {
+            outputs.push(task.await);
+        }
+        outputs
+    } else {
+        let platform = platform.clone();
+        cx.background_spawn(async move { platform.selection_outputs() })
+            .await?
+            .into_iter()
+            .map(|(name, logical, width)| (name, logical, width, Arc::from([])))
+            .collect()
+    };
     let windows = windows.await;
 
     if let Some(early) = early {
@@ -520,6 +571,17 @@ async fn select_region(
         }
     }
 
+    let live = snap.is_none();
+    anyhow::ensure!(!outputs.is_empty(), "no outputs for region selection");
+    #[cfg(target_os = "linux")]
+    let logical_outputs: Vec<_> = outputs.iter().map(|(_, logical, ..)| *logical).collect();
+    let options = |name: &str, logical, cx: &App| {
+        let mut options = platform.overlay_options(name, logical, cx);
+        if live {
+            options.window_background = gpui::WindowBackgroundAppearance::Transparent;
+        }
+        options
+    };
     let (selection, done) = Selection::new(windows);
     let result: Result<Vec<WindowHandle<Overlay>>> = cx.update(|cx| {
         let selection = cx.new(|_| selection);
@@ -540,7 +602,7 @@ async fn select_region(
             let first = &frames[0];
             return cx
                 .open_window(
-                    platform.overlay_options(&first.name, first.logical, cx),
+                    options(&first.name, first.logical, cx),
                     move |window, cx| {
                         cx.new(|cx| Overlay::fullscreen(selection, frames, window, cx))
                     },
@@ -548,21 +610,32 @@ async fn select_region(
                 .map(|window| vec![window])
                 .context("opening fullscreen selection overlay");
         }
-        outputs
-            .into_iter()
-            .map(|(name, logical, width, tiles)| {
-                let selection = selection.clone();
-                cx.open_window(
-                    platform.overlay_options(&name, logical, cx),
-                    move |window, cx| {
-                        #[cfg(windows)]
-                        platform::windows::focus_overlay(window, logical);
-                        cx.new(|cx| Overlay::new(selection, logical, width, tiles, window, cx))
-                    },
-                )
-                .with_context(|| format!("opening the selection overlay on {name}"))
-            })
-            .collect()
+        let mut overlays = Vec::with_capacity(outputs.len());
+        for (name, logical, width, tiles) in outputs {
+            let selection = selection.clone();
+            let opened = cx.open_window(options(&name, logical, cx), move |window, cx| {
+                #[cfg(windows)]
+                platform::windows::focus_overlay(window, logical);
+                cx.new(|cx| {
+                    if live {
+                        Overlay::live(selection, logical, width, window, cx)
+                    } else {
+                        Overlay::new(selection, logical, width, tiles, window, cx)
+                    }
+                })
+            });
+            match opened {
+                Ok(window) => overlays.push(window),
+                Err(error) => {
+                    for overlay in overlays {
+                        let _ = overlay.update(cx, |_, window, _| window.remove_window());
+                    }
+                    return Err(error)
+                        .with_context(|| format!("opening the selection overlay on {name}"));
+                }
+            }
+        }
+        Ok(overlays)
     });
     let overlays = match result {
         Ok(o) => o,
@@ -571,22 +644,52 @@ async fn select_region(
             return Err(e);
         }
     };
+    let barrier = if live {
+        let result = cx.update(|cx| {
+            use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+            let handles: Result<Vec<_>> = overlays
+                .iter()
+                .map(|overlay| {
+                    overlay.update(cx, |_, window, _| {
+                        Ok((
+                            HasWindowHandle::window_handle(window)
+                                .map_err(|e| anyhow!("selection window handle: {e}"))?
+                                .as_raw(),
+                            HasDisplayHandle::display_handle(window)
+                                .map_err(|e| anyhow!("selection display handle: {e}"))?
+                                .as_raw(),
+                        ))
+                    })?
+                })
+                .collect();
+            platform::SelectionBarrier::new(&handles?)
+        });
+        match result {
+            Ok(barrier) => Some(barrier),
+            Err(error) => {
+                end_selection(overlays, cx);
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
     #[cfg(target_os = "linux")]
     let selection_focus = if platform.surfaces == platform::Surfaces::X11 {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let windows = cx.update(|cx| {
             overlays
                 .iter()
-                .zip(&snap.outputs)
-                .filter_map(|(overlay, output)| {
+                .zip(&logical_outputs)
+                .filter_map(|(overlay, logical)| {
                     overlay
                         .update(cx, |_, window, _| {
                             match HasWindowHandle::window_handle(window).ok()?.as_raw() {
                                 RawWindowHandle::Xcb(handle) => {
-                                    Some((handle.window.get(), output.logical))
+                                    Some((handle.window.get(), *logical))
                                 }
                                 RawWindowHandle::Xlib(handle) => {
-                                    Some((handle.window as u32, output.logical))
+                                    Some((handle.window as u32, *logical))
                                 }
                                 _ => None,
                             }
@@ -614,18 +717,19 @@ async fn select_region(
         bail!("focusing X11 selection: {error:#}");
     }
     log::debug!(
-        "selection overlays opened {:.1}ms after the snapshot",
+        "{} selection overlays opened {:.1}ms after preparation began",
+        if live { "live" } else { "frozen" },
         started.elapsed().as_secs_f64() * 1e3
     );
     let rect = done.await.ok().flatten();
     #[cfg(target_os = "linux")]
     drop(selection_focus);
-    cx.update(|cx| {
-        for o in overlays {
-            let _ = o.update(cx, |_, window, _| window.remove_window());
-        }
-        cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
-    });
+    end_selection_windows(overlays, cx);
+    if let Some(barrier) = barrier {
+        cx.update(|_| barrier.wait())?;
+    } else {
+        daemon(cx, |d, _| d.selecting = false);
+    }
     Ok(rect.filter(|r| !r.is_empty()))
 }
 

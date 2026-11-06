@@ -23,6 +23,8 @@ pub struct Config {
     pub open_editor: bool,
     /// Include the pointer in captures.
     pub cursor: bool,
+    /// Freeze the desktop before region selection; false selects over the live desktop.
+    pub freeze: bool,
     /// How long the notification stays up, in milliseconds (-1 = server default).
     pub notification_timeout_ms: i32,
     pub editor: EditorConfig,
@@ -132,6 +134,7 @@ impl Default for Config {
             notify: true,
             open_editor: false,
             cursor: false,
+            freeze: true,
             notification_timeout_ms: 8000,
             editor: EditorConfig::default(),
             ocr: OcrConfig::default(),
@@ -477,6 +480,16 @@ mod tests {
     #[test]
     fn defaults_when_file_is_empty() {
         assert_eq!(Config::parse("").unwrap(), Config::default());
+    }
+
+    #[test]
+    fn freeze_defaults_true_and_accepts_boolean_overrides() {
+        assert!(Config::default().freeze);
+        assert!(Config::parse("").unwrap().freeze);
+        assert!(Config::parse("freeze = true").unwrap().freeze);
+        assert!(!Config::parse("freeze = false").unwrap().freeze);
+        assert!(Config::parse("freeze = 'false'").is_err());
+        assert!(Config::parse("freeze = 0").is_err());
     }
 
     #[test]

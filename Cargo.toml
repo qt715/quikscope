@@ -78,7 +78,7 @@ wayland-protocols-misc = { version = "0.3", features = ["client"], optional = tr
 zbus = "5"
 
 raw-window-handle = "0.6"
-x11rb = { version = "0.13.2", features = ["randr", "shm", "xfixes", "xtest"] }
+x11rb = { version = "0.13.2", features = ["randr", "shm", "xfixes", "xtest", "present"] }
 url = "2"
 
 [target.'cfg(windows)'.dependencies]

@@ -11,6 +11,7 @@ use crate::{geom::IRect, raster::Transform};
 pub(super) struct OutputInfo {
     pub name: String,
     pub logical: IRect,
+    pub physical_width: u32,
 }
 
 #[derive(Default)]
@@ -44,6 +45,15 @@ pub(crate) fn supports_layer_shell() -> Result<bool> {
     Ok(globals
         .contents()
         .with_list(|list| list.iter().any(|g| g.interface == "zwlr_layer_shell_v1")))
+}
+
+/// Output metadata without asking the Screenshot portal for pixels or permission.
+pub(crate) fn selection_outputs() -> Result<Vec<(String, IRect, u32)>> {
+    Ok(Layout::connect()?
+        .outputs()?
+        .into_iter()
+        .map(|o| (o.name, o.logical, o.physical_width))
+        .collect())
 }
 
 impl Layout {
@@ -91,6 +101,11 @@ impl Layout {
                         .clone()
                         .unwrap_or_else(|| format!("output-{}", o.global)),
                     logical: IRect::new(x, y, w, h),
+                    physical_width: if o.transform.swaps_axes() {
+                        o.mode.1
+                    } else {
+                        o.mode.0
+                    } as u32,
                 })
             })
             .collect();

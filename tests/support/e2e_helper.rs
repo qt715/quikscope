@@ -2,8 +2,9 @@
 //! headless wlroots compositor:
 //!
 //! ```text
-//! quickscope-e2e-helper pattern                      # wallpaper + keep a keyboard attached (stays running)
+//! quickscope-e2e-helper pattern [PHASE_FILE]         # resident wallpaper; repaint when phase file changes
 //! quickscope-e2e-helper drag X1 Y1 X2 Y2 [right]     # press, move, release (virtual pointer)
+//! quickscope-e2e-helper drag-hold X1 Y1 X2 Y2       # drag; print ready, release on stdin
 //! quickscope-e2e-helper click X Y [right]
 //! quickscope-e2e-helper move X Y
 //! quickscope-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
@@ -229,7 +230,7 @@ fn main() {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let num = |i: usize| -> f64 { args[i].parse().expect("number") };
     match cmd {
-        "move" | "click" | "drag" => {
+        "move" | "click" | "drag" | "drag-hold" => {
             let mgr: zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1 =
                 globals.bind(&qh, 1..=2, ()).expect("virtual pointer");
             let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).expect("seat");
@@ -287,6 +288,11 @@ fn main() {
                         let t = i as f64 / 8.0;
                         goto(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
                         pause(&mut queue, &mut state);
+                    }
+                    if cmd == "drag-hold" {
+                        println!("ready");
+                        std::io::stdout().flush().unwrap();
+                        std::io::stdin().read_exact(&mut [0u8; 1]).unwrap();
                     }
                     button(b, false);
                     pause(&mut queue, &mut state);
@@ -398,7 +404,13 @@ fn main() {
             queue.roundtrip(&mut state).unwrap();
         }
         "ime" => run_ime(&globals, &mut queue, &mut state),
-        "pattern" => run_pattern(&globals, &mut queue, &mut state, &outputs),
+        "pattern" => run_pattern(
+            &globals,
+            &mut queue,
+            &mut state,
+            &outputs,
+            args.get(1).map(String::as_str),
+        ),
         "dialog" => run_dialog(&globals, &mut queue, &mut state),
         _ => {
             eprintln!("unknown command {cmd:?}");
@@ -622,6 +634,7 @@ fn run_pattern(
     queue: &mut wayland_client::EventQueue<State>,
     state: &mut State,
     outputs: &[wl_output::WlOutput],
+    phase_file: Option<&str>,
 ) {
     let qh = queue.handle();
     let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=4, ()).unwrap();
@@ -647,33 +660,48 @@ fn run_pattern(
     while state.layer_configured.iter().any(Option::is_none) {
         queue.blocking_dispatch(state).unwrap();
     }
-    for (i, (surface, _)) in surfaces.iter().enumerate() {
-        let (w, h) = state.layer_configured[i].unwrap();
-        let stride = w * 4;
-        let size = (stride * h) as usize;
-        let fd = rustix::fs::memfd_create("pattern", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
-        rustix::fs::ftruncate(&fd, size as u64).unwrap();
-        let mut file = std::fs::File::from(fd);
-        let mut data = Vec::with_capacity(size);
-        for y in 0..h {
-            for x in 0..w {
-                data.extend_from_slice(&pattern_pixel(x, y));
+    let paint = |queue: &mut EventQueue<State>, state: &mut State, phase: u8| {
+        for (i, (surface, _)) in surfaces.iter().enumerate() {
+            let (w, h) = state.layer_configured[i].unwrap();
+            let stride = w * 4;
+            let size = (stride * h) as usize;
+            let fd = rustix::fs::memfd_create("pattern", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+            rustix::fs::ftruncate(&fd, size as u64).unwrap();
+            let mut file = std::fs::File::from(fd);
+            let mut data = Vec::with_capacity(size);
+            for y in 0..h {
+                for x in 0..w {
+                    let mut pixel = pattern_pixel(x, y);
+                    if phase % 2 == 1 {
+                        pixel[..3].iter_mut().for_each(|c| *c = 255 - *c);
+                    }
+                    data.extend_from_slice(&pixel);
+                }
             }
+            file.write_all(&data).unwrap();
+            let pool = shm.create_pool(file.as_fd(), size as i32, &qh, ());
+            let buffer = pool.create_buffer(
+                0,
+                w as i32,
+                h as i32,
+                stride as i32,
+                wl_shm::Format::Xrgb8888,
+                &qh,
+                (),
+            );
+            surface.attach(Some(&buffer), 0, 0);
+            surface.damage_buffer(0, 0, w as i32, h as i32);
+            surface.commit();
+            // Keep buffers alive until this private helper exits; destroying
+            // one before the compositor releases it makes its contents undefined.
+            pool.destroy();
         }
-        file.write_all(&data).unwrap();
-        let pool = shm.create_pool(file.as_fd(), size as i32, &qh, ());
-        let buffer = pool.create_buffer(
-            0,
-            w as i32,
-            h as i32,
-            stride as i32,
-            wl_shm::Format::Xrgb8888,
-            &qh,
-            (),
-        );
-        surface.attach(Some(&buffer), 0, 0);
-        surface.damage_buffer(0, 0, w as i32, h as i32);
-        surface.commit();
+        queue.roundtrip(state).unwrap();
+    };
+    let mut phase = 0;
+    paint(queue, state, phase);
+    if let Some(path) = phase_file {
+        std::fs::write(format!("{path}.ready"), "0").unwrap();
     }
     // A seat without a keyboard has no wl_keyboard capability; clients
     // would only bind one once a short-lived virtual keyboard appears, and
@@ -683,7 +711,21 @@ fn run_pattern(
     println!("ready");
     std::io::stdout().flush().unwrap();
     loop {
-        queue.blocking_dispatch(state).unwrap();
+        if let Some(path) = phase_file {
+            let next = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|s| s.trim().parse::<u8>().ok())
+                .unwrap_or(phase);
+            if next != phase {
+                paint(queue, state, next);
+                phase = next;
+                std::fs::write(format!("{path}.ready"), phase.to_string()).unwrap();
+            }
+            queue.roundtrip(state).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        } else {
+            queue.blocking_dispatch(state).unwrap();
+        }
     }
 }
 

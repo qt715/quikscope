@@ -16,6 +16,9 @@ use crate::geom::IRect;
 use crate::ipc::Request;
 use crate::raster::Image;
 
+mod selection;
+pub(crate) use selection::SelectionBarrier;
+
 #[cfg(target_os = "linux")]
 pub mod freedesktop;
 #[cfg(target_os = "linux")]
@@ -239,6 +242,33 @@ pub fn connect(events: EventSink) -> Platform {
 }
 
 impl Platform {
+    /// Why the live overlay cannot be supported on this session, if anything.
+    pub(crate) fn live_selection_unavailable(&self) -> Option<String> {
+        match self.surfaces {
+            #[cfg(target_os = "linux")]
+            Surfaces::X11 => selection::x11_live_unavailable(),
+            _ => None,
+        }
+    }
+
+    /// Output geometry and physical width, without capturing any pixels.
+    pub(crate) fn selection_outputs(&self) -> Result<Vec<(String, IRect, u32)>> {
+        match self.surfaces {
+            #[cfg(target_os = "linux")]
+            Surfaces::LayerShell | Surfaces::Fullscreen => portal::selection_outputs(),
+            #[cfg(target_os = "linux")]
+            Surfaces::X11 => {
+                let (connection, screen) = x11rb::connect(None)?;
+                Ok(x11::monitors(&connection, screen)?
+                    .into_iter()
+                    .map(|o| (o.name, o.rect, o.rect.w as u32))
+                    .collect())
+            }
+            #[cfg(windows)]
+            Surfaces::Windows => Ok(windows::selection_outputs()?),
+        }
+    }
+
     /// Options for a selection overlay opened on `display` *before* the
     /// capture finishes, so window creation overlaps with the compositor
     /// producing the frame. Only layer-shell qualifies: the surface is

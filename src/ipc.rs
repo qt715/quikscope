@@ -62,6 +62,8 @@ pub struct CaptureOptions {
     pub notify: Option<bool>,
     pub clipboard: Option<bool>,
     pub cursor: Option<bool>,
+    /// Freeze before region selection, or select over the live desktop.
+    pub freeze: Option<bool>,
     /// Also write the capture to the screenshots directory immediately.
     pub save: bool,
     pub output: Option<String>,
@@ -170,6 +172,7 @@ impl Request {
                                 "notify" => o.notify = Some(value),
                                 "clipboard" => o.clipboard = Some(value),
                                 "cursor" => o.cursor = Some(value),
+                                "freeze" => o.freeze = Some(value),
                                 "save" if value => o.save = true,
                                 "text" if value => o.text = true,
                                 _ => return Err(format!("unknown capture option {w:?}")),
@@ -218,6 +221,7 @@ impl fmt::Display for Request {
                     ("notify", o.notify),
                     ("clipboard", o.clipboard),
                     ("cursor", o.cursor),
+                    ("freeze", o.freeze),
                 ] {
                     match v {
                         Some(true) => write!(f, " {name}")?,
@@ -464,6 +468,7 @@ mod tests {
                     notify: Some(false),
                     clipboard: Some(false),
                     cursor: Some(true),
+                    freeze: Some(false),
                     save: true,
                     output: Some("DP-1".into()),
                     geometry: Some(IRect::new(-10, 5, 300, 200)),
@@ -481,6 +486,24 @@ mod tests {
         ];
         for req in cases {
             assert_eq!(Request::parse(&req.to_string()), Ok(req.clone()), "{req}");
+        }
+    }
+
+    #[test]
+    fn freeze_overrides_round_trip_and_preserve_config_default() {
+        for (flags, expected) in [
+            ("", None),
+            (" freeze", Some(true)),
+            (" no-freeze", Some(false)),
+            (" freeze no-freeze", Some(false)),
+            (" no-freeze freeze", Some(true)),
+        ] {
+            let req = Request::parse(&format!("capture region{flags}")).unwrap();
+            let Request::Capture(_, options) = &req else {
+                unreachable!()
+            };
+            assert_eq!(options.freeze, expected, "{flags}");
+            assert_eq!(Request::parse(&req.to_string()), Ok(req));
         }
     }
 
@@ -505,6 +528,8 @@ mod tests {
             "capture region wobble",
             "capture region geometry=1,2",
             "capture region no-save",
+            "capture region freeze=false",
+            "capture region no-no-freeze",
             "notifications",
             "notifications maybe",
             "notifications on off",

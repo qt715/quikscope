@@ -40,6 +40,315 @@ fn saved_path(out: &std::process::Output) -> PathBuf {
     PathBuf::from(stdout(out))
 }
 
+fn phase_pixel(x: u32, y: u32, phase: u8) -> [u8; 4] {
+    let mut pixel = pattern_pixel(x, y);
+    if phase % 2 == 1 {
+        pixel[..3].iter_mut().for_each(|c| *c = 255 - *c);
+    }
+    pixel
+}
+
+fn assert_exact_phase(img: &Image, ox: u32, oy: u32, phase: u8) {
+    for y in 0..img.height {
+        for x in 0..img.width {
+            assert_eq!(
+                img.pixel(x, y),
+                phase_pixel(ox + x, oy + y, phase),
+                "phase {phase}, pixel ({x},{y}) at origin ({ox},{oy}); overlay must not be captured"
+            );
+        }
+    }
+}
+
+fn live_session() -> Option<Session> {
+    let s = Session::start()?;
+    if !s.has("grim") {
+        assert_ne!(
+            std::env::var("QUICKSCOPE_E2E").as_deref(),
+            Ok("1"),
+            "grim required for live selection e2e"
+        );
+        eprintln!("skipped: live selection e2e requires grim");
+        return None;
+    }
+    Some(s)
+}
+
+#[test]
+fn region_live_repaints_beneath_dimming_and_clear_hole_but_frozen_keeps_old_pixels() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("pixels");
+    s.start_daemon();
+    for (i, flag, phase) in [(1, "--freeze", 0), (2, "--no-freeze", 1)] {
+        s.repaint_pattern(0);
+        let child = s.spawn_quickscope(&[
+            "capture",
+            "region",
+            flag,
+            "--save",
+            "--no-notify",
+            "--no-clipboard",
+        ]);
+        s.wait_overlay(i);
+        // Crucially, this is a commit by the already-resident background
+        // client only after the selector accepts input.
+        s.repaint_pattern(1);
+        let mut drag = s.hold_drag((100, 100), (420, 330));
+        let path = artifacts.join(format!("selection-{flag}.png"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(s.command("grim").arg(&path).status().unwrap().success());
+            let shot = decode_png(&path);
+            let inside = shot.pixel(180, 170);
+            let outside = shot.pixel(700, 500);
+            let dimmed_new = outside[0] > 0
+                && outside[0] < 255
+                && (1..3).all(|c| {
+                    let expected = phase_pixel(700, 500, 1)[c] as f64 * outside[0] as f64 / 255.0;
+                    (outside[c] as f64 - expected).abs() <= 2.0
+                });
+            let outside_correct = if phase == 1 {
+                dimmed_new
+            } else {
+                outside[0] == 0 && outside[1] < pattern_pixel(700, 500)[1]
+            };
+            if inside == phase_pixel(180, 170, phase) && outside_correct {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{flag}: expected clear phase-{phase} hole and dimmed background; inside={inside:?}, outside={outside:?}; {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drag.stdin.take().unwrap().write_all(b"\n").unwrap();
+        assert!(s.finish(drag, Duration::from_secs(5)).status.success());
+        let out = s.finish(child, Duration::from_secs(15));
+        let final_path = artifacts.join(format!("capture-{flag}.png"));
+        std::fs::copy(saved_path(&out), &final_path).unwrap();
+        let img = decode_png(&final_path);
+        assert_eq!((img.width, img.height), (320, 230));
+        assert_exact_phase(&img, 100, 100, phase);
+    }
+}
+
+#[test]
+fn region_config_live_and_freeze_override_capture_exact_pixels() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("config");
+    let config = s.root().join("config/quickscope/config.toml");
+    let mut contents = std::fs::read_to_string(&config).unwrap();
+    contents.push_str("freeze = false\n");
+    std::fs::write(config, contents).unwrap();
+    s.start_daemon();
+    for (i, flag, phase) in [(1, None, 1), (2, Some("--freeze"), 0)] {
+        s.repaint_pattern(0);
+        let mut args = vec![
+            "capture",
+            "region",
+            "--save",
+            "--no-notify",
+            "--no-clipboard",
+        ];
+        if let Some(flag) = flag {
+            args.push(flag);
+        }
+        let child = s.spawn_quickscope(&args);
+        s.wait_overlay(i);
+        s.repaint_pattern(1);
+        s.helper(&["drag", "100", "100", "420", "330"]);
+        let path = artifacts.join(format!("capture-{i}.png"));
+        std::fs::copy(saved_path(&s.finish(child, Duration::from_secs(15))), &path).unwrap();
+        let image = decode_png(&path);
+        assert_eq!((image.width, image.height), (320, 230));
+        assert_exact_phase(&image, 100, 100, phase);
+    }
+}
+
+#[test]
+fn region_live_composes_changed_pixels_across_outputs() {
+    let Some(mut s) = Session::start_with(2, |_| {}) else {
+        return;
+    };
+    let artifacts = s.live_artifacts("multi-output");
+    s.start_daemon();
+    let child = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--no-freeze",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    s.repaint_pattern(1);
+    s.helper(&["drag", "1100", "100", "1450", "330"]);
+    let path = artifacts.join("capture.png");
+    std::fs::copy(saved_path(&s.finish(child, Duration::from_secs(15))), &path).unwrap();
+    let image = decode_png(&path);
+    assert_eq!((image.width, image.height), (350, 230));
+    for y in 0..image.height {
+        for x in 0..image.width {
+            assert_eq!(
+                image.pixel(x, y),
+                phase_pixel((1100 + x) % OUTPUT_W, 100 + y, 1)
+            );
+        }
+    }
+}
+
+#[test]
+fn portal_live_fullscreen_tracks_live_desktop() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("fullscreen");
+    s.enable_portal();
+    s.force_fullscreen();
+    s.start_daemon();
+    let child = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--no-freeze",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    s.repaint_pattern(1);
+    let path = artifacts.join("selection.png");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(s.command("grim").arg(&path).status().unwrap().success());
+        let pixel = decode_png(&path).pixel(700, 500);
+        if pixel[0] > 0 && pixel[0] < 255 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fullscreen surface never showed the live wallpaper"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    s.keys(&["enter"]);
+    let path = artifacts.join("capture.png");
+    std::fs::copy(saved_path(&s.finish(child, Duration::from_secs(15))), &path).unwrap();
+    let image = decode_png(&path);
+    assert_eq!((image.width, image.height), (OUTPUT_W, OUTPUT_H));
+    assert_exact_phase(&image, 0, 0, 1);
+}
+
+#[test]
+fn region_live_click_enter_and_cancellation() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("input");
+    s.start_daemon();
+    for (i, action) in ["click", "enter", "escape", "right"]
+        .into_iter()
+        .enumerate()
+    {
+        s.repaint_pattern(0);
+        let before = std::fs::read_dir(s.shots_dir()).unwrap().count();
+        let cached = std::fs::read(s.cache_file()).ok();
+        let child = s.spawn_quickscope(&[
+            "capture",
+            "region",
+            "--no-freeze",
+            "--save",
+            "--no-notify",
+            "--no-clipboard",
+        ]);
+        s.wait_overlay(i + 1);
+        s.repaint_pattern(1);
+        match action {
+            "click" => {
+                s.helper(&["click", "640", "360"]);
+            }
+            "right" => {
+                s.helper(&["click", "200", "200", "right"]);
+            }
+            key => s.keys(&[key]),
+        }
+        let out = s.finish(child, Duration::from_secs(15));
+        if action == "escape" || action == "right" {
+            assert_eq!(out.status.code(), Some(1));
+            assert!(String::from_utf8_lossy(&out.stderr).contains("cancelled"));
+            assert_eq!(std::fs::read_dir(s.shots_dir()).unwrap().count(), before);
+            assert_eq!(std::fs::read(s.cache_file()).ok(), cached);
+        } else {
+            let path = artifacts.join(format!("{action}.png"));
+            std::fs::copy(saved_path(&out), &path).unwrap();
+            let img = decode_png(&path);
+            assert_eq!((img.width, img.height), (OUTPUT_W, OUTPUT_H));
+            assert_exact_phase(&img, 0, 0, 1);
+        }
+    }
+    assert!(s.notifications().is_empty());
+}
+
+#[test]
+fn portal_live_permission_follows_selection_and_overlay_teardown() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("portal");
+    s.enable_portal_with_dialog(true);
+    s.start_daemon();
+    let child = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--no-freeze",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    assert!(
+        !s.toplevels()
+            .iter()
+            .any(|t| t.starts_with("quickscope-e2e-dialog")),
+        "portal permission must not precede live selection"
+    );
+    s.repaint_pattern(1);
+    s.helper(&["drag", "100", "100", "420", "330"]);
+    s.wait_for_window("quickscope-e2e-dialog");
+    let competing = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--no-freeze",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    let rejected = s.finish(competing, Duration::from_secs(3));
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("a selection is already in progress"),
+        "a selector must stay claimed through portal permission: {rejected:?}"
+    );
+    // Dialog is centered; these probes are outside it and the old selection.
+    // Permission must not be shown while a dimming layer still covers them.
+    let path = artifacts.join("permission.png");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        assert!(s.command("grim").arg(&path).status().unwrap().success());
+        let img = decode_png(&path);
+        if [(80, 500), (1100, 500)]
+            .into_iter()
+            .all(|(x, y)| img.pixel(x, y) == phase_pixel(x, y, 1))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "overlay still visible during portal permission"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    s.keys(&["enter"]);
+    let path = artifacts.join("capture.png");
+    std::fs::copy(saved_path(&s.finish(child, Duration::from_secs(15))), &path).unwrap();
+    let img = decode_png(&path);
+    assert_eq!((img.width, img.height), (320, 230));
+    assert_exact_phase(&img, 100, 100, 1);
+}
+
 #[test]
 fn screen_capture_notifies_caches_and_fills_the_clipboard() {
     let Some(mut s) = Session::start() else {

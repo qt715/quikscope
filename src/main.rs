@@ -23,6 +23,7 @@ CAPTURE OPTIONS:
     --notify / --no-notify       Show a desktop notification
     --clipboard / --no-clipboard Copy the capture to the clipboard
     --cursor / --no-cursor       Include the pointer
+    --freeze / --no-freeze       Freeze before region selection / select over the live desktop
     --save                       Also save the raw capture to the screenshots directory
     --text                       Extract the text in the capture: copy it and print it
     -o, --output <NAME>          Output for `output` mode (default: focused output)
@@ -196,6 +197,8 @@ fn parse_capture(args: &[String]) -> anyhow::Result<Request> {
             "--no-clipboard" => o.clipboard = Some(false),
             "--cursor" => o.cursor = Some(true),
             "--no-cursor" => o.cursor = Some(false),
+            "--freeze" => o.freeze = Some(true),
+            "--no-freeze" => o.freeze = Some(false),
             "--save" => o.save = true,
             "--text" => o.text = true,
             "-o" | "--output" => o.output = Some(value(a)?),
@@ -245,6 +248,24 @@ mod tests {
         assert_eq!(o.output.as_deref(), Some("DP-2"));
         assert!(o.save);
         assert!(o.text);
+    }
+
+    #[test]
+    fn freeze_flags_override_in_order_and_round_trip() {
+        for (flags, expected) in [
+            ("region", None),
+            ("region --freeze", Some(true)),
+            ("region --no-freeze", Some(false)),
+            ("region --freeze --no-freeze", Some(false)),
+            ("region --no-freeze --freeze", Some(true)),
+        ] {
+            let req = parse_capture(&args(flags)).unwrap();
+            let Request::Capture(_, options) = &req else {
+                unreachable!()
+            };
+            assert_eq!(options.freeze, expected, "{flags}");
+            assert_eq!(Request::parse(&req.to_string()), Ok(req));
+        }
     }
 
     #[test]

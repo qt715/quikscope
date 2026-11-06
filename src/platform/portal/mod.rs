@@ -1,7 +1,7 @@
 //! Screenshot portal fallback for compositors without wlr-screencopy.
 mod layout;
 
-pub(crate) use layout::supports_layer_shell;
+pub(crate) use layout::{selection_outputs, supports_layer_shell};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -189,6 +189,7 @@ mod tests {
         OutputInfo {
             name: name.into(),
             logical: rect,
+            physical_width: rect.w as u32,
         }
     }
 

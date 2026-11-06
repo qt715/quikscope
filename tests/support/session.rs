@@ -331,7 +331,9 @@ impl Session {
 
     fn start_pattern(&mut self) {
         let mut cmd = Command::new(HELPER);
-        cmd.arg("pattern").stdout(Stdio::piped());
+        cmd.arg("pattern")
+            .arg(self.root().join("pattern-phase"))
+            .stdout(Stdio::piped());
         let mut child = spawn_quiet(cmd, &self.env, None);
         let mut out = child.stdout.take().unwrap();
         let mut buf = [0u8; 6];
@@ -340,6 +342,55 @@ impl Session {
         self.children.push(child);
         // Let the compositor present a frame with the wallpaper.
         std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// Repaint the resident wallpaper after selection is already interactive.
+    pub fn repaint_pattern(&self, phase: u8) {
+        let path = self.root().join("pattern-phase");
+        std::fs::write(&path, phase.to_string()).unwrap();
+        wait_for("wallpaper repaint", Duration::from_secs(5), || {
+            std::fs::read_to_string(path.with_extension("ready"))
+                .is_ok_and(|s| s == phase.to_string())
+        });
+        // The helper acknowledges the Wayland commit, not presentation.
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// Keep the virtual pointer pressed while a test inspects the clear hole.
+    pub fn hold_drag(&self, from: (u32, u32), to: (u32, u32)) -> Child {
+        let mut child = self
+            .command(HELPER)
+            .args([
+                "drag-hold",
+                &from.0.to_string(),
+                &from.1.to_string(),
+                &to.0.to_string(),
+                &to.1.to_string(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = [0; 6];
+        child
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut ready)
+            .unwrap();
+        assert_eq!(&ready, b"ready\n");
+        child
+    }
+
+    /// Screenshots survive session teardown, including a failed assertion.
+    pub fn live_artifacts(&self, name: &str) -> PathBuf {
+        let path = tempfile::Builder::new()
+            .prefix(&format!("qs-live-{name}-"))
+            .tempdir_in("/tmp")
+            .unwrap()
+            .keep();
+        eprintln!("live selection screenshots: {}", path.display());
+        path
     }
 
     pub fn root(&self) -> &Path {

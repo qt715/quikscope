@@ -568,10 +568,15 @@ fn xtest_drag_escape_and_enter() {
         "{out:?}"
     );
 
-    let child = s.spawn(&["capture", "region", "--save", "--no-notify"]);
+    // Xvfb has no compositing manager: a live request must clearly fall back
+    // to the same frozen selection instead of putting black over the root.
+    let child = s.spawn(&["capture", "region", "--no-freeze", "--save", "--no-notify"]);
     s.overlay();
     s.key(0xff0d); // Return: whole focused monitor
     assert_eq!(s.saved(s.finish(child)), expected);
+    let log = std::fs::read_to_string(s.dir.path().join("daemon.log")).unwrap();
+    assert!(log.contains("X11 has no compositing manager"), "{log}");
+    assert!(log.contains("falling back to frozen mode"), "{log}");
 }
 
 #[test]
