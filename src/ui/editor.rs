@@ -224,6 +224,7 @@ pub struct Editor {
     draft: Option<Shape>,
     crop_draft: Option<RectF>,
     pub selected: BTreeSet<ShapeId>,
+    pub help_open: bool,
     pub text: Option<TextEdit>,
     space_held: bool,
     /// With the select tool: the item a press would pick up (open-hand
@@ -308,6 +309,7 @@ impl Editor {
             draft: None,
             crop_draft: None,
             selected: BTreeSet::new(),
+            help_open: false,
             text: None,
             space_held: false,
             hover: None,
@@ -655,6 +657,11 @@ impl Editor {
         (self.selected.len() == 1).then(|| *self.selected.first().unwrap())
     }
 
+    pub fn toggle_help(&mut self, cx: &mut Context<Self>) {
+        self.help_open = !self.help_open;
+        cx.notify();
+    }
+
     // ── text editing ────────────────────────────────────────────────────
 
     fn begin_text(&mut self, origin: Pt, existing: Option<ShapeId>, cx: &mut Context<Self>) {
@@ -765,6 +772,22 @@ impl Editor {
     // ── input ───────────────────────────────────────────────────────────
 
     fn key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = ev.keystroke.key.as_str();
+        if self.help_open {
+            if matches!(key, "escape" | "?" | "f1") || (key == "/" && ev.keystroke.modifiers.shift)
+            {
+                self.toggle_help(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self.text.is_none()
+            && (matches!(key, "?" | "f1") || (key == "/" && ev.keystroke.modifiers.shift))
+        {
+            self.toggle_help(cx);
+            cx.stop_propagation();
+            return;
+        }
         if ev.keystroke.key == "escape" && self.picker_at.is_some() {
             self.picker_at = None;
             cx.stop_propagation();
@@ -906,6 +929,9 @@ impl Editor {
     }
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.help_open {
+            return;
+        }
         window.focus(&self.focus, cx);
         // A click on the canvas dismisses the color picker.
         self.picker_at = None;
@@ -1905,6 +1931,7 @@ impl Render for Editor {
             .children(toast)
             .children(font_menu)
             .children(picker)
+            .children(self.help_open.then(toolbar::shortcut_help))
     }
 }
 

@@ -705,3 +705,23 @@ fn selection_stacking_preserves_relative_order_and_undo() {
     ui.ctrl("z", false);
     assert_eq!(ui.doc(|d| d.shapes().last().unwrap().id), ids[1]);
 }
+
+#[test]
+fn shortcut_help_toggles_and_escape_keeps_editor_open() {
+    let (mut ui, _) = selection_scene();
+    ui.key(
+        "/",
+        Some("?"),
+        Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+    );
+    assert!(ui.editor(|e, _| e.help_open));
+    ui.key("escape", None, Modifiers::default());
+    assert!(!ui.editor(|e, _| e.help_open));
+    ui.key("f1", None, Modifiers::default());
+    assert!(ui.editor(|e, _| e.help_open));
+    ui.key("f1", None, Modifiers::default());
+    assert!(!ui.editor(|e, _| e.help_open));
+}

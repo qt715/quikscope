@@ -253,6 +253,16 @@ pub fn toolbar(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
             button("save", "Save to screenshots folder (Ctrl+S)", false, true)
                 .on_click(cx.listener(|e, _, window, cx| e.save(false, window, cx)))
                 .child(icon("save", theme::accent())),
+        )
+        .child(
+            button(
+                "shortcut-help",
+                "Keyboard shortcuts (? / F1)",
+                editor.help_open,
+                true,
+            )
+            .on_click(cx.listener(|e, _, _, cx| e.toggle_help(cx)))
+            .child("?"),
         );
 
     div()
@@ -264,4 +274,111 @@ pub fn toolbar(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
         .flex()
         .justify_center()
         .child(bar)
+}
+
+pub fn shortcut_help() -> impl IntoElement {
+    let tools = Tool::ALL.into_iter().map(|tool| {
+        let keys = ('a'..='z')
+            .chain('0'..='9')
+            .filter(|key| Tool::from_key(key.encode_utf8(&mut [0; 4])) == Some(tool))
+            .map(|key| key.to_ascii_uppercase().to_string())
+            .collect::<Vec<_>>()
+            .join(" / ");
+        let label = tool.label().split(" (").next().unwrap();
+        div().text_xs().child(format!("{label} — {keys}"))
+    });
+    let section = |title: &'static str, rows: &'static [&'static str]| {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().text_color(theme::accent()).child(title))
+            .children(rows.iter().map(|row| div().text_xs().child(*row)))
+    };
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("shortcut-help-panel")
+                .occlude()
+                .p_6()
+                .rounded_lg()
+                .bg(theme::panel().opacity(0.96))
+                .border_1()
+                .border_color(theme::panel_border())
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .max_w_full()
+                .child(div().text_lg().child("Keyboard shortcuts"))
+                .child(
+                    div()
+                        .flex()
+                        .gap_6()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(div().text_sm().text_color(theme::accent()).child("Tools"))
+                                .children(tools)
+                                .child(
+                                    div()
+                                        .mt_2()
+                                        .text_xs()
+                                        .child("Shift: square / circle / 15° snap"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(section(
+                                    "Edit",
+                                    &[
+                                        "Drag empty canvas: marquee (fully contained)",
+                                        "Shift+click: toggle selection · Ctrl+A: select all",
+                                        "Drag selection: move · Arrows: nudge · Shift: ×10",
+                                        "Delete / Backspace: delete · Ctrl+D: duplicate",
+                                        "Ctrl+Z: undo · Ctrl+Shift+Z / Ctrl+Y: redo",
+                                        "Ctrl+Shift+] / [: bring to front / send to back",
+                                        "[ / ]: stroke size · F: toggle fill",
+                                        "Esc: cancel / clear selection / close editor",
+                                    ],
+                                ))
+                                .child(section(
+                                    "View",
+                                    &[
+                                        "Space+drag / middle drag / H: pan · Scroll: pan",
+                                        "Ctrl+scroll / Ctrl++ / Ctrl+−: zoom",
+                                        "Ctrl+0: fit · Ctrl+1: actual size",
+                                        "? / F1: toggle help · Esc: close help",
+                                    ],
+                                ))
+                                .child(section(
+                                    "Text",
+                                    &[
+                                        "Double-click / Enter on selected text: edit",
+                                        "Enter: new line · Esc / click away: finish",
+                                        "Ctrl+B / Ctrl+I: bold / italic",
+                                        "Ctrl+Shift+> / <: increase / decrease font size",
+                                    ],
+                                ))
+                                .child(section(
+                                    "Output",
+                                    &[
+                                        "Ctrl+C: copy image · Ctrl+Shift+C: extract text",
+                                        "Ctrl+S: save · Ctrl+Shift+S: save new copy",
+                                        "Ctrl+W / Ctrl+Q: close editor",
+                                    ],
+                                )),
+                        ),
+                ),
+        )
 }
