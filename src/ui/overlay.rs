@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use super::{Tile, ViewTransform, paint_tiles, theme};
-use crate::geom::{IRect, Pt, RectF};
+use crate::geom::IRect;
 use crate::platform::{WindowRect, window_at};
 
 /// Below this drag distance (logical px) a press counts as a click.
@@ -28,8 +28,6 @@ pub struct Selection {
     start: Option<(i32, i32)>,
     current: Option<IRect>,
     hover: Option<IRect>,
-    /// Fractional logical coordinates preserve physical-pixel precision on HiDPI outputs.
-    pointer: Option<Pt>,
     done: Option<oneshot::Sender<Option<IRect>>>,
 }
 
@@ -42,7 +40,6 @@ impl Selection {
                 start: None,
                 current: None,
                 hover: None,
-                pointer: None,
                 done: Some(tx),
             },
             rx,
@@ -250,14 +247,6 @@ impl Overlay {
         }
     }
 
-    fn pointer(&self, p: gpui::Point<gpui::Pixels>, window: &Window) -> Pt {
-        let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.);
-        Pt::new(
-            self.output.x as f32 + f32::from(p.x) * factor,
-            self.output.y as f32 + f32::from(p.y) * factor,
-        )
-    }
-
     /// Whether the frozen frame is on screen and input means something.
     fn ready(&self) -> bool {
         self.has_frame && (self.fullscreen.is_none() || self.display.is_some())
@@ -268,9 +257,7 @@ impl Overlay {
             return;
         }
         let (x, y) = self.global(ev.position, window);
-        let pointer = self.pointer(ev.position, window);
         self.selection.update(cx, |s, cx| {
-            s.pointer = Some(pointer);
             s.press(x, y);
             cx.notify();
         });
@@ -301,7 +288,6 @@ impl Focusable for Overlay {
 
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame_started = log::log_enabled!(log::Level::Debug).then(std::time::Instant::now);
         self.sync_display(window, cx);
         // X11 and Windows capture coordinates can be physical while the UI uses DIPs.
         let factor = self.output.w as f32 / f32::from(window.viewport_size().width).max(1.0);
@@ -313,57 +299,9 @@ impl Render for Overlay {
         // A fullscreen surface can land on any output; never flash the first
         // candidate's frozen frame before Wayland tells us where it mapped.
         let ready = self.ready();
-        let state = self.selection.read(cx);
-        let hint_visible = ready && state.start.is_none();
-        let pointer = state.pointer;
+        let has_frame = self.has_frame;
         let scale = self.scale;
-        let highlight = state.highlight();
-        let image_height = tiles.iter().map(|t| t.y + t.h).max().unwrap_or(0);
-        let precision = pointer
-            .filter(|p| {
-                ready
-                    && p.x >= output.x as f32
-                    && p.y >= output.y as f32
-                    && p.x < output.right() as f32
-                    && p.y < output.bottom() as f32
-            })
-            .and_then(|pointer| {
-                let pixel = sample_coordinates(pointer, output, scale, image_width, image_height)?;
-                let color = sample_color(&tiles, pixel.0, pixel.1)?;
-                let pointer = Pt::new(
-                    (pointer.x - output.x as f32) / factor,
-                    (pointer.y - output.y as f32) / factor,
-                );
-                Some(Precision {
-                    pointer,
-                    pixel,
-                    color,
-                    loupe: loupe_placement(
-                        pointer,
-                        f32::from(window.viewport_size().width),
-                        f32::from(window.viewport_size().height),
-                    ),
-                })
-            });
-        let loupe_label = precision.map(|p| {
-            div()
-                .absolute()
-                .left(px(p.loupe.x + 8.))
-                .top(px(p.loupe.y + 132.))
-                .text_xs()
-                .text_color(theme::text())
-                .child(format!(
-                    "{}, {} px · #{:02x}{:02x}{:02x}",
-                    p.pixel.0, p.pixel.1, p.color[0], p.color[1], p.color[2]
-                ))
-        });
-        let hint =
-            hint_visible.then(|| {
-                div().absolute().bottom_4().left_0().right_0()
-            .flex().justify_center().child(div().px_3().py_1p5().rounded_md()
-                .bg(theme::panel().opacity(0.88)).text_xs().text_color(theme::text())
-                .child("Drag to select · Click a window · Enter: whole output · Esc: cancel"))
-            });
+        let highlight = self.selection.read(cx).highlight();
         if let Some(opened) = self.opened.take() {
             log::debug!(
                 "overlay first frame {:.1}ms after creation",
@@ -371,9 +309,7 @@ impl Render for Overlay {
             );
         }
 
-        let label = ready
-            .then_some(highlight)
-            .flatten()
+        let label = highlight
             .and_then(|h| h.intersect(&output).map(|_| h))
             .filter(|h| h.w > 0 && h.h > 0)
             .map(|h| {
@@ -429,18 +365,8 @@ impl Render for Overlay {
                         }
                         // Dimming before the frame exists would darken the
                         // live desktop, and the capture still being taken.
-                        if ready {
+                        if has_frame {
                             paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
-                        }
-                        if let Some(precision) = precision {
-                            paint_precision(
-                                window,
-                                bounds,
-                                &tiles,
-                                image_width,
-                                image_height,
-                                precision,
-                            );
                         }
 
                         let sel = selection.clone();
@@ -449,20 +375,18 @@ impl Render for Overlay {
                             if phase != DispatchPhase::Bubble {
                                 return;
                             }
-                            let Some((x, y, pointer)) = overlay.update(cx, |o, _| {
+                            let Some((x, y)) = overlay.update(cx, |o, _| {
                                 if !o.ready() {
                                     return None;
                                 }
                                 if !std::mem::replace(&mut o.pointer_seen, true) {
                                     log::debug!("overlay has the pointer");
                                 }
-                                let (x, y) = o.global(ev.position, window);
-                                Some((x, y, o.pointer(ev.position, window)))
+                                Some(o.global(ev.position, window))
                             }) else {
                                 return;
                             };
                             sel.update(cx, |s, cx| {
-                                s.pointer = Some(pointer);
                                 s.motion(x, y);
                                 cx.notify();
                             });
@@ -488,156 +412,7 @@ impl Render for Overlay {
                 .size_full(),
             )
             .children(label)
-            .children(hint)
-            .children(loupe_label)
-            .children(
-                frame_started
-                    .filter(|_| ready && precision.is_some())
-                    .map(|started| {
-                        canvas(
-                            |_, _, _| {},
-                            move |_, _, _, _| {
-                                log::debug!(
-                                    "overlay frame CPU {:.3}ms",
-                                    started.elapsed().as_secs_f64() * 1e3
-                                );
-                            },
-                        )
-                        .absolute()
-                        .size_full()
-                    }),
-            )
     }
-}
-
-const LOUPE_PIXELS: i32 = 15;
-const LOUPE_ZOOM: f32 = 8.;
-
-#[derive(Clone, Copy)]
-struct Precision {
-    pointer: Pt,
-    pixel: (u32, u32),
-    color: [u8; 3],
-    loupe: RectF,
-}
-
-/// Flip independently on each axis, then clamp for unusually small outputs.
-fn loupe_placement(pointer: Pt, width: f32, height: f32) -> RectF {
-    let w = 184.;
-    let h = 158.;
-    let place = |p: f32, extent: f32, length: f32| {
-        let near = p + 24.;
-        let candidate = if near + length + 8. <= extent {
-            near
-        } else {
-            p - 24. - length
-        };
-        candidate.max(8.).min((extent - length - 8.).max(0.))
-    };
-    RectF::new(
-        place(pointer.x, width, w),
-        place(pointer.y, height, h),
-        w.min(width),
-        h.min(height),
-    )
-}
-
-fn sample_coordinates(
-    pointer: Pt,
-    output: IRect,
-    scale: f32,
-    width: u32,
-    height: u32,
-) -> Option<(u32, u32)> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-    Some((
-        ((pointer.x - output.x as f32) * scale)
-            .floor()
-            .clamp(0., (width - 1) as f32) as u32,
-        ((pointer.y - output.y as f32) * scale)
-            .floor()
-            .clamp(0., (height - 1) as f32) as u32,
-    ))
-}
-
-fn sample_color(tiles: &[Tile], x: u32, y: u32) -> Option<[u8; 3]> {
-    let tile = tiles
-        .iter()
-        .find(|t| x >= t.x && y >= t.y && x - t.x < t.w && y - t.y < t.h)?;
-    let offset = (((y - tile.y) * tile.w + x - tile.x) * 4) as usize;
-    let bgra = tile.image.as_bytes(0)?.get(offset..offset + 4)?;
-    Some([bgra[2], bgra[1], bgra[0]])
-}
-
-fn paint_precision(
-    window: &mut Window,
-    bounds: Bounds<gpui::Pixels>,
-    tiles: &[Tile],
-    width: u32,
-    height: u32,
-    p: Precision,
-) {
-    let rect = |x, y, w, h| Bounds::new(bounds.origin + point(px(x), px(y)), size(px(w), px(h)));
-    let x = p.pointer.x;
-    let y = p.pointer.y;
-    for (line, shadow) in [
-        (
-            rect(0., y, f32::from(bounds.size.width), 1.),
-            rect(0., y - 1., f32::from(bounds.size.width), 3.),
-        ),
-        (
-            rect(x, 0., 1., f32::from(bounds.size.height)),
-            rect(x - 1., 0., 3., f32::from(bounds.size.height)),
-        ),
-    ] {
-        window.paint_quad(fill(shadow, gpui::black().opacity(0.4)));
-        window.paint_quad(fill(line, gpui::white().opacity(0.65)));
-    }
-    let loupe = rect(p.loupe.x, p.loupe.y, p.loupe.w, p.loupe.h);
-    window.paint_quad(fill(loupe, theme::panel()));
-    window.paint_quad(outline(
-        loupe,
-        theme::panel_border(),
-        gpui::BorderStyle::Solid,
-    ));
-    let left = p.loupe.x + (p.loupe.w - LOUPE_PIXELS as f32 * LOUPE_ZOOM) / 2.;
-    let top = p.loupe.y + 6.;
-    // Frozen tile bytes are retained by RenderImage. Painting constant-colour
-    // cells avoids resampling, image allocation and texture uploads on motion.
-    for row in 0..LOUPE_PIXELS {
-        for col in 0..LOUPE_PIXELS {
-            let sx = (p.pixel.0 as i32 + col - LOUPE_PIXELS / 2).clamp(0, width as i32 - 1) as u32;
-            let sy = (p.pixel.1 as i32 + row - LOUPE_PIXELS / 2).clamp(0, height as i32 - 1) as u32;
-            if let Some([r, g, b]) = sample_color(tiles, sx, sy) {
-                window.paint_quad(fill(
-                    rect(
-                        left + col as f32 * LOUPE_ZOOM,
-                        top + row as f32 * LOUPE_ZOOM,
-                        LOUPE_ZOOM,
-                        LOUPE_ZOOM,
-                    ),
-                    gpui::rgb((r as u32) << 16 | (g as u32) << 8 | b as u32),
-                ));
-            }
-        }
-    }
-    let center = rect(
-        left + 7. * LOUPE_ZOOM,
-        top + 7. * LOUPE_ZOOM,
-        LOUPE_ZOOM,
-        LOUPE_ZOOM,
-    );
-    window.paint_quad(outline(center, gpui::black(), gpui::BorderStyle::Solid));
-    window.paint_quad(outline(
-        Bounds::new(
-            center.origin - point(px(1.), px(1.)),
-            center.size + size(px(2.), px(2.)),
-        ),
-        gpui::white(),
-        gpui::BorderStyle::Solid,
-    ));
 }
 
 /// `r` (global logical) relative to this output's surface.
@@ -686,77 +461,6 @@ fn paint_dim(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn loupe_flips_at_each_edge_without_leaving_the_viewport() {
-        for (width, height) in [(2560., 1440.), (480., 320.)] {
-            for pointer in [
-                Pt::new(0., 0.),
-                Pt::new(width - 1., 0.),
-                Pt::new(0., height - 1.),
-                Pt::new(width - 1., height - 1.),
-            ] {
-                let rect = loupe_placement(pointer, width, height);
-                assert!(rect.x >= 8. && rect.y >= 8.);
-                assert!(rect.right() <= width - 8. && rect.bottom() <= height - 8.);
-                if pointer.x == 0. {
-                    assert!(rect.x > pointer.x);
-                } else {
-                    assert!(rect.right() < pointer.x);
-                }
-                if pointer.y == 0. {
-                    assert!(rect.y > pointer.y);
-                } else {
-                    assert!(rect.bottom() < pointer.y);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn sampling_keeps_fractional_hidpi_positions_and_clamps_edges() {
-        let output = IRect::new(-100, 50, 100, 80);
-        assert_eq!(
-            sample_coordinates(Pt::new(-99.25, 50.75), output, 2., 200, 160),
-            Some((1, 1))
-        );
-        assert_eq!(
-            sample_coordinates(Pt::new(0., 130.), output, 2., 200, 160),
-            Some((199, 159))
-        );
-        assert_eq!(
-            sample_coordinates(Pt::new(-101., 49.), output, 2., 200, 160),
-            Some((0, 0))
-        );
-        assert_eq!(
-            sample_coordinates(Pt::new(-99., 51.), output, 1., 100, 80),
-            Some((1, 1))
-        );
-        assert_eq!(sample_coordinates(Pt::default(), output, 1., 0, 80), None);
-    }
-
-    #[test]
-    fn sampling_reads_bgra_across_frozen_tile_boundaries() {
-        let tiles = [
-            Tile {
-                x: 0,
-                y: 0,
-                w: 1,
-                h: 1,
-                image: super::super::render_image(1, 1, vec![0x56, 0x34, 0x12, 255]),
-            },
-            Tile {
-                x: 1,
-                y: 0,
-                w: 1,
-                h: 1,
-                image: super::super::render_image(1, 1, vec![0xef, 0xcd, 0xab, 255]),
-            },
-        ];
-        assert_eq!(sample_color(&tiles, 0, 0), Some([0x12, 0x34, 0x56]));
-        assert_eq!(sample_color(&tiles, 1, 0), Some([0xab, 0xcd, 0xef]));
-        assert_eq!(sample_color(&tiles, 2, 0), None);
-    }
     #[test]
     fn physical_selection_hole_maps_to_scaled_viewport() {
         let bounds = local(

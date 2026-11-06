@@ -930,12 +930,6 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
         .parse()
         .unwrap();
     s.wait_overlay_at(1, logical.x + 1, logical.y + 1);
-    // Precision guides follow the pointer; keep them outside the frozen-frame probes.
-    s.helper(&[
-        "move",
-        &(logical.x + 8).to_string(),
-        &(logical.y + 8).to_string(),
-    ]);
     for (i, name) in ["HEADLESS-1", "HEADLESS-2"].into_iter().enumerate() {
         let path = s.root().join(format!("overlay-{name}.png"));
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1034,10 +1028,9 @@ fn selection_overlay_covers_a_large_output_edge_to_edge() {
     s.start_daemon();
     let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
-    // Away from pointer guides and the bottom-centre hint: dimmed, not live.
-    // The frozen frame reaches the screen a frame or two after the overlay
-    // starts taking input, so the check retries briefly.
-    let probes = [(40, 1400), (2520, 40), (2520, 1400), (1280, 1380)];
+    // Probe near every corner: dimmed, not live. The frozen frame reaches
+    // the screen after input starts, so retain the coverage check's retry.
+    let probes = [(40, 1400), (2520, 40), (2520, 1400), (1280, 1400)];
     let sum = |p: [u8; 4]| p[..3].iter().map(|&c| c as u32).sum::<u32>();
     let grim = s.root().join("overlay.png");
     let deadline = Instant::now() + Duration::from_secs(3);
