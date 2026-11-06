@@ -29,6 +29,10 @@ struct Ui {
 
 impl Ui {
     fn new(doc: Document) -> Ui {
+        Self::with_size(doc, size(px(1000.), px(700.)))
+    }
+
+    fn with_size(doc: Document, viewport: gpui::Size<gpui::Pixels>) -> Ui {
         let text = gpui_platform::current_platform(true).text_system();
         let mut cx = HeadlessAppContext::with_platform(
             text,
@@ -41,7 +45,7 @@ impl Ui {
         let shot = Arc::new(Shot::new(1, base, scale, None));
         let d = doc.clone();
         let window = cx
-            .open_window(size(px(1000.), px(700.)), |window, cx| {
+            .open_window(viewport, |window, cx| {
                 cx.new(|cx| Editor::new(shot, d, window, cx))
             })
             .unwrap();
@@ -732,4 +736,21 @@ fn shortcut_help_toggles_and_escape_keeps_editor_open() {
     assert!(ui.editor(|e, _| e.help_open));
     ui.key("escape", None, Modifiers::default());
     assert!(ui.editor(|e, _| e.text.is_some()));
+}
+
+#[test]
+fn shortcut_help_fits_small_windows_and_scrolls() {
+    let mut ui = Ui::with_size(blank(), size(px(480.), px(320.)));
+    ui.key("f1", None, Modifiers::default());
+    let bounds = ui.editor(|e, _| e.help_scroll.bounds());
+    assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+    assert!(
+        bounds.left() >= px(16.) && bounds.top() >= px(16.),
+        "{bounds:?}"
+    );
+    assert!(
+        bounds.right() <= px(464.) && bounds.bottom() <= px(304.),
+        "{bounds:?}"
+    );
+    assert!(ui.editor(|e, _| e.help_scroll.max_offset().y) > px(0.));
 }

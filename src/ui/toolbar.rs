@@ -276,7 +276,10 @@ pub fn toolbar(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
         .child(bar)
 }
 
-pub fn shortcut_help() -> impl IntoElement {
+pub fn shortcut_help(
+    viewport: gpui::Size<gpui::Pixels>,
+    scroll: &gpui::ScrollHandle,
+) -> impl IntoElement {
     let tools = Tool::ALL.into_iter().map(|tool| {
         let keys = ('a'..='z')
             .chain('0'..='9')
@@ -315,10 +318,16 @@ pub fn shortcut_help() -> impl IntoElement {
                 .flex_col()
                 .gap_3()
                 .max_w_full()
-                .child(div().text_lg().child("Keyboard shortcuts"))
+                .w((viewport.width - px(32.)).min(px(760.)))
+                .max_h((viewport.height - px(32.)).max(px(1.)))
+                .overflow_y_scroll()
+                .track_scroll(scroll)
+                .child(div().flex_shrink_0().text_lg().child("Keyboard shortcuts"))
                 .child(
                     div()
                         .flex()
+                        .flex_shrink_0()
+                        .when(viewport.width < px(640.), |d| d.flex_col())
                         .gap_6()
                         .child(
                             div()

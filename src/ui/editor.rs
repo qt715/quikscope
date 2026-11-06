@@ -225,6 +225,7 @@ pub struct Editor {
     crop_draft: Option<RectF>,
     pub selected: BTreeSet<ShapeId>,
     pub help_open: bool,
+    pub help_scroll: gpui::ScrollHandle,
     pub text: Option<TextEdit>,
     space_held: bool,
     /// With the select tool: the item a press would pick up (open-hand
@@ -310,6 +311,7 @@ impl Editor {
             crop_draft: None,
             selected: BTreeSet::new(),
             help_open: false,
+            help_scroll: gpui::ScrollHandle::new(),
             text: None,
             space_held: false,
             hover: None,
@@ -1931,7 +1933,10 @@ impl Render for Editor {
             .children(toast)
             .children(font_menu)
             .children(picker)
-            .children(self.help_open.then(toolbar::shortcut_help))
+            .children(
+                self.help_open
+                    .then(|| toolbar::shortcut_help(window.viewport_size(), &self.help_scroll)),
+            )
     }
 }
 
