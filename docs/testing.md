@@ -142,5 +142,7 @@ compositor.
 `.github/workflows/ci.yml` runs formatting and clippy (`-D warnings`), the
 test suite with Mesa lavapipe, Noto fonts and Tesseract on Ubuntu, an MSRV
 check, the Wayland e2e suite in an Arch Linux container with labwc and
-Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, and a
-release build that is attached to `v*` tags.
+Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, a Windows
+build with clippy and the non-GPU tests, and release builds for Linux
+(`quickscope-x86_64-linux.tar.gz`) and Windows (`quickscope-x86_64-windows.zip`)
+that are attached to `v*` tags.

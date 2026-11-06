@@ -80,6 +80,16 @@ jobs:
       # GPUI 0.3.10 returns no headless renderer on Windows. The two
       # offscreen GPU suites are cfg-excluded; lib, CLI, golden and OCR run.
       - run: cargo test --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist/quickscope | Out-Null
+          Copy-Item target/release/quickscope.exe, README.md, LICENSE-MIT, LICENSE-APACHE dist/quickscope/
+          Compress-Archive dist/quickscope quickscope-x86_64-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quickscope-x86_64-windows
+          path: quickscope-x86_64-windows.zip
 
   msrv:
     name: Minimum supported Rust version
@@ -141,7 +151,7 @@ jobs:
   release:
     name: Release build
     runs-on: ubuntu-24.04
-    needs: [lint, test, e2e, x11-e2e]
+    needs: [lint, test, windows, e2e, x11-e2e]
     permissions:
       contents: write
     steps:
@@ -162,8 +172,15 @@ jobs:
         with:
           name: quickscope-x86_64-linux
           path: quickscope-x86_64-linux.tar.gz
+      - name: Windows package
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/download-artifact@v4
+        with:
+          name: quickscope-x86_64-windows
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: quickscope-x86_64-linux.tar.gz
+          files: |
+            quickscope-x86_64-linux.tar.gz
+            quickscope-x86_64-windows.zip
