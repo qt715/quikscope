@@ -524,30 +524,35 @@ const BACKGROUND_RADIUS: usize = 16;
 
 /// Inverts every pixel whose surroundings average dark, using a summed-area
 /// table so the cost does not depend on the window size.
+///
+/// The table is `u32` with wrapping arithmetic: prefix sums of a large
+/// bright screen pass 2³² (5K: ~3.8e9 each, 8K: ~8.5e9), but every box sum
+/// is below 33² × 255, so sums taken modulo 2³² still give exact boxes. That
+/// keeps the table at 4 bytes per pixel instead of 8 for `u64`.
 fn invert_dark_backgrounds(luma: &mut [u8], w: usize, h: usize) {
-    let mut sum = vec![0u32; (w + 1) * (h + 1)];
+    let stride = w + 1;
+    let mut sum = vec![0u32; stride * (h + 1)];
     for y in 0..h {
         let mut row = 0u32;
         for x in 0..w {
-            row += luma[y * w + x] as u32;
-            sum[(y + 1) * (w + 1) + x + 1] = sum[y * (w + 1) + x + 1] + row;
+            row = row.wrapping_add(luma[y * w + x] as u32);
+            sum[(y + 1) * stride + x + 1] = sum[y * stride + x + 1].wrapping_add(row);
         }
     }
     let r = BACKGROUND_RADIUS;
-    let dark: Vec<bool> = (0..w * h)
-        .map(|i| {
-            let (x, y) = (i % w, i / w);
-            let (x0, y0) = (x.saturating_sub(r), y.saturating_sub(r));
-            let (x1, y1) = ((x + r + 1).min(w), (y + r + 1).min(h));
-            let total = sum[y1 * (w + 1) + x1] + sum[y0 * (w + 1) + x0]
-                - sum[y0 * (w + 1) + x1]
-                - sum[y1 * (w + 1) + x0];
-            total < 128 * ((x1 - x0) * (y1 - y0)) as u32
-        })
-        .collect();
-    for (l, dark) in luma.iter_mut().zip(dark) {
-        if dark {
-            *l = 255 - *l;
+    // The table holds the original values, so pixels can flip in place.
+    for y in 0..h {
+        let (y0, y1) = (y.saturating_sub(r), (y + r + 1).min(h));
+        for x in 0..w {
+            let (x0, x1) = (x.saturating_sub(r), (x + r + 1).min(w));
+            let total = sum[y1 * stride + x1]
+                .wrapping_sub(sum[y0 * stride + x1])
+                .wrapping_sub(sum[y1 * stride + x0])
+                .wrapping_add(sum[y0 * stride + x0]);
+            if total < 128 * ((x1 - x0) * (y1 - y0)) as u32 {
+                let l = &mut luma[y * w + x];
+                *l = 255 - *l;
+            }
         }
     }
 }
@@ -830,6 +835,31 @@ mod tests {
                 .iter()
                 .all(|&v| v > 200)
         );
+    }
+
+    #[test]
+    fn bright_5k_screens_keep_correct_polarity_where_prefix_sums_are_largest() {
+        // A white 5120x2880 page (prefix sums near 3.8e9, past what two of
+        // them added in u32 can hold) with a dark panel and a light text
+        // pixel in the far corner, where the sums are largest.
+        let (w, h) = (5120usize, 2880usize);
+        let mut img = Image::filled(w as u32, h as u32, [255, 255, 255, 255]);
+        for y in h - 100..h {
+            for x in w - 100..w {
+                let i = (y * w + x) * 4;
+                img.data[i..i + 3].copy_from_slice(&[20, 20, 20]);
+            }
+        }
+        let i = ((h - 50) * w + (w - 50)) * 4;
+        img.data[i..i + 3].copy_from_slice(&[230, 230, 230]);
+        let g = prepare(&img, img.bounds(), 1);
+        let at = |x: usize, y: usize| g.data[y * w + x];
+        assert!(
+            at(10, 10) > 200 && at(w - 200, h - 50) > 200,
+            "page stays light"
+        );
+        assert!(at(w - 10, h - 10) > 200, "dark panel inverted to light");
+        assert!(at(w - 50, h - 50) < 60, "its light text inverted to dark");
     }
 
     #[test]
