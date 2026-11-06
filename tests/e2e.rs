@@ -10,7 +10,7 @@ mod session;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use quickscope::raster::Image;
 use session::{OUTPUT_H, OUTPUT_W, Session, decode_png, pattern_pixel};
@@ -1034,18 +1034,29 @@ fn selection_overlay_covers_a_large_output_edge_to_edge() {
     s.start_daemon();
     let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
-    let grim = s.root().join("overlay.png");
-    assert!(s.command("grim").arg(&grim).status().unwrap().success());
-    let shot = decode_png(&grim);
-    assert_eq!((shot.width, shot.height), (2560, 1440));
     // Away from pointer guides and the bottom-centre hint: dimmed, not live.
-    for (x, y) in [(40, 1400), (2520, 40), (2520, 1400), (1280, 1380)] {
-        let (seen, live) = (shot.pixel(x, y), pattern_pixel(x, y));
-        let sum = |p: [u8; 4]| p[..3].iter().map(|&c| c as u32).sum::<u32>();
+    // The frozen frame reaches the screen a frame or two after the overlay
+    // starts taking input, so the check retries briefly.
+    let probes = [(40, 1400), (2520, 40), (2520, 1400), (1280, 1380)];
+    let sum = |p: [u8; 4]| p[..3].iter().map(|&c| c as u32).sum::<u32>();
+    let grim = s.root().join("overlay.png");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        assert!(s.command("grim").arg(&grim).status().unwrap().success());
+        let shot = decode_png(&grim);
+        assert_eq!((shot.width, shot.height), (2560, 1440));
+        let live: Vec<_> = probes
+            .iter()
+            .filter(|&&(x, y)| sum(shot.pixel(x, y)) >= sum(pattern_pixel(x, y)))
+            .collect();
+        if live.is_empty() {
+            break;
+        }
         assert!(
-            sum(seen) < sum(live),
-            "({x},{y}) not dimmed: {seen:?} vs live {live:?}"
+            Instant::now() < deadline,
+            "not dimmed at {live:?}: the overlay does not cover the output"
         );
+        std::thread::sleep(Duration::from_millis(50));
     }
     s.keys(&["escape"]);
     let out = s.finish(child, Duration::from_secs(15));
