@@ -185,8 +185,10 @@ impl Overlay {
         self.scale = frame.image_width as f32 / frame.logical.w.max(1) as f32;
         self.tiles = frame.tiles.clone();
         log::debug!(
-            "fullscreen selection mapped to {} ({})",
+            "fullscreen selection mapped to {} image-width={} viewport={} ({})",
             frame.name,
+            frame.image_width,
+            f32::from(window.viewport_size().width),
             frame.logical
         );
     }
@@ -206,6 +208,9 @@ impl Overlay {
     }
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fullscreen.is_some() && self.display.is_none() {
+            return;
+        }
         let (x, y) = self.global(ev.position, window);
         self.selection.update(cx, |s, cx| {
             s.press(x, y);
@@ -221,7 +226,7 @@ impl Overlay {
         match ev.keystroke.key.as_str() {
             "escape" | "q" => self.cancel(cx),
             // Enter takes the whole output under the keyboard focus.
-            "enter" => {
+            "enter" if self.fullscreen.is_none() || self.display.is_some() => {
                 let out = self.output;
                 self.selection.update(cx, |s, _| s.finish(Some(out)));
             }
@@ -246,6 +251,9 @@ impl Render for Overlay {
         let output = self.output;
         let tiles = self.tiles.clone();
         let image_width = self.image_width;
+        // A fullscreen surface can land on any output; never flash the first
+        // candidate's frozen frame before Wayland tells us where it mapped.
+        let ready = self.fullscreen.is_none() || self.display.is_some();
         let scale = self.scale;
         let highlight = self.selection.read(cx).highlight();
         if let Some(opened) = self.opened.take() {
@@ -306,7 +314,9 @@ impl Render for Overlay {
                             origin: bounds.origin,
                             zoom: f32::from(bounds.size.width) / image_width.max(1) as f32,
                         };
-                        paint_tiles(window, &tiles, xf, bounds);
+                        if ready {
+                            paint_tiles(window, &tiles, xf, bounds);
+                        }
                         paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
 
                         let sel = selection.clone();

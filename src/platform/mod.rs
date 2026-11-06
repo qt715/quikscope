@@ -20,10 +20,10 @@ use crate::raster::Image;
 pub mod freedesktop;
 #[cfg(target_os = "linux")]
 pub mod hyprland;
-#[cfg(windows)]
-pub mod windows;
 #[cfg(target_os = "linux")]
 pub mod portal;
+#[cfg(windows)]
+pub mod windows;
 #[cfg(target_os = "linux")]
 pub mod wlroots;
 #[cfg(target_os = "linux")]

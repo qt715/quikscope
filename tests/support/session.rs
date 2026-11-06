@@ -454,6 +454,10 @@ impl Session {
     /// Under load the surface can map well after it is created, so the
     /// pointer is nudged until the overlay reports motion.
     pub fn wait_overlay(&self, n: usize) {
+        self.wait_overlay_at(n, 1, 1);
+    }
+
+    pub fn wait_overlay_at(&self, n: usize, x: i32, y: i32) {
         self.wait_log_count("selection overlays opened", n, Duration::from_secs(10));
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut nudge = 1;
@@ -464,7 +468,7 @@ impl Session {
                 self.daemon_log()
             );
             nudge = 3 - nudge;
-            self.helper(&["move", &nudge.to_string(), "1"]);
+            self.helper(&["move", &(x + nudge - 1).to_string(), &y.to_string()]);
             std::thread::sleep(Duration::from_millis(30));
         }
     }

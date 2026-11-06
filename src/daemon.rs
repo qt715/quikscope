@@ -432,13 +432,15 @@ async fn select_region(
         if platform.surfaces == platform::Surfaces::Fullscreen {
             let frames: Vec<_> = outputs
                 .into_iter()
-                .map(|(name, logical, image_width, tiles)| ui::overlay::FullscreenFrame {
-                    display: platform::display_for(&name, logical, cx),
-                    name,
-                    logical,
-                    image_width,
-                    tiles,
-                })
+                .map(
+                    |(name, logical, image_width, tiles)| ui::overlay::FullscreenFrame {
+                        display: platform::display_for(&name, logical, cx),
+                        name,
+                        logical,
+                        image_width,
+                        tiles,
+                    },
+                )
                 .collect();
             let first = &frames[0];
             return cx

@@ -908,7 +908,6 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
         "--no-notify",
         "--no-clipboard",
     ]);
-    s.wait_overlay(1);
     s.wait_log("fullscreen selection mapped to", Duration::from_secs(10));
     let log = s.daemon_log();
     let mapped = log
@@ -923,31 +922,51 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
         0
     };
     eprintln!("actual fullscreen placement: {mapped}");
+    let logical: quickscope::geom::IRect = mapped
+        .rsplit_once('(')
+        .unwrap()
+        .1
+        .trim_end_matches(')')
+        .parse()
+        .unwrap();
+    s.wait_overlay_at(1, logical.x + 1, logical.y + 1);
     for (i, name) in ["HEADLESS-1", "HEADLESS-2"].into_iter().enumerate() {
         let path = s.root().join(format!("overlay-{name}.png"));
-        assert!(
-            s.command("grim")
-                .args(["-o", name])
-                .arg(&path)
-                .status()
-                .unwrap()
-                .success()
-        );
-        let visible = decode_png(&path);
-        if i != selected {
-            assert_eq!(visible, references[i], "only one output has an overlay");
-        } else {
-            for (x, y) in [(150, 200), (350, 450), (500, 300)] {
-                let before = references[i].pixel(x, y);
-                let after = visible.pixel(x, y);
-                for channel in 0..3 {
-                    let expected = before[channel] as f32 * (143. / 255.);
-                    assert!(
-                        (after[channel] as f32 - expected).abs() <= 2.,
-                        "frozen output pixel {x},{y}: {before:?} -> {after:?}"
-                    );
-                }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                s.command("grim")
+                    .args(["-o", name])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let visible = decode_png(&path);
+            let matches = if i != selected {
+                visible == references[i]
+            } else {
+                [(150, 200), (350, 450), (500, 300)]
+                    .into_iter()
+                    .all(|(x, y)| {
+                        let before = references[i].pixel(x, y);
+                        let after = visible.pixel(x, y);
+                        (0..3).all(|channel| {
+                            (after[channel] as f32 - before[channel] as f32 * (143. / 255.)).abs()
+                                <= 2.
+                        })
+                    })
+            };
+            if matches {
+                break;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "output {name} never presented its expected frozen frame: pixel {:?}, reference {:?}",
+                visible.pixel(350, 450),
+                references[i].pixel(350, 450)
+            );
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
     s.keys(&["enter"]);
