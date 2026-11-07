@@ -27,6 +27,12 @@ what to install.
 
 Models are found in `$TESSDATA_PREFIX`, `/usr/share/tessdata` (Arch) or
 `/usr/share/tesseract-ocr/{5,4.00}/tessdata` (Debian/Ubuntu).
+On Windows, models are also found in `%ProgramFiles%\Tesseract-OCR\tessdata`
+or `tessdata` beside `quikscope.exe`. `TESSDATA_PREFIX` takes priority (the
+directory itself or its parent). Install the DLL beside the executable, in
+`%ProgramFiles%\Tesseract-OCR`, or in an absolute directory on `PATH`.
+The loader excludes the current directory and relative PATH entries.
+Windows OCR has not yet been verified natively.
 
 ## How it reads
 

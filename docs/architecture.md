@@ -73,6 +73,9 @@ There is no X11 GPU prewarm window because it could flash on the desktop.
 
 ### Screenshot portal
 
+This integration is experimental: automated checks use a simulated portal in
+headless labwc, not a real GNOME or KDE desktop.
+
 On Wayland, native screencopy is attempted first; if it is unavailable, use
 the Screenshot portal. `QUIKSCOPE_BACKEND=portal|wlroots` forces the choice.
 Both the session-bus connection and a separate Wayland output-layout
@@ -145,6 +148,9 @@ Windows monitor placement maps physical bounds to GPUI DIPs; the shared overlay
 viewport mapping converts pointer positions and selection highlights between
 physical pixels and surface DIPs for both X11 and Windows.
 Thus cross-monitor crops and DWM window bounds retain native pixels.
+This coordinate mapping is implemented but has not yet been verified with
+multiple monitors or mixed DPI on a native Windows desktop.
+
 
 All DXGI COM/GDI resources stay on one capture thread. Duplication, device,
 staging texture, DC and DIB allocations survive requests; timeout reuses a
@@ -218,7 +224,8 @@ Closing a GPUI window alone is not a compositor teardown barrier:
   them it logs the limitation and falls back to the existing frozen path.
 - Windows synchronously hides the overlay HWNDs (GPUI defers native window
   destruction), then uses `DwmFlush` before capture.
-  This path compiles but has not been verified on a native Windows desktop.
+  Frozen and live selection were verified natively on one Windows 11 monitor
+  at 96 DPI; Windows 10, mixed DPI and multiple monitors remain unverified.
 
 Portal live captures ask permission only after selection and teardown, so the
 overlays cannot intercept the permission dialog's keyboard input. Without

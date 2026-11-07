@@ -3,8 +3,10 @@
 # quikscope
 
 A fast screenshot tool for Linux (wlroots compositors such as Hyprland and
-sway, GNOME, KDE Plasma, X11) and Windows 10/11, with a built-in annotation
-editor written in [GPUI](https://gpui.rs).
+sway, X11, and experimental GNOME/KDE portal support) and Windows, with a
+built-in annotation editor written in [GPUI](https://gpui.rs).
+
+![Region selection with a frozen-screen overlay](docs/images/region-selection.png)
 
 ```text
 keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
@@ -17,15 +19,15 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
 ```
 
 - **Fast.** A resident daemon keeps the display connection, capture buffers
-  and GPU device warm. A 2560×1440 capture reaches the clipboard in ~15 ms
-  end to end, and the editor paints its first frame ~5 ms after it is created
+  and GPU device warm. A 2560×1440 capture completes in ~15 ms; clipboard PNG
+  encoding finishes ~22 ms later. The editor paints its first frame ~5 ms after creation
   (see [Performance](#performance)).
-- **Native on each desktop.** `wlr-screencopy` on wlroots compositors, the
-  Screenshot portal on GNOME and KDE Plasma, MIT-SHM on X11, DXGI on Windows;
+- **Desktop-specific backends.** `wlr-screencopy` on wlroots compositors, the
+  experimental Screenshot portal on GNOME/KDE, MIT-SHM on X11, DXGI on Windows;
   the backend is picked at start-up ([details](#desktops)).
-- **Frozen or live region selection** on every output at once (frozen by
-  default), with window snapping on Hyprland, X11 and Windows (click a window
-  to take exactly that window). Live selection dims outside the rectangle and
+- **Frozen or live region selection** (frozen by default), spanning outputs where
+  the backend permits, with window snapping on Hyprland, X11 and Windows (Windows snapping
+  is not yet verified natively). Live selection dims outside the rectangle and
   leaves a transparent hole; pixels are captured after selection closes.
 - **Excalidraw-style editor**: rectangle, ellipse, arrow, line, pen,
   highlighter, text, numbered steps, pixelate (redaction) and crop, with
@@ -61,6 +63,8 @@ writes your configuration; subsequent starts stay in the background.
 Run `quikscope settings` any time (also the editor's gear button or Windows
 tray **Settings…**). Changes save and apply to the running daemon immediately.
 
+![Capture and editor settings](docs/images/settings.png)
+
 Text extraction additionally needs Tesseract and a model per language,
 loaded at run time (nothing extra to build):
 
@@ -81,16 +85,16 @@ The daemon picks a backend at start-up and logs it (`platform backend: …`);
 | Desktop | Capture | Region overlay | Window snapping, `window` mode |
 | --- | --- | --- | --- |
 | Hyprland, sway, river, labwc, … | `wlr-screencopy` | layer-shell, all outputs | Hyprland only |
-| KDE Plasma | Screenshot portal | layer-shell, all outputs | no |
-| GNOME | Screenshot portal | one fullscreen window, one output | no |
+| KDE Plasma (experimental) | Screenshot portal | layer-shell, all outputs | no |
+| GNOME (experimental) | Screenshot portal | one fullscreen window, one output | no |
 | X11 | MIT-SHM (GetImage remotely) | override-redirect popups | EWMH window managers |
-| Windows 10/11 | DXGI duplication (GDI fallback) | topmost popups | yes |
+| Windows 10/11 | DXGI duplication (GDI fallback) | topmost popups | implemented, unverified |
 
 ### wlroots compositors
 
-Needs `wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`, which every
-wlroots compositor and Hyprland provide. Bind keys as shown for
-[Hyprland](#hyprland); on sway:
+Needs `wlr-screencopy`, `wlr-layer-shell` and `wlr-data-control`. Check your
+compositor's protocol support; automated coverage uses headless labwc and
+sway. Bind keys as shown for [Hyprland](#hyprland); on sway:
 
 ```ini
 bindsym Print exec quikscope capture region
@@ -131,6 +135,10 @@ layerrule = no_anim on, match:namespace ^(quikscope-selection)$
 instead of fading in.
 
 ### GNOME / KDE Plasma (portal)
+
+**Experimental:** portal integration has been tested only against a simulated
+Screenshot portal in private headless labwc sessions, not real GNOME or KDE.
+Permission dialogs, placement and clipboard bridging need real-desktop validation.
 
 Needs a session D-Bus, `xdg-desktop-portal` and the desktop's backend
 (`xdg-desktop-portal-gnome` or `xdg-desktop-portal-kde`), which those
@@ -204,7 +212,10 @@ bindsym Shift+Print exec --no-startup-id quikscope capture screen
 
 ### Windows 10/11
 
-Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Studio C++ Build Tools:
+Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Studio C++ Build Tools.
+Native verification used Windows 11 on one monitor at 96 DPI. Windows 10,
+multiple monitors, mixed DPI, window snapping and active-window capture are
+implemented but unverified. Frozen and live region selection were both verified.
 
 ```powershell
 cargo install --locked --path .
@@ -242,10 +253,13 @@ buffers when duplication is unavailable (including some virtual displays).
 `QUIKSCOPE_WINDOWS_CAPTURE=gdi` forces GDI for comparison. Coordinates passed
 to `--geometry` on Windows are **physical desktop pixels**, including negative
 monitor origins. The per-monitor-v2-aware overlay converts surface DIPs at its
-boundary, so mixed-DPI monitors retain their actual desktop layout and saved
-pixel resolution. Protected/secure desktops and protected video cannot be
-captured. Text extraction optionally needs Tesseract's `libtesseract-5.dll`
-(or `tesseract55.dll` / `libtesseract.dll`) on `PATH` and traineddata models.
+boundary; mixed-DPI and multi-monitor behavior still needs native verification.
+Protected/secure desktops and protected video cannot be captured.
+Text extraction optionally needs Tesseract's `libtesseract-5.dll` (or
+`tesseract55.dll` / `libtesseract.dll`) beside the executable, in
+`%ProgramFiles%\Tesseract-OCR`, or in an absolute directory on `PATH`.
+Models are found via `TESSDATA_PREFIX`, `%ProgramFiles%\Tesseract-OCR\tessdata`
+or `tessdata` beside the executable. Windows OCR is not yet verified natively.
 
 ## Usage
 
@@ -261,9 +275,9 @@ quikscope ping | quit
 
 | Mode | Captures |
 | --- | --- |
-| `region` | Freezes all outputs by default (`--no-freeze` selects over the live desktop); drag a rectangle, click a window (Hyprland or X11/EWMH) or click empty space for the whole output. Right click, `Esc` or `q` cancels; `Enter` takes the output under the keyboard focus. |
+| `region` | Freezes the screen by default (`--no-freeze` selects over the live desktop); drag a rectangle, click a window (Hyprland, X11/EWMH; Windows implemented but unverified) or click empty space for the whole output. GNOME portal selection is confined to one output. Right click, `Esc` or `q` cancels; `Enter` takes the output under the keyboard focus. |
 | `output` | The focused output on Hyprland or X11/EWMH, the first output elsewhere, or `-o NAME`. |
-| `window` | The active window (Hyprland or X11/EWMH). |
+| `window` | The active window (Hyprland, X11/EWMH or Windows; Windows unverified). |
 | `screen` | All outputs composed in their layout. |
 
 | Option | Effect |
@@ -296,6 +310,8 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quikscope notifications togg
 `--notify` / `--no-notify` still override the setting for a single capture.
 
 ## Editor
+
+![The editor with rectangle, arrow and text annotations](docs/images/editor.png)
 
 | Tool | Keys |
 | --- | --- |
@@ -362,7 +378,7 @@ appears in your CJK font and emoji in colour.
 ## Performance
 
 Measured in a headless labwc session at 2560×1440 (software GL, release
-build); a real GPU and a high-refresh compositor are faster still.
+build). Other GPUs, drivers and refresh rates have not been benchmarked.
 
 | Step | Time |
 | --- | --- |
@@ -391,7 +407,8 @@ test described in [docs/testing.md](docs/testing.md).
   Hyprland. GNOME confines region selection to one output (see
   [GNOME / KDE Plasma](#gnome--kde-plasma-portal)).
 - X11 capture supports 24/32-bit TrueColor; monitors have no independent scale.
-- Live selection on Windows compiles but has not been verified natively.
+- Windows frozen and live region selection were verified on one Windows 11
+  monitor; Windows 10, mixed DPI, multiple monitors and window snapping remain unverified.
 - macOS is not supported.
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.

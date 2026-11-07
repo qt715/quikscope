@@ -74,7 +74,8 @@ the selected rectangle and leaves the inside transparent. Portal permission
 dialogs appear after live selection closes. GNOME's fullscreen overlay is
 transparent only when its compositor permits it. On X11 without a compositor,
 an alpha visual or X Present, live requests fall back to frozen selection
-with a log message. Windows live selection compiles but is unverified natively.
+with a log message. Windows live selection was verified on one Windows 11
+monitor at 96 DPI; mixed-DPI and multi-monitor behavior remains unverified.
 
 ## Settings and first run
 

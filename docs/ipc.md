@@ -6,6 +6,16 @@ The daemon listens on `$XDG_RUNTIME_DIR/quikscope-$WAYLAND_DISPLAY.sock`
 socket at `%LOCALAPPDATA%\quikscope\ipc.sock`. `QUIKSCOPE_SOCKET`
 overrides the path for both sides. Each connection carries exactly one request line and one response line, UTF-8,
 `\n`-terminated.
+Requests are limited to 64 KiB including the line terminator. With no
+`XDG_RUNTIME_DIR`, Unix sockets use a `quikscope-<uid>` directory under the
+temporary directory, created with mode 0700; foreign-owned, symlinked or
+permissive pre-existing directories are refused.
+
+For `open`, exactly one space separates the command from the path; subsequent
+spaces, including trailing spaces, belong to the path. The line protocol cannot
+represent paths containing a newline or non-UTF-8 names. Rename such files before
+opening them. Same-user clients are trusted; the socket is not an authorization
+boundary against other processes running as your user.
 
 ```sh
 echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/quikscope-$WAYLAND_DISPLAY.sock

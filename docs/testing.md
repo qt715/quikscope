@@ -56,11 +56,11 @@ with `--locked`: library tests, CLI parsing, CPU golden-image regressions and
 optional OCR tests. Missing Tesseract/models skip OCR unless
 `QUIKSCOPE_REQUIRE_OCR=1`. `editor_render` and `editor_ui` are cfg-excluded:
 GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
-The Wayland-only `e2e` feature is not enabled by Windows CI.
+The Linux-only `e2e` feature is not enabled by Windows CI.
 
-Native verification on a Windows 11 virtual machine at 2560×1440 / 96 DPI passed release build, warning-denying Clippy
-and 161 tests (one interactive benchmark ignored). Screen capture matched a
-GDI reference visually, and the PowerShell STA clipboard bitmap matched the
+Native verification on a Windows 11 virtual machine at 2560×1440 / 96 DPI
+passed release build, warning-denying Clippy and automated tests.
+Screen capture matched a GDI reference visually, and the PowerShell STA clipboard bitmap matched the
 saved PNG exactly. A real 600×400 drag saved exactly 600×400 in frozen and live
 modes: repainting a red reference window blue during selection preserved red
 when frozen and captured clean blue when live. Escape cancelled both modes.
@@ -91,7 +91,7 @@ non-interactive service session or another user's live desktop. Check the tray,
 screen capture PNG against the real desktop, delayed image clipboard,
 region drag, Esc cancellation, PrintScreen, notification click to editor,
 and editor Ctrl+S to the Pictures known folder's `Screenshots` directory.
-Native verification is distinct from a Linux `cargo xwin check` pre-check.
+Native desktop verification is distinct from cross-compilation checks.
 
 For capture-method timings, run the ignored native test in that interactive
 session: `cargo test --release capture_latency -- --ignored --nocapture`.
@@ -168,7 +168,7 @@ before running the complete suite.
 ## End to end
 
 Each test builds a private desktop in a temporary directory and never
-touches the developer's session:
+touches the active graphical session:
 
 - a headless compositor (`WLR_BACKENDS=headless`, pixman renderer) with its
   own `XDG_RUNTIME_DIR`; labwc runs inside `bwrap` with a private `/tmp` and
@@ -250,10 +250,6 @@ choice, not GNOME's own Xwayland-to-Wayland bridge.
 This fake exercises transport and real compositor pixels, not GNOME/KDE's
 permission UI or their multi-monitor raster conventions. Real desktop
 portal behavior and animation timing need testing on those desktops.
-An isolated, extracted Mutter 51.1 was also started headless with a
-1280×720 virtual output and software rendering. This was only a compositor
-startup smoke: GNOME Shell and the GNOME/KDE portal backends were not
-installed, so real GNOME/KDE Screenshot requests were not exercised.
 
 On the private 1280×720 labwc desktop, five fake-portal screen captures
 (`--save --no-notify --no-clipboard`, optimized test build) took
