@@ -146,8 +146,17 @@ impl Lib {
         let mut last = None;
         #[cfg(windows)]
         let names = ["libtesseract-5.dll", "tesseract55.dll", "libtesseract.dll"];
-        #[cfg(not(windows))]
+        #[cfg(all(not(windows), not(target_os = "macos")))]
         let names = ["libtesseract.so.5", "libtesseract.so"];
+        #[cfg(target_os = "macos")]
+        let names = [
+            "libtesseract.5.dylib",
+            "libtesseract.dylib",
+            "/opt/homebrew/lib/libtesseract.5.dylib",
+            "/opt/homebrew/lib/libtesseract.dylib",
+            "/usr/local/lib/libtesseract.5.dylib",
+            "/usr/local/lib/libtesseract.dylib",
+        ];
         for name in names {
             // SAFETY: loading a shared library runs its initialisers;
             // libtesseract's are ordinary C++ static constructors.
@@ -156,9 +165,11 @@ impl Lib {
                 Err(e) => last = Some(e),
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(all(not(windows), not(target_os = "macos")))]
         let message = "text extraction needs Tesseract (libtesseract.so.5): install `tesseract` \
                        and a language pack such as `tesseract-data-eng`";
+        #[cfg(target_os = "macos")]
+        let message = "text extraction needs Tesseract: install with `brew install tesseract`";
         #[cfg(windows)]
         let message = "text extraction needs Tesseract (libtesseract-5.dll): install Tesseract \
                        and eng.traineddata, and add its DLL directory to PATH";

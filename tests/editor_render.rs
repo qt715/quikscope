@@ -75,8 +75,7 @@ fn render_editor(doc: Document, w: f32, h: f32) -> Rendered {
     }
 }
 
-#[test]
-fn editor_canvas_matches_the_exported_png() {
+pub(super) fn editor_canvas_matches_the_exported_png() {
     let doc = scene::document();
     let exported = quikscope::export::render(&doc.snapshot());
     let Rendered {
@@ -127,8 +126,7 @@ fn editor_canvas_matches_the_exported_png() {
     }
 }
 
-#[test]
-fn large_images_are_scaled_to_fit_the_window() {
+pub(super) fn large_images_are_scaled_to_fit_the_window() {
     let doc = Document::new(Arc::new(Image::filled(4000, 3000, [0, 0, 0, 255])), 1.0);
     let r = render_editor(doc, 800.0, 600.0);
     assert!(

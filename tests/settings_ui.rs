@@ -144,8 +144,7 @@ impl Ui {
     }
 }
 
-#[test]
-fn mouse_toggle_preserves_comment_and_applies_config() {
+pub(super) fn mouse_toggle_preserves_comment_and_applies_config() {
     let mut ui = Ui::new(
         Some("# keep this comment\nnotify = true # trailing\n"),
         false,
@@ -158,8 +157,7 @@ fn mouse_toggle_preserves_comment_and_applies_config() {
     assert!(!ui.applied.lock().unwrap().last().unwrap().notify);
 }
 
-#[test]
-fn invalid_field_renders_error_and_leaves_file_unchanged() {
+pub(super) fn invalid_field_renders_error_and_leaves_file_unchanged() {
     let original = "# untouched\n[editor]\nfont_size = 28\n";
     let mut ui = Ui::new(Some(original), false);
     ui.click("font-size");
@@ -198,8 +196,7 @@ fn invalid_field_renders_error_and_leaves_file_unchanged() {
     );
 }
 
-#[test]
-fn escape_discards_invalid_field_text_and_allows_close() {
+pub(super) fn escape_discards_invalid_field_text_and_allows_close() {
     let original = "# original\n[editor]\nfont_size = 28\n";
     let mut ui = Ui::new(Some(original), false);
     ui.click("font-size");
@@ -212,8 +209,7 @@ fn escape_discards_invalid_field_text_and_allows_close() {
     assert_eq!(std::fs::read_to_string(&ui.path).unwrap(), original);
 }
 
-#[test]
-fn invalid_existing_normal_config_shows_error_and_never_writes() {
+pub(super) fn invalid_existing_normal_config_shows_error_and_never_writes() {
     let original = "# typo\nnotifiy = true\n";
     let mut ui = Ui::new(Some(original), false);
     assert!(ui.error().unwrap().contains("notifiy"));
@@ -227,8 +223,7 @@ fn invalid_existing_normal_config_shows_error_and_never_writes() {
     assert_eq!(std::fs::read_to_string(&ui.path).unwrap(), original);
 }
 
-#[test]
-fn welcome_previews_without_file_then_done_commits_live_atomically() {
+pub(super) fn welcome_previews_without_file_then_done_commits_live_atomically() {
     let mut ui = Ui::new(None, true);
     ui.click("live");
     ui.click("notify");
@@ -240,8 +235,7 @@ fn welcome_previews_without_file_then_done_commits_live_atomically() {
     assert!(!saved.notify);
 }
 
-#[test]
-fn welcome_done_commits_frozen_choice_too() {
+pub(super) fn welcome_done_commits_frozen_choice_too() {
     let mut ui = Ui::new(None, true);
     ui.click("live");
     ui.click("freeze");
@@ -250,8 +244,7 @@ fn welcome_done_commits_frozen_choice_too() {
     assert!(ui.saved().freeze);
 }
 
-#[test]
-fn welcome_refuses_config_that_became_invalid_while_open() {
+pub(super) fn welcome_refuses_config_that_became_invalid_while_open() {
     let original = "# typo must be fixed by the user\nnotifiy = true\n";
     let mut ui = Ui::new(None, true);
     std::fs::write(&ui.path, original).unwrap();

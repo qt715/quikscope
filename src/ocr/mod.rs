@@ -65,6 +65,7 @@ pub fn tessdata_dir() -> Option<PathBuf> {
             "/usr/share/tessdata",
             "/usr/share/tesseract-ocr/5/tessdata",
             "/usr/share/tesseract-ocr/4.00/tessdata",
+            "/opt/homebrew/share/tessdata",
             "/usr/local/share/tessdata",
         ]
         .map(PathBuf::from),

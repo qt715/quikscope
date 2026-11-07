@@ -47,7 +47,7 @@ pub struct Settings {
     inputs: Vec<Input>,
     scroll: ScrollHandle,
     focus: FocusHandle,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     bindings: [String; 4],
 }
 
@@ -69,7 +69,7 @@ impl Settings {
                 .unwrap_or(true)
         });
         let mut this = Self {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             bindings: [
                 config.hotkeys.region.clone(),
                 config.hotkeys.screen.clone(),
@@ -453,7 +453,7 @@ impl Settings {
             )
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn shortcut(
         &self,
         index: usize,
@@ -607,15 +607,18 @@ impl Render for Settings {
                     "OCR languages: install Tesseract and language data to enable text extraction.",
                 ));
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 body = body.child(div().child("Global shortcuts (click to enable/disable)"));
-                body = body.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme::muted())
-                        .child(crate::platform::windows::PRINT_SCREEN_NOTICE),
-                );
+                #[cfg(windows)]
+                {
+                    body = body.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(crate::platform::windows::PRINT_SCREEN_NOTICE),
+                    );
+                }
                 for (index, key, label, binding) in [
                     (0, "region", "Region", &c.hotkeys.region),
                     (1, "screen", "Screen", &c.hotkeys.screen),

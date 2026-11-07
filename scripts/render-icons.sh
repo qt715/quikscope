@@ -8,6 +8,8 @@ for size in 16 24 32 48 64 128 256 512 1024; do
     if [ "$size" = 16 ]; then source=assets/branding/icon-symbolic.svg; fi
     resvg --width "$size" --height "$size" "$source" "assets/branding/png/${size}x${size}.png"
 done
+# Status-bar template: 18 logical points at Retina density.
+resvg --width 36 --height 36 assets/branding/icon-symbolic.svg assets/branding/status-template@2x.png
 magick assets/branding/png/16x16.png assets/branding/png/24x24.png \
     assets/branding/png/32x32.png assets/branding/png/48x48.png \
     assets/branding/png/64x64.png assets/branding/png/128x128.png \

@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -95,6 +96,102 @@ jobs:
         with:
           name: quikscope-x86_64-windows
           path: quikscope-x86_64-windows.zip
+
+  macos:
+    name: macOS dual-architecture build, ARM64 tests and capture smoke
+    # macos-14 is retired; macos-15 is the supported standard ARM64 image.
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.3"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+          target: x86_64-apple-darwin
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Require native ARM64 runner
+        run: test "$(uname -m)" = arm64
+      - name: Native OCR runtime
+        run: brew install tesseract
+      - name: Resolve bundled UI font through CoreText
+        run: |
+          xcrun swift - "$PWD/assets/fonts/InterVariable.ttf" <<'SWIFT'
+          import CoreText
+          import Foundation
+          let url = URL(fileURLWithPath: CommandLine.arguments[1]) as CFURL
+          guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url) as? [CTFontDescriptor],
+                let descriptor = descriptors.first,
+                let reported = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String else {
+              fatalError("CoreText could not read the bundled Inter font")
+          }
+          print("Bundled CoreText family: \(reported)")
+          precondition(reported == "Inter Variable", "CoreText family differs from UI_FONT")
+          precondition(CTFontManagerRegisterFontsForURL(url, .process, nil), "CoreText font registration failed")
+          let resolved = CTFontCreateWithName("Inter Variable" as CFString, 14, nil)
+          let family = CTFontCopyFamilyName(resolved) as String
+          print("CoreText resolves UI_FONT to: \(family)")
+          precondition(family == "Inter Variable", "UI_FONT resolved to a fallback font")
+          SWIFT
+      - run: cargo build --locked --release
+      - name: Compile Intel macOS release
+        run: cargo build --locked --release --target x86_64-apple-darwin
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Check native regression sensitivity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          mutations = [
+              ("src/platform/macos/desktop.rs", "bounds.origin.x.floor()", "bounds.origin.x.ceil()",
+               "desktop_bounds_preserve_negative_origins_and_outward_rounding"),
+              ("src/platform/macos/shell.rs", '"cmd" | "command" | "super" | "win" => 1 << 8,',
+               '"cmd" | "command" | "super" | "win" => 1 << 7,',
+               "macos_hotkeys_validate_modifiers_keys_and_collisions"),
+              ("src/platform/macos/capture.rs", "status == Some(SCFrameStatus::Complete.0)",
+               "status.is_some()", "only_complete_frames_are_accepted"),
+              ("src/fonts.rs", ".any(|(name, _)| name.starts_with('.'))",
+               ".any(|(_name, _)| false)", "family_list_starts_with_inter_and_has_no_duplicates"),
+          ]
+          for filename, before, after, test in mutations:
+              path = Path(filename)
+              original = path.read_text()
+              assert original.count(before) == 1, f"Mutation target changed: {filename}"
+              try:
+                  path.write_text(original.replace(before, after))
+                  result = subprocess.run(["cargo", "test", "--locked", "--lib", test],
+                                          text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                  print(result.stdout, flush=True)
+                  assert result.returncode != 0 and "test result: FAILED." in result.stdout, \
+                      f"{test} did not reject its behavioral mutation"
+              finally:
+                  path.write_text(original)
+          PY
+      # GPUI 0.3.10 supplies a Metal headless renderer on macOS, so retain
+      # GPU rendering tests rather than applying the Windows exclusions.
+      - run: cargo test --locked
+      - name: Require real English OCR
+        env:
+          QUIKSCOPE_REQUIRE_OCR: "1"
+        run: cargo test --locked --test ocr a_region_reads_only_what_it_covers_and_maps_back
+      - name: Assemble app
+        run: packaging/macos/assemble-app.sh target/release/quikscope dist/quikscope.app
+      - name: ScreenCaptureKit daemon smoke
+        run: packaging/macos/ci-smoke.sh "$GITHUB_WORKSPACE/dist/quikscope.app"
+      - name: Upload capture and diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quikscope-macos-arm64-smoke
+          path: ${{ runner.temp }}/quikscope-smoke
+          if-no-files-found: warn
+      - name: Archive app
+        run: ditto -c -k --sequesterRsrc --keepParent dist/quikscope.app dist/quikscope-arm64-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quikscope-arm64-macos
+          path: dist/quikscope-arm64-macos.zip
 
   msrv:
     name: Minimum supported Rust version

@@ -23,6 +23,8 @@ pub(crate) use selection::SelectionBarrier;
 pub mod freedesktop;
 #[cfg(target_os = "linux")]
 pub mod hyprland;
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(windows)]
@@ -121,6 +123,8 @@ pub enum Surfaces {
     X11,
     #[cfg(windows)]
     Windows,
+    #[cfg(target_os = "macos")]
+    MacOS,
     /// Fullscreen xdg-toplevel windows where layer-shell is unavailable.
     #[cfg(target_os = "linux")]
     Fullscreen,
@@ -140,6 +144,8 @@ pub struct Platform {
     pub capture_may_prompt: bool,
     #[cfg(windows)]
     pub(crate) shell: Option<Arc<windows::Shell>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) shell: Option<macos::shell::Shell>,
 }
 
 /// Connects the backends for the current session. Missing pieces are
@@ -241,6 +247,10 @@ pub fn connect(events: EventSink) -> Platform {
     {
         windows::connect(events)
     }
+    #[cfg(target_os = "macos")]
+    {
+        macos::connect(events)
+    }
 }
 
 impl Platform {
@@ -268,6 +278,8 @@ impl Platform {
             }
             #[cfg(windows)]
             Surfaces::Windows => Ok(windows::selection_outputs()?),
+            #[cfg(target_os = "macos")]
+            Surfaces::MacOS => macos::selection_outputs(),
         }
     }
 
@@ -283,7 +295,7 @@ impl Platform {
     /// compositor stretches the surface anyway, but GPUI sizes its first
     /// buffer from it, and its default would leave a centred window.
     // Windows has no layer-shell, so it never uses the arguments.
-    #[cfg_attr(windows, allow(unused_variables))]
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     pub fn early_overlay_options(
         &self,
         display: DisplayId,
@@ -395,6 +407,19 @@ impl Platform {
                     ..Default::default()
                 }
             }
+            #[cfg(target_os = "macos")]
+            Surfaces::MacOS => WindowOptions {
+                titlebar: None,
+                focus: true,
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id,
+                kind: WindowKind::PopUp,
+                is_movable: false,
+                is_resizable: false,
+                is_minimizable: false,
+                window_background: WindowBackgroundAppearance::Opaque,
+                ..Default::default()
+            },
         }
     }
 
@@ -430,6 +455,8 @@ impl Platform {
             }
             #[cfg(windows)]
             Surfaces::Windows => None,
+            #[cfg(target_os = "macos")]
+            Surfaces::MacOS => None,
         }
     }
 }
@@ -438,6 +465,14 @@ impl Platform {
 /// of the output name; elsewhere the display whose bounds start at the
 /// output's logical origin.
 pub(crate) fn display_for(name: &str, logical: IRect, cx: &App) -> Option<DisplayId> {
+    #[cfg(target_os = "macos")]
+    if let Ok(id) = name.parse::<u64>() {
+        return cx
+            .displays()
+            .iter()
+            .find(|d| d.id() == DisplayId::new(id))
+            .map(|d| d.id());
+    }
     let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes());
     let displays = cx.displays();
     displays

@@ -1,5 +1,7 @@
 //! Synchronize overlay destruction with the display server before a live capture.
-use anyhow::{Context as _, Result, bail};
+#[cfg(any(target_os = "linux", windows))]
+use anyhow::Context as _;
+use anyhow::{Result, bail};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 #[cfg(target_os = "linux")]
@@ -21,6 +23,8 @@ pub(crate) enum SelectionBarrier {
     },
     #[cfg(windows)]
     Windows(Vec<windows::Win32::Foundation::HWND>),
+    #[cfg(target_os = "macos")]
+    MacOS(Vec<RawWindowHandle>),
 }
 
 impl SelectionBarrier {
@@ -77,6 +81,10 @@ impl SelectionBarrier {
                     })
                     .collect();
                 Ok(Self::Windows(windows?))
+            }
+            #[cfg(target_os = "macos")]
+            RawDisplayHandle::AppKit(_) => {
+                Ok(Self::MacOS(handles.iter().map(|(w, _)| *w).collect()))
             }
             _ => bail!("this surface kind cannot synchronize transparent selection"),
         }
@@ -153,6 +161,8 @@ impl SelectionBarrier {
                 unsafe { windows::Win32::Graphics::Dwm::DwmFlush() }
                     .context("waiting for Windows overlay composition")?;
             }
+            #[cfg(target_os = "macos")]
+            Self::MacOS(handles) => super::macos::hide_overlays(&handles)?,
         }
         Ok(())
     }

@@ -186,8 +186,7 @@ fn text_font(doc: &Document) -> quikscope::fonts::FontSpec {
     }
 }
 
-#[test]
-fn input_method_composition_commits_into_the_text() {
+pub(super) fn input_method_composition_commits_into_the_text() {
     let mut ui = Ui::new(blank());
     // Without text being edited the editor is no text input, so an input
     // method leaves the single-key tool shortcuts alone.
@@ -232,8 +231,7 @@ fn input_method_composition_commits_into_the_text() {
     assert_eq!(ui.doc(|d| d.shapes().len()), 1, "one shape, one undo step");
 }
 
-#[test]
-fn formatting_shortcuts_apply_while_typing_and_to_selected_text() {
+pub(super) fn formatting_shortcuts_apply_while_typing_and_to_selected_text() {
     let mut ui = Ui::new(blank());
     ui.typ("t");
     let at = ui.screen(Pt::new(100.0, 100.0));
@@ -266,8 +264,7 @@ fn formatting_shortcuts_apply_while_typing_and_to_selected_text() {
     assert_eq!(ui.editor(|e, _| e.font.weight), 400);
 }
 
-#[test]
-fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
+pub(super) fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     let mut doc = blank();
     let rect = doc.make_shape(
         ShapeKind::Rect {
@@ -330,8 +327,7 @@ fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
 /// Regression: a key the input method lets through while it is composing
 /// (Backspace with a pre-edit showing) used to leave the field's marked range
 /// pointing past its shortened text, and the next render panicked slicing it.
-#[test]
-fn field_key_edits_end_ime_composition() {
+pub(super) fn field_key_edits_end_ime_composition() {
     use quikscope::ui::field::{Field, FieldKind};
 
     let text = gpui_platform::current_platform(true).text_system();
@@ -414,8 +410,7 @@ fn settled_zoom(ui: &mut Ui) -> f32 {
     ui.ime(|e, w, _| e.zoom() * w.scale_factor())
 }
 
-#[test]
-fn zoom_moves_in_tenths_below_actual_size_and_quarters_above() {
+pub(super) fn zoom_moves_in_tenths_below_actual_size_and_quarters_above() {
     // The headless window is 1000x700 logical at scale 2: 3000x2000 fits at
     // 61% of actual pixels, which snaps to the 60% level.
     let doc = Document::new(Arc::new(Image::filled(3000, 2000, [40, 40, 40, 255])), 1.0);
@@ -437,8 +432,7 @@ fn zoom_moves_in_tenths_below_actual_size_and_quarters_above() {
     assert_eq!(pct(settled_zoom(&mut ui)), 60);
 }
 
-#[test]
-fn drawing_past_the_edge_refits_the_view_to_the_contents() {
+pub(super) fn drawing_past_the_edge_refits_the_view_to_the_contents() {
     // Fits at actual pixels in the 1000x700 (scale 2) test window.
     let doc = Document::new(Arc::new(Image::filled(1600, 1000, [40, 40, 40, 255])), 1.0);
     let mut ui = Ui::new(doc);
@@ -465,8 +459,7 @@ fn drawing_past_the_edge_refits_the_view_to_the_contents() {
     assert!(left.x > px(0.) && right.x < px(1000.), "{left:?} {right:?}");
 }
 
-#[test]
-fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
+pub(super) fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
     let mut doc = blank();
     let label = doc.make_shape(
         ShapeKind::Text {
@@ -573,8 +566,7 @@ fn selection_bounds(ui: &mut Ui) -> Vec<quikscope::geom::RectF> {
     ui.doc(|d| d.shapes().iter().map(|s| s.bounds()).collect())
 }
 
-#[test]
-fn marquee_contains_bounds_and_shift_click_toggles() {
+pub(super) fn marquee_contains_bounds_and_shift_click_toggles() {
     let (mut ui, ids) = selection_scene();
     let a = ui.screen(Pt::new(80., 120.));
     let b = ui.screen(Pt::new(230., 210.));
@@ -606,8 +598,7 @@ fn marquee_contains_bounds_and_shift_click_toggles() {
     );
 }
 
-#[test]
-fn multi_move_and_nudge_each_record_one_undo_step() {
+pub(super) fn multi_move_and_nudge_each_record_one_undo_step() {
     let (mut ui, ids) = selection_scene();
     let before = selection_bounds(&mut ui);
     ui.ctrl("a", false);
@@ -643,8 +634,7 @@ fn multi_move_and_nudge_each_record_one_undo_step() {
     );
 }
 
-#[test]
-fn multi_style_and_delete_are_atomic() {
+pub(super) fn multi_style_and_delete_are_atomic() {
     let (mut ui, ids) = selection_scene();
     ui.ctrl("a", false);
     let before = selection_bounds(&mut ui);
@@ -661,8 +651,7 @@ fn multi_style_and_delete_are_atomic() {
     assert!(ui.doc(|d| d.shape(ids[2]).is_none()));
 }
 
-#[test]
-fn duplicate_selection_has_offset_new_ids_and_one_undo_step() {
+pub(super) fn duplicate_selection_has_offset_new_ids_and_one_undo_step() {
     let (mut ui, ids) = selection_scene();
     let before = selection_bounds(&mut ui);
     ui.ctrl("a", false);
@@ -688,8 +677,7 @@ fn duplicate_selection_has_offset_new_ids_and_one_undo_step() {
     assert!(ui.doc(|d| d.shape(ids[2]).is_none()));
 }
 
-#[test]
-fn selection_stacking_preserves_relative_order_and_undo() {
+pub(super) fn selection_stacking_preserves_relative_order_and_undo() {
     let (mut ui, ids) = selection_scene();
     let a = ui.screen(Pt::new(80., 120.));
     let b = ui.screen(Pt::new(280., 210.));
@@ -710,8 +698,7 @@ fn selection_stacking_preserves_relative_order_and_undo() {
     assert_eq!(ui.doc(|d| d.shapes().last().unwrap().id), ids[1]);
 }
 
-#[test]
-fn shortcut_help_toggles_and_escape_keeps_editor_open() {
+pub(super) fn shortcut_help_toggles_and_escape_keeps_editor_open() {
     let (mut ui, _) = selection_scene();
     ui.key(
         "/",
@@ -738,8 +725,7 @@ fn shortcut_help_toggles_and_escape_keeps_editor_open() {
     assert!(ui.editor(|e, _| e.text.is_some()));
 }
 
-#[test]
-fn shortcut_help_fits_small_windows_and_scrolls() {
+pub(super) fn shortcut_help_fits_small_windows_and_scrolls() {
     let mut ui = Ui::with_size(blank(), size(px(480.), px(320.)));
     ui.key("f1", None, Modifiers::default());
     let bounds = ui.editor(|e, _| e.help_scroll.bounds());
