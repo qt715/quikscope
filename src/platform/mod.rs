@@ -128,7 +128,7 @@ pub enum Surfaces {
 
 /// The backends for this session.
 pub struct Platform {
-    /// Short backend name for logs and `quickscope status`.
+    /// Short backend name for logs and `quikscope status`.
     pub name: &'static str,
     pub capture: Option<Arc<dyn Capture>>,
     pub desktop: Arc<dyn Desktop>,
@@ -152,7 +152,7 @@ pub fn connect(events: EventSink) -> Platform {
             .map(|n| Arc::new(n) as Arc<dyn Notifier>)
             .map_err(|e| log::warn!("notifications unavailable: {e:#}"))
             .ok();
-        let backend = std::env::var("QUICKSCOPE_BACKEND").ok();
+        let backend = std::env::var("QUIKSCOPE_BACKEND").ok();
         if backend.as_deref() == Some("x11")
             || (backend.is_none()
                 && std::env::var_os("WAYLAND_DISPLAY").is_none()
@@ -216,7 +216,7 @@ pub fn connect(events: EventSink) -> Platform {
                     .map_err(|e| log::warn!("Xwayland clipboard unavailable: {e:#}"))
                     .ok()
             });
-        let surfaces = if std::env::var("QUICKSCOPE_DEBUG_NO_LAYER_SHELL").as_deref() != Ok("1")
+        let surfaces = if std::env::var("QUIKSCOPE_DEBUG_NO_LAYER_SHELL").as_deref() != Ok("1")
             && portal::supports_layer_shell().unwrap_or(false)
         {
             Surfaces::LayerShell
@@ -304,10 +304,10 @@ impl Platform {
                         size,
                     })),
                     display_id: Some(display),
-                    app_id: Some("quickscope".into()),
+                    app_id: Some("quikscope".into()),
                     window_background: WindowBackgroundAppearance::Transparent,
                     kind: WindowKind::LayerShell(LayerShellOptions {
-                        namespace: "quickscope-selection".into(),
+                        namespace: "quikscope-selection".into(),
                         layer: Layer::Overlay,
                         anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
                         exclusive_zone: Some(px(-1.)),
@@ -339,7 +339,7 @@ impl Platform {
                 focus: true,
                 window_bounds: Some(WindowBounds::Fullscreen(bounds)),
                 display_id,
-                app_id: Some("quickscope".into()),
+                app_id: Some("quikscope".into()),
                 window_background: WindowBackgroundAppearance::Opaque,
                 ..Default::default()
             },
@@ -352,7 +352,7 @@ impl Platform {
                     ..bounds
                 })),
                 display_id,
-                app_id: Some("quickscope".into()),
+                app_id: Some("quikscope".into()),
                 window_background: WindowBackgroundAppearance::Opaque,
                 kind: WindowKind::PopUp,
                 ..Default::default()
@@ -365,10 +365,10 @@ impl Platform {
                     focus: true,
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     display_id,
-                    app_id: Some("quickscope".into()),
+                    app_id: Some("quikscope".into()),
                     window_background: WindowBackgroundAppearance::Opaque,
                     kind: WindowKind::LayerShell(LayerShellOptions {
-                        namespace: "quickscope-selection".into(),
+                        namespace: "quikscope-selection".into(),
                         layer: Layer::Overlay,
                         anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
                         exclusive_zone: Some(px(-1.)),
@@ -419,7 +419,7 @@ impl Platform {
                     })),
                     window_background: WindowBackgroundAppearance::Transparent,
                     kind: WindowKind::LayerShell(LayerShellOptions {
-                        namespace: "quickscope-prewarm".into(),
+                        namespace: "quikscope-prewarm".into(),
                         layer: Layer::Background,
                         anchor: Anchor::TOP | Anchor::LEFT,
                         keyboard_interactivity: KeyboardInteractivity::None,

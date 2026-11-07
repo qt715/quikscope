@@ -56,7 +56,7 @@ impl DataControl {
         let (wake_rx, wake_tx) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
         std::thread::Builder::new()
-            .name("quickscope-clipboard".into())
+            .name("quikscope-clipboard".into())
             .spawn(move || match Owner::connect() {
                 Ok(mut owner) => {
                     let _ = ready_tx.send(Ok(()));

@@ -4176,7 +4176,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "quickscope"
+name = "quikscope"
 version = "0.1.0"
 dependencies = [
  "anyhow",

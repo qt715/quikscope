@@ -5,7 +5,7 @@ use gpui::{
     AnyWindowHandle, AppContext as _, HeadlessAppContext, KeyDownEvent, Keystroke, Modifiers,
     MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, Point, WindowHandle, point, px, size,
 };
-use quickscope::{
+use quikscope::{
     config::Config,
     ui::{Assets, settings::Settings},
 };
@@ -42,7 +42,7 @@ impl Ui {
             Arc::new(Assets),
             gpui_platform::current_headless_renderer,
         );
-        cx.update(quickscope::ui::init);
+        cx.update(quikscope::ui::init);
         let p = path.clone();
         let window = cx
             .open_window(size(px(760.), px(1400.)), |window, cx| {

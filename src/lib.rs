@@ -1,4 +1,4 @@
-//! quickscope: a fast screenshot daemon with a GPUI annotation editor.
+//! quikscope: a fast screenshot daemon with a GPUI annotation editor.
 
 pub mod cache;
 pub mod capture;

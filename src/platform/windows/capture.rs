@@ -52,10 +52,10 @@ pub struct WindowsCapture {
 }
 impl WindowsCapture {
     pub fn new() -> Result<Self> {
-        let backend = match std::env::var("QUICKSCOPE_WINDOWS_CAPTURE").as_deref() {
+        let backend = match std::env::var("QUIKSCOPE_WINDOWS_CAPTURE").as_deref() {
             Ok("gdi") => CaptureBackend::Gdi,
             Ok("dxgi") | Err(std::env::VarError::NotPresent) => CaptureBackend::Dxgi,
-            _ => bail!("QUICKSCOPE_WINDOWS_CAPTURE must be dxgi or gdi"),
+            _ => bail!("QUIKSCOPE_WINDOWS_CAPTURE must be dxgi or gdi"),
         };
         Self::new_with_backend(backend)
     }

@@ -101,7 +101,7 @@ impl FakeScreenshot {
 impl Session {
     pub fn force_fullscreen(&mut self) {
         self.env
-            .push(("QUICKSCOPE_DEBUG_NO_LAYER_SHELL".into(), "1".into()));
+            .push(("QUIKSCOPE_DEBUG_NO_LAYER_SHELL".into(), "1".into()));
     }
     pub fn enable_portal(&mut self) -> Arc<AtomicU32> {
         self.enable_portal_with_dialog(false).0
@@ -128,8 +128,7 @@ impl Session {
         self.bus
             .request_name("org.freedesktop.portal.Desktop")
             .unwrap();
-        self.env
-            .push(("QUICKSCOPE_BACKEND".into(), "portal".into()));
+        self.env.push(("QUIKSCOPE_BACKEND".into(), "portal".into()));
         (response, dialog)
     }
 }

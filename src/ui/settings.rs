@@ -632,7 +632,7 @@ impl Render for Settings {
                 window.focus(&this.focus, cx);
             }))
             .child(div().flex_none().min_h(px(88.)).p_4().border_b_1().border_color(theme::panel_border())
-                .child(if self.welcome { "Welcome to quickscope" } else { "Settings" })
+                .child(if self.welcome { "Welcome to quikscope" } else { "Settings" })
                 .child(div().text_xs().text_color(theme::muted()).child(if self.welcome {
                     "Choose how to capture. Changes are saved when you finish or close this window."
                 } else { "Changes apply immediately. Text fields save on Enter, Tab or leaving the field." })))

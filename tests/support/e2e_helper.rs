@@ -2,19 +2,19 @@
 //! headless wlroots compositor:
 //!
 //! ```text
-//! quickscope-e2e-helper pattern [PHASE_FILE]         # resident wallpaper; repaint when phase file changes
-//! quickscope-e2e-helper drag X1 Y1 X2 Y2 [right]     # press, move, release (virtual pointer)
-//! quickscope-e2e-helper drag-hold X1 Y1 X2 Y2       # drag; print ready, release on stdin
-//! quickscope-e2e-helper click X Y [right]
-//! quickscope-e2e-helper move X Y
-//! quickscope-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
-//! quickscope-e2e-helper type TEXT                    # type ASCII text
-//! quickscope-e2e-helper ime                          # resident input method: steps on stdin, reports activation
-//! quickscope-e2e-helper dialog                       # permission-dialog stand-in: a toplevel; prints "accepted" on Enter
-//! quickscope-e2e-helper toplevels                    # print "app_id\ttitle" per window
-//! quickscope-e2e-helper close APP_ID               # request native close of exactly one toplevel
-//! quickscope-e2e-helper paste MIME                   # write the clipboard contents to stdout
-//! quickscope-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
+//! quikscope-e2e-helper pattern [PHASE_FILE]         # resident wallpaper; repaint when phase file changes
+//! quikscope-e2e-helper drag X1 Y1 X2 Y2 [right]     # press, move, release (virtual pointer)
+//! quikscope-e2e-helper drag-hold X1 Y1 X2 Y2       # drag; print ready, release on stdin
+//! quikscope-e2e-helper click X Y [right]
+//! quikscope-e2e-helper move X Y
+//! quikscope-e2e-helper key [ctrl+][shift+]NAME...   # press keys (virtual keyboard), e.g. `key r ctrl+s`
+//! quikscope-e2e-helper type TEXT                    # type ASCII text
+//! quikscope-e2e-helper ime                          # resident input method: steps on stdin, reports activation
+//! quikscope-e2e-helper dialog                       # permission-dialog stand-in: a toplevel; prints "accepted" on Enter
+//! quikscope-e2e-helper toplevels                    # print "app_id\ttitle" per window
+//! quikscope-e2e-helper close APP_ID               # request native close of exactly one toplevel
+//! quikscope-e2e-helper paste MIME                   # write the clipboard contents to stdout
+//! quikscope-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
 //! ```
 //!
 //! Coordinates are global logical pixels.
@@ -578,7 +578,7 @@ fn run_dialog(
     let surface = compositor.create_surface(&qh, ());
     let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
     let toplevel = xdg.get_toplevel(&qh, ());
-    toplevel.set_app_id("quickscope-e2e-dialog".into());
+    toplevel.set_app_id("quikscope-e2e-dialog".into());
     toplevel.set_title("Allow screenshot?".into());
     surface.commit();
     while !state.dialog_configured {
@@ -683,7 +683,7 @@ fn run_pattern(
             &surface,
             Some(o),
             zwlr_layer_shell_v1::Layer::Background,
-            "quickscope-e2e-pattern".into(),
+            "quikscope-e2e-pattern".into(),
             &qh,
             i,
         );

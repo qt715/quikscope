@@ -58,7 +58,7 @@ struct Daemon {
     next_id: u64,
     selecting: bool,
     /// Capture notifications; starts from the config, changed by
-    /// `quickscope notifications …` (which also persists it).
+    /// `quikscope notifications …` (which also persists it).
     notify: bool,
 }
 
@@ -69,7 +69,7 @@ pub fn bind(socket: &Path) -> Result<UnixListener> {
     if socket.exists() {
         if UnixStream::connect(socket).is_ok() {
             bail!(
-                "a quickscope daemon is already listening on {}",
+                "a quikscope daemon is already listening on {}",
                 socket.display()
             );
         }
@@ -242,7 +242,7 @@ fn prewarm_gpu(options: WindowOptions, cx: &mut App) {
 
 fn spawn_listener(listener: UnixListener, tx: mpsc::UnboundedSender<Msg>) {
     std::thread::Builder::new()
-        .name("quickscope-ipc".into())
+        .name("quikscope-ipc".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
@@ -1010,7 +1010,7 @@ fn preview(text: &str) -> String {
     out
 }
 
-/// `quickscope notifications on|off|toggle|status`. Changes are written to the
+/// `quikscope notifications on|off|toggle|status`. Changes are written to the
 /// config file first, so the daemon never reports a state that a restart
 /// would lose.
 async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<Response>> {
@@ -1106,16 +1106,16 @@ fn open_settings(welcome: bool, cx: &mut App) -> Result<()> {
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some(
                     if welcome {
-                        "Welcome to quickscope"
+                        "Welcome to quikscope"
                     } else {
-                        "quickscope — Settings"
+                        "quikscope — Settings"
                     }
                     .into(),
                 ),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::centered(bounds, cx)),
-            app_id: Some("quickscope-settings".into()),
+            app_id: Some("quikscope-settings".into()),
             focus: true,
             show: true,
             window_min_size: Some(size(px(360.), px(320.))),
@@ -1265,10 +1265,10 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
     );
     let title = match &shot.source {
         Some(p) => format!(
-            "quickscope — {}",
+            "quikscope — {}",
             p.file_name().unwrap_or_default().to_string_lossy()
         ),
-        None => format!("quickscope — {}×{}", shot.image.width, shot.image.height),
+        None => format!("quikscope — {}×{}", shot.image.width, shot.image.height),
     };
 
     let handle = cx.open_window(
@@ -1278,7 +1278,7 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::centered(size(px(w), px(h)), cx)),
-            app_id: Some("quickscope".into()),
+            app_id: Some("quikscope".into()),
             focus: true,
             show: true,
             window_min_size: Some(size(px(480.), px(320.))),

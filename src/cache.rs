@@ -26,7 +26,7 @@ impl LastCapture {
     pub fn spawn(path: PathBuf) -> LastCapture {
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
-            .name("quickscope-cache".into())
+            .name("quikscope-cache".into())
             .spawn(move || run(path, rx))
             .expect("spawning the cache writer");
         LastCapture { tx }

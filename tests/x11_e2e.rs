@@ -1,12 +1,12 @@
 //! Real daemon/client integration on a private Xvfb, never the caller's DISPLAY.
-//! Set QUICKSCOPE_E2E=1 to require Xvfb, or QUICKSCOPE_XVFB to its executable.
+//! Set QUIKSCOPE_E2E=1 to require Xvfb, or QUIKSCOPE_XVFB to its executable.
 
 use std::io::{BufRead as _, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use quickscope::raster::Image;
+use quikscope::raster::Image;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
@@ -50,20 +50,20 @@ impl Session {
     }
 
     fn start_size(size: &str) -> Option<Self> {
-        let xvfb = std::env::var("QUICKSCOPE_XVFB").unwrap_or_else(|_| "Xvfb".into());
+        let xvfb = std::env::var("QUIKSCOPE_XVFB").unwrap_or_else(|_| "Xvfb".into());
         if !PathBuf::from(&xvfb).is_file() && !executable(&xvfb) {
             assert!(
-                !std::env::var("QUICKSCOPE_E2E").is_ok_and(|v| v == "1"),
-                "QUICKSCOPE_E2E=1 but Xvfb is absent"
+                !std::env::var("QUIKSCOPE_E2E").is_ok_and(|v| v == "1"),
+                "QUIKSCOPE_E2E=1 but Xvfb is absent"
             );
-            eprintln!("skipping X11 e2e: install Xvfb or set QUICKSCOPE_XVFB");
+            eprintln!("skipping X11 e2e: install Xvfb or set QUIKSCOPE_XVFB");
             return None;
         }
         let dir = tempfile::Builder::new()
-            .prefix("quickscope-x11-e2e-")
+            .prefix("quikscope-x11-e2e-")
             .tempdir()
             .unwrap();
-        for sub in ["home", "config/quickscope", "cache", "data", "run", "shots"] {
+        for sub in ["home", "config/quikscope", "cache", "data", "run", "shots"] {
             std::fs::create_dir_all(dir.path().join(sub)).unwrap();
         }
         use std::os::unix::fs::PermissionsExt as _;
@@ -73,7 +73,7 @@ impl Session {
         )
         .unwrap();
         std::fs::write(
-            dir.path().join("config/quickscope/config.toml"),
+            dir.path().join("config/quikscope/config.toml"),
             format!(
                 "save_dir = {:?}\n",
                 dir.path().join("shots").to_str().unwrap()
@@ -135,7 +135,7 @@ impl Session {
     }
 
     fn command(&self) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_quickscope"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_quikscope"));
         for key in [
             "WAYLAND_DISPLAY",
             "WAYLAND_SOCKET",
@@ -156,10 +156,10 @@ impl Session {
         }
         cmd.env("DISPLAY", &self.display)
             .env(
-                "QUICKSCOPE_SOCKET",
-                self.dir.path().join("run/quickscope.sock"),
+                "QUIKSCOPE_SOCKET",
+                self.dir.path().join("run/quikscope.sock"),
             )
-            .env("QUICKSCOPE_BACKEND", "x11")
+            .env("QUIKSCOPE_BACKEND", "x11")
             .env("GPUI_X11_SCALE_FACTOR", self.scale.to_string())
             .env("XDG_SESSION_TYPE", "x11")
             .env(
@@ -187,7 +187,7 @@ impl Session {
                     std::fs::read_to_string(self.dir.path().join("daemon.log")).unwrap()
                 );
             }
-            self.dir.path().join("run/quickscope.sock").exists()
+            self.dir.path().join("run/quikscope.sock").exists()
         });
         assert!(self.run(&["ping"]).status.success());
     }
@@ -395,7 +395,7 @@ impl Session {
             .unwrap()
             .check()
             .unwrap();
-        let property = self.atom(b"QUICKSCOPE_TEST_PASTE");
+        let property = self.atom(b"QUIKSCOPE_TEST_PASTE");
         let png = self.atom(b"image/png");
         self.conn
             .convert_selection(window, self.atom(b"CLIPBOARD"), png, property, CURRENT_TIME)
@@ -625,7 +625,7 @@ fn capture_latency_2560x1440() {
         .args(["--exact", "capture_latency_worker", "--nocapture"])
         .env("DISPLAY", &s.display)
         .env_remove("XAUTHORITY")
-        .env("QUICKSCOPE_X11_LATENCY_WORKER", "1")
+        .env("QUIKSCOPE_X11_LATENCY_WORKER", "1")
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -634,10 +634,10 @@ fn capture_latency_2560x1440() {
 
 #[test]
 fn capture_latency_worker() {
-    if std::env::var("QUICKSCOPE_X11_LATENCY_WORKER").as_deref() != Ok("1") {
+    if std::env::var("QUIKSCOPE_X11_LATENCY_WORKER").as_deref() != Ok("1") {
         return;
     }
-    use quickscope::platform::{Capture as _, x11::ScreenCapture};
+    use quikscope::platform::{Capture as _, x11::ScreenCapture};
     let shm = ScreenCapture::spawn().unwrap();
     let plain = ScreenCapture::spawn_without_shm().unwrap();
     let reference = shm.capture(None, false).unwrap();
@@ -678,8 +678,8 @@ fn portal_uses_xwayland_clipboard_without_data_control() {
                 .get_envs()
                 .filter_map(|(key, value)| value.map(|value| (key, value))),
         )
-        .env("QUICKSCOPE_BACKEND", "portal")
-        .env("QUICKSCOPE_PORTAL_CLIPBOARD_WORKER", "1")
+        .env("QUIKSCOPE_BACKEND", "portal")
+        .env("QUIKSCOPE_PORTAL_CLIPBOARD_WORKER", "1")
         .env(
             "DBUS_SESSION_BUS_ADDRESS",
             format!("unix:path={}/absent-bus", s.dir.path().display()),
@@ -714,12 +714,12 @@ fn portal_uses_xwayland_clipboard_without_data_control() {
 
 #[test]
 fn portal_clipboard_worker() {
-    if std::env::var("QUICKSCOPE_PORTAL_CLIPBOARD_WORKER").as_deref() != Ok("1") {
+    if std::env::var("QUIKSCOPE_PORTAL_CLIPBOARD_WORKER").as_deref() != Ok("1") {
         return;
     }
     use std::io::Write as _;
     use std::sync::Arc;
-    let platform = quickscope::platform::connect(Arc::new(|_| {}));
+    let platform = quikscope::platform::connect(Arc::new(|_| {}));
     assert_eq!(platform.name, "portal");
     let clipboard = platform.clipboard.expect("Xwayland clipboard fallback");
     let _png = clipboard.set_image(Arc::new(Image::filled(128, 80, [13, 47, 193, 255])));

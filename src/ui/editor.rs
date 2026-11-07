@@ -37,7 +37,7 @@ pub struct EditorServices {
 
 impl Global for EditorServices {}
 
-/// The tool most recently chosen in any editor; `quickscope open-last` opens
+/// The tool most recently chosen in any editor; `quikscope open-last` opens
 /// with it so you can carry on where you left off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LastTool(pub Tool);

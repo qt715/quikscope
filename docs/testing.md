@@ -15,16 +15,16 @@
 ```sh
 cargo test                                    # everything but e2e
 cargo test --features e2e --test e2e          # e2e (skips without a compositor)
-QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
+QUIKSCOPE_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
 ```
 
 `cargo test --features e2e --test x11_e2e` starts its own Xvfb server and
 isolates HOME and XDG directories. It draws a known root pattern, compares
 screen and dragged-region captures pixel-for-pixel, reads PNGs through the
 real CLIPBOARD protocol (including INCR), and checks Escape/Enter keyboard
-input on override-redirect overlays at 2× UI scale. Set `QUICKSCOPE_XVFB` to
+input on override-redirect overlays at 2× UI scale. Set `QUIKSCOPE_XVFB` to
 an absolute Xvfb binary path when it is not installed in PATH;
-`QUICKSCOPE_E2E=1` makes its absence a failure. RandR multi-monitor composition
+`QUIKSCOPE_E2E=1` makes its absence a failure. RandR multi-monitor composition
 is checked when the server supports monitor creation. The
 `capture_latency_2560x1440` test compares SHM and plain GetImage pixels and
 prints warm-capture median/p95 timings with `-- --nocapture`.
@@ -35,7 +35,7 @@ teardown barrier. Those require a private composited X11 desktop.
 
 The text-shaping unit tests (Japanese, Arabic, Hebrew, Devanagari, emoji)
 need a font for each script, which they find among installed fonts; without
-one a test prints `skipped:` and passes. `QUICKSCOPE_REQUIRE_FONTS=1` (set in CI,
+one a test prints `skipped:` and passes. `QUIKSCOPE_REQUIRE_FONTS=1` (set in CI,
 which installs `fonts-noto-core`, `fonts-noto-cjk` and
 `fonts-noto-color-emoji`) turns a missing font into a failure.
 
@@ -44,7 +44,7 @@ lines in English, Japanese, Chinese, Korean, Arabic, Thai, Vietnamese and
 German, extracts them with the real Tesseract, and checks every line's text
 and the model that read it, region extraction and its coordinates, and
 `ocr.languages`. A missing Tesseract or language model skips the affected
-checks; `QUICKSCOPE_REQUIRE_OCR=1` (set in CI) makes it a failure. CI installs
+checks; `QUIKSCOPE_REQUIRE_OCR=1` (set in CI) makes it a failure. CI installs
 Debian's "fast" models without `chi_tra`, see
 [text extraction](text-extraction.md#limits).
 
@@ -54,7 +54,7 @@ Native gates are `cargo build --release`, `cargo clippy --all-targets -- -D
 warnings`, and `cargo test`. The `windows-latest` CI job runs those gates
 with `--locked`: library tests, CLI parsing, CPU golden-image regressions and
 optional OCR tests. Missing Tesseract/models skip OCR unless
-`QUICKSCOPE_REQUIRE_OCR=1`. `editor_render` and `editor_ui` are cfg-excluded:
+`QUIKSCOPE_REQUIRE_OCR=1`. `editor_render` and `editor_ui` are cfg-excluded:
 GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
 The Wayland-only `e2e` feature is not enabled by Windows CI.
 
@@ -69,7 +69,7 @@ This does not verify mixed-DPI or multiple-monitor operation.
 Notification activation opened the editor; a real rectangle drag and Ctrl+S
 saved the annotated 2560×1440 image into Pictures\\Screenshots. The tray
 Settings entry opened the native settings window. Physical PrintScreen
-opened quickscope's overlay after disabling Windows' competing keyboard
+opened quikscope's overlay after disabling Windows' competing keyboard
 setting and refreshing Explorer; the original absent registry override was
 restored afterward. Startup with the Windows 11 default emitted the warning
 and displayed its notification. See the [Windows setup note](../README.md#windows-1011).
@@ -108,11 +108,11 @@ numbers are asserted without running the benchmark on the target desktop.
 intentional rendering change:
 
 ```sh
-QUICKSCOPE_BLESS=1 cargo test --test render_regression
+QUIKSCOPE_BLESS=1 cargo test --test render_regression
 ```
 
 and review the changed PNGs in the diff. On failure the actual image is
-written to `$TMPDIR/quickscope-<name>-actual.png`.
+written to `$TMPDIR/quikscope-<name>-actual.png`.
 
 ## GPU/CPU parity
 
@@ -120,7 +120,7 @@ written to `$TMPDIR/quickscope-<name>-actual.png`.
 with the WGPU offscreen renderer, screenshots it, and compares the image area
 with the exporter's output for the same document. A 3-pixel offset in the
 editor's transform already fails it. On failure both images are written to
-`$TMPDIR/quickscope-parity-{gpu,cpu}.png`.
+`$TMPDIR/quikscope-parity-{gpu,cpu}.png`.
 
 ## Editor interaction
 
@@ -176,13 +176,13 @@ touches the developer's session:
 - a private D-Bus with no service directories and an in-process fake
   `org.freedesktop.Notifications` that records notifications and can emit
   clicks;
-- `quickscope-e2e-helper` (built with the `e2e` feature), which paints a known
+- `quikscope-e2e-helper` (built with the `e2e` feature), which paints a known
   test pattern as wallpaper, keeps a virtual keyboard attached, drives a
   virtual pointer and keyboard, lists toplevels, reads the clipboard through
   data-control, reconfigures outputs, and plays a resident input method
   (`zwp_input_method_v2`, the protocol fcitx5 and IBus use) that reports
   when the compositor activates it and sends pre-edit and commit strings;
-- the real `quickscope daemon` and `quickscope` client binaries.
+- the real `quikscope daemon` and `quikscope` client binaries.
 
 The suite covers: screen capture → notification, cache and clipboard
 (pixel-identical to `grim`); exact geometry crops; region drag, click,
@@ -213,21 +213,21 @@ Unit and CLI parsing tests cover the true config default, explicit boolean
 config values and invalid types, omitted per-request overrides, both freeze
 flags, last-flag-wins parsing and IPC serialization roundtrips.
 
-Set `QUICKSCOPE_E2E_KEEP=1` to keep a session's directory (compositor and daemon
-logs) after the test, and `QUICKSCOPE_E2E_COMPOSITOR=sway` to pick the
+Set `QUIKSCOPE_E2E_KEEP=1` to keep a session's directory (compositor and daemon
+logs) after the test, and `QUIKSCOPE_E2E_COMPOSITOR=sway` to pick the
 compositor.
 
 ### Portal fallback
 
-`QUICKSCOPE_E2E=1 cargo test --features e2e --test e2e portal_ -- --nocapture`
-runs the real daemon forced to `QUICKSCOPE_BACKEND=portal` in that same
+`QUIKSCOPE_E2E=1 cargo test --features e2e --test e2e portal_ -- --nocapture`
+runs the real daemon forced to `QUIKSCOPE_BACKEND=portal` in that same
 private labwc desktop. A fake Screenshot service on the private D-Bus
 captures real pixels with `grim`, writes a percent-escaped local file URI,
 and emits Response **before** returning the method reply (catching late
 subscription races). Tests compare screen pixels with grim; drag through
 fullscreen normal windows; check Esc, Enter and both denial response
 codes; and cross outputs through layer-shell overlays. A two-output test
-forces `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` with a rotated, distinct second
+forces `QUIKSCOPE_DEBUG_NO_LAYER_SHELL=1` with a rotated, distinct second
 output: only the landed-on output is overlaid, its visible dimmed pixels
 match that output's frozen frame, and Enter returns that exact output.
 Another test makes the fake portal ask first through a permission-dialog
@@ -237,10 +237,10 @@ The live portal case checks that no permission request occurs while selection
 is open, completes selection before answering the permission-dialog stand-in,
 then compares the final capture against the updated desktop pixels.
 Five screen captures print end-to-end latency samples. Missing grim skips
-unless `QUICKSCOPE_E2E=1`. Unit tests cover negative origins, fractional
+unless `QUIKSCOPE_E2E=1`. Unit tests cover negative origins, fractional
 scales, layout gaps, filters, incompatible raster dimensions and responses.
 
-`QUICKSCOPE_E2E=1 cargo test --features e2e --test x11_e2e portal_`
+`QUIKSCOPE_E2E=1 cargo test --features e2e --test x11_e2e portal_`
 exercises the clipboard fallback on a private Xvfb: a subprocess forced to
 portal mode has no Wayland/data-control connection but has DISPLAY, offers
 a PNG through the platform clipboard, and an independent X client reads
@@ -268,5 +268,5 @@ test suite with Mesa lavapipe, Noto fonts and Tesseract on Ubuntu, an MSRV
 check, the Wayland e2e suite in an Arch Linux container with labwc and
 Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, a Windows
 build with clippy and the non-GPU tests, and release builds for Linux
-(`quickscope-x86_64-linux.tar.gz`) and Windows (`quickscope-x86_64-windows.zip`)
+(`quikscope-x86_64-linux.tar.gz`) and Windows (`quikscope-x86_64-windows.zip`)
 that are attached to `v*` tags.

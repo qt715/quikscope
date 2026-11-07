@@ -2,7 +2,7 @@
 //!
 //! Each test gets a private compositor, D-Bus and daemon (see
 //! `support/session.rs`). They are skipped when no headless compositor is
-//! installed unless `QUICKSCOPE_E2E=1`, which CI sets.
+//! installed unless `QUIKSCOPE_E2E=1`, which CI sets.
 
 #[path = "support/session.rs"]
 mod session;
@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use quickscope::raster::Image;
+use quikscope::raster::Image;
 use session::{OUTPUT_H, OUTPUT_W, Session, decode_png, pattern_pixel};
 
 fn stdout(out: &std::process::Output) -> String {
@@ -62,7 +62,7 @@ fn settings_closed(s: &Session) {
     while s
         .toplevels()
         .iter()
-        .any(|t| t.starts_with("quickscope-settings\t"))
+        .any(|t| t.starts_with("quikscope-settings\t"))
     {
         assert!(Instant::now() < deadline, "settings window did not close");
         std::thread::sleep(Duration::from_millis(30));
@@ -74,25 +74,25 @@ fn settings_command_opens_and_refocuses_one_window() {
     let Some(mut s) = live_session() else { return };
     let artifacts = s.live_artifacts("settings");
     s.start_daemon();
-    assert!(s.quickscope(&["settings"]).status.success());
-    s.wait_for_window("quickscope-settings");
+    assert!(s.quikscope(&["settings"]).status.success());
+    s.wait_for_window("quikscope-settings");
     settings_visual(&s, &artifacts.join("settings.png"));
-    assert!(s.quickscope(&["settings"]).status.success());
+    assert!(s.quikscope(&["settings"]).status.success());
     assert_eq!(
         s.toplevels()
             .iter()
-            .filter(|t| t.starts_with("quickscope-settings\t"))
+            .filter(|t| t.starts_with("quikscope-settings\t"))
             .count(),
         1,
         "all settings requests must focus the existing window"
     );
-    assert!(s.quickscope(&["notifications", "off"]).status.success());
+    assert!(s.quikscope(&["notifications", "off"]).status.success());
     // External changes must refresh the open view: clicking the now-off card
     // turns notifications ON, rather than toggling stale local state to off.
     s.helper(&["click", "640", "350"]);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if stdout(&s.quickscope(&["notifications", "status"])) == "notifications on" {
+        if stdout(&s.quikscope(&["notifications", "status"])) == "notifications on" {
             break;
         }
         assert!(
@@ -101,10 +101,10 @@ fn settings_command_opens_and_refocuses_one_window() {
         );
         std::thread::sleep(Duration::from_millis(30));
     }
-    s.helper(&["close", "quickscope-settings"]);
+    s.helper(&["close", "quikscope-settings"]);
     settings_closed(&s);
-    assert!(s.quickscope(&["settings"]).status.success());
-    s.wait_for_window("quickscope-settings");
+    assert!(s.quikscope(&["settings"]).status.success());
+    s.wait_for_window("quikscope-settings");
     settings_visual(&s, &artifacts.join("reopened.png"));
     s.helper(&["scroll", "640", "400", "1000"]);
     settings_visual(&s, &artifacts.join("settings-advanced.png"));
@@ -116,8 +116,8 @@ fn settings_text_saves_on_focus_loss_and_native_close() {
         let Some(mut s) = live_session() else { return };
         let artifacts = s.live_artifacts(&format!("settings-fields-{finish}"));
         s.start_daemon();
-        assert!(s.quickscope(&["settings"]).status.success());
-        s.wait_for_window("quickscope-settings");
+        assert!(s.quikscope(&["settings"]).status.success());
+        s.wait_for_window("quikscope-settings");
         settings_visual(&s, &artifacts.join("before-scroll.png"));
         s.helper(&["scroll", "640", "400", "100"]);
         settings_visual(&s, &artifacts.join("fields.png"));
@@ -125,7 +125,7 @@ fn settings_text_saves_on_focus_loss_and_native_close() {
             // A repaired/hand-edited file is read on the next UI save. Its
             // other values must refresh clean fields, not only toggle cards.
             let before = decode_png(&artifacts.join("fields.png"));
-            let path = s.root().join("config/quickscope/config.toml");
+            let path = s.root().join("config/quikscope/config.toml");
             std::fs::write(&path, "save_dir = '/tmp/repaired-settings-save'\n").unwrap();
             s.helper(&["click", "640", "164"]);
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -143,7 +143,7 @@ fn settings_text_saves_on_focus_loss_and_native_close() {
                     .flat_map(|y| (280..990).map(move |x| (x, y)))
                     .filter(|&(x, y)| before.pixel(x, y) != after.pixel(x, y))
                     .count();
-                if quickscope::config::Config::parse(&std::fs::read_to_string(&path).unwrap())
+                if quikscope::config::Config::parse(&std::fs::read_to_string(&path).unwrap())
                     .unwrap()
                     .cursor
                     && changed > 30
@@ -160,9 +160,9 @@ fn settings_text_saves_on_focus_loss_and_native_close() {
         s.helper(&["click", "640", "417"]);
         s.type_text("changed.png");
         settings_visual(&s, &artifacts.join("pending-field.png"));
-        let config_path = s.root().join("config/quickscope/config.toml");
+        let config_path = s.root().join("config/quikscope/config.toml");
         let read = || {
-            quickscope::config::Config::parse(&std::fs::read_to_string(&config_path).unwrap())
+            quikscope::config::Config::parse(&std::fs::read_to_string(&config_path).unwrap())
                 .unwrap()
         };
         assert_ne!(
@@ -178,7 +178,7 @@ fn settings_text_saves_on_focus_loss_and_native_close() {
                 std::thread::sleep(Duration::from_millis(30));
             }
         }
-        s.helper(&["close", "quickscope-settings"]);
+        s.helper(&["close", "quikscope-settings"]);
         settings_closed(&s);
         assert_eq!(
             read().filename,
@@ -193,24 +193,24 @@ fn settings_live_apply_changes_the_next_capture_without_restart() {
     let Some(mut s) = live_session() else { return };
     let artifacts = s.live_artifacts("settings-live-apply");
     s.start_daemon();
-    assert!(s.quickscope(&["settings"]).status.success());
-    s.wait_for_window("quickscope-settings");
+    assert!(s.quikscope(&["settings"]).status.success());
+    s.wait_for_window("quikscope-settings");
     settings_visual(&s, &artifacts.join("settings.png"));
     // The centered 760x660 form's second card chooses live selection.
     s.helper(&["click", "640", "230"]);
-    let path = s.root().join("config/quickscope/config.toml");
+    let path = s.root().join("config/quikscope/config.toml");
     let deadline = Instant::now() + Duration::from_secs(5);
-    while quickscope::config::Config::parse(&std::fs::read_to_string(&path).unwrap())
+    while quikscope::config::Config::parse(&std::fs::read_to_string(&path).unwrap())
         .unwrap()
         .freeze
     {
         assert!(Instant::now() < deadline, "live choice did not save");
         std::thread::sleep(Duration::from_millis(30));
     }
-    s.helper(&["close", "quickscope-settings"]);
+    s.helper(&["close", "quikscope-settings"]);
     settings_closed(&s);
     s.repaint_pattern(0);
-    let capture = s.spawn_quickscope(&[
+    let capture = s.spawn_quikscope(&[
         "capture",
         "region",
         "--save",
@@ -230,14 +230,14 @@ fn welcome_done_and_native_close_persist_the_chosen_mode_once() {
     for finish in ["done", "native-close"] {
         let Some(mut s) = live_session() else { return };
         let artifacts = s.live_artifacts(&format!("welcome-{finish}"));
-        let config_path = s.root().join("config/quickscope/config.toml");
+        let config_path = s.root().join("config/quikscope/config.toml");
         std::fs::remove_file(&config_path).unwrap();
         s.start_daemon();
-        s.wait_for_window("quickscope-settings");
+        s.wait_for_window("quikscope-settings");
         assert!(
             s.toplevels()
                 .iter()
-                .any(|t| t.contains("Welcome to quickscope"))
+                .any(|t| t.contains("Welcome to quikscope"))
         );
         settings_visual(&s, &artifacts.join("welcome.png"));
         assert!(!config_path.exists(), "opening welcome is not completion");
@@ -251,11 +251,11 @@ fn welcome_done_and_native_close_persist_the_chosen_mode_once() {
         if finish == "done" {
             s.helper(&["click", "640", "610"]);
         } else {
-            s.helper(&["close", "quickscope-settings"]);
+            s.helper(&["close", "quikscope-settings"]);
         }
         settings_closed(&s);
         let config =
-            quickscope::config::Config::parse(&std::fs::read_to_string(&config_path).unwrap())
+            quikscope::config::Config::parse(&std::fs::read_to_string(&config_path).unwrap())
                 .unwrap();
         assert!(!config.freeze, "{finish} lost the live choice");
         s.stop_daemon();
@@ -266,7 +266,7 @@ fn welcome_done_and_native_close_persist_the_chosen_mode_once() {
         assert!(
             !s.toplevels()
                 .iter()
-                .any(|t| t.starts_with("quickscope-settings\t")),
+                .any(|t| t.starts_with("quikscope-settings\t")),
             "completed onboarding must not reappear"
         );
     }
@@ -276,13 +276,13 @@ fn welcome_done_and_native_close_persist_the_chosen_mode_once() {
 fn settings_reports_invalid_existing_config_without_overwriting_it() {
     let Some(mut s) = live_session() else { return };
     let artifacts = s.live_artifacts("settings-invalid");
-    let path = s.root().join("config/quickscope/config.toml");
+    let path = s.root().join("config/quikscope/config.toml");
     let invalid = "# repair this typo\nfreze = false\n";
     std::fs::write(&path, invalid).unwrap();
     s.start_daemon();
     assert!(s.daemon_log().contains("configuration could not be loaded"));
-    assert!(s.quickscope(&["settings"]).status.success());
-    s.wait_for_window("quickscope-settings");
+    assert!(s.quikscope(&["settings"]).status.success());
+    s.wait_for_window("quikscope-settings");
     settings_visual(&s, &artifacts.join("invalid-config.png"));
     let before = decode_png(&artifacts.join("invalid-config.png"));
     s.helper(&["click", "640", "230"]);
@@ -312,7 +312,7 @@ fn settings_reports_invalid_existing_config_without_overwriting_it() {
         std::thread::sleep(Duration::from_millis(30));
     }
     assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
-    s.helper(&["close", "quickscope-settings"]);
+    s.helper(&["close", "quikscope-settings"]);
     settings_closed(&s);
 }
 
@@ -340,7 +340,7 @@ fn live_session() -> Option<Session> {
     let s = Session::start()?;
     if !s.has("grim") {
         assert_ne!(
-            std::env::var("QUICKSCOPE_E2E").as_deref(),
+            std::env::var("QUIKSCOPE_E2E").as_deref(),
             Ok("1"),
             "grim required for live selection e2e"
         );
@@ -357,7 +357,7 @@ fn region_live_repaints_beneath_dimming_and_clear_hole_but_frozen_keeps_old_pixe
     s.start_daemon();
     for (i, flag, phase) in [(1, "--freeze", 0), (2, "--no-freeze", 1)] {
         s.repaint_pattern(0);
-        let child = s.spawn_quickscope(&[
+        let child = s.spawn_quikscope(&[
             "capture",
             "region",
             flag,
@@ -413,7 +413,7 @@ fn region_live_repaints_beneath_dimming_and_clear_hole_but_frozen_keeps_old_pixe
 fn region_config_live_and_freeze_override_capture_exact_pixels() {
     let Some(mut s) = live_session() else { return };
     let artifacts = s.live_artifacts("config");
-    let config = s.root().join("config/quickscope/config.toml");
+    let config = s.root().join("config/quikscope/config.toml");
     let mut contents = std::fs::read_to_string(&config).unwrap();
     contents.push_str("freeze = false\n");
     std::fs::write(config, contents).unwrap();
@@ -430,7 +430,7 @@ fn region_config_live_and_freeze_override_capture_exact_pixels() {
         if let Some(flag) = flag {
             args.push(flag);
         }
-        let child = s.spawn_quickscope(&args);
+        let child = s.spawn_quikscope(&args);
         s.wait_overlay(i);
         s.repaint_pattern(1);
         s.helper(&["drag", "100", "100", "420", "330"]);
@@ -449,7 +449,7 @@ fn region_live_composes_changed_pixels_across_outputs() {
     };
     let artifacts = s.live_artifacts("multi-output");
     s.start_daemon();
-    let child = s.spawn_quickscope(&[
+    let child = s.spawn_quikscope(&[
         "capture",
         "region",
         "--no-freeze",
@@ -481,7 +481,7 @@ fn portal_live_fullscreen_tracks_live_desktop() {
     s.enable_portal();
     s.force_fullscreen();
     s.start_daemon();
-    let child = s.spawn_quickscope(&[
+    let child = s.spawn_quikscope(&[
         "capture",
         "region",
         "--no-freeze",
@@ -525,7 +525,7 @@ fn region_live_click_enter_and_cancellation() {
         s.repaint_pattern(0);
         let before = std::fs::read_dir(s.shots_dir()).unwrap().count();
         let cached = std::fs::read(s.cache_file()).ok();
-        let child = s.spawn_quickscope(&[
+        let child = s.spawn_quikscope(&[
             "capture",
             "region",
             "--no-freeze",
@@ -567,7 +567,7 @@ fn portal_live_permission_follows_selection_and_overlay_teardown() {
     let artifacts = s.live_artifacts("portal");
     s.enable_portal_with_dialog(true);
     s.start_daemon();
-    let child = s.spawn_quickscope(&[
+    let child = s.spawn_quikscope(&[
         "capture",
         "region",
         "--no-freeze",
@@ -579,13 +579,13 @@ fn portal_live_permission_follows_selection_and_overlay_teardown() {
     assert!(
         !s.toplevels()
             .iter()
-            .any(|t| t.starts_with("quickscope-e2e-dialog")),
+            .any(|t| t.starts_with("quikscope-e2e-dialog")),
         "portal permission must not precede live selection"
     );
     s.repaint_pattern(1);
     s.helper(&["drag", "100", "100", "420", "330"]);
-    s.wait_for_window("quickscope-e2e-dialog");
-    let competing = s.spawn_quickscope(&[
+    s.wait_for_window("quikscope-e2e-dialog");
+    let competing = s.spawn_quikscope(&[
         "capture",
         "region",
         "--no-freeze",
@@ -632,7 +632,7 @@ fn screen_capture_notifies_caches_and_fills_the_clipboard() {
     };
     s.start_daemon();
 
-    let out = s.quickscope(&["capture", "screen"]);
+    let out = s.quikscope(&["capture", "screen"]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
 
@@ -679,7 +679,7 @@ fn geometry_capture_crops_exactly_and_saves() {
         return;
     };
     s.start_daemon();
-    let out = s.quickscope(&[
+    let out = s.quikscope(&[
         "capture",
         "-g",
         "70,40 100x50",
@@ -694,7 +694,7 @@ fn geometry_capture_crops_exactly_and_saves() {
     assert_matches_pattern(&img, 70, 40);
     assert!(s.notifications().is_empty(), "--no-notify");
 
-    let out = s.quickscope(&["capture", "-g", "5000,5000 10x10", "--no-notify"]);
+    let out = s.quikscope(&["capture", "-g", "5000,5000 10x10", "--no-notify"]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("outside every output"));
 }
@@ -705,7 +705,7 @@ fn region_drag_selects_a_rectangle() {
         return;
     };
     s.start_daemon();
-    let child = s.spawn_quickscope(&["capture", "region", "--save", "--no-notify"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--save", "--no-notify"]);
     s.wait_overlay(1);
     s.helper(&["drag", "100", "100", "420", "330"]);
     let out = s.finish(child, Duration::from_secs(15));
@@ -722,21 +722,21 @@ fn region_click_takes_the_whole_output_and_right_click_cancels() {
     };
     s.start_daemon();
 
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
     s.helper(&["click", "640", "360"]);
     let out = s.finish(child, Duration::from_secs(15));
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
 
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(2);
     s.helper(&["click", "200", "200", "right"]);
     let out = s.finish(child, Duration::from_secs(15));
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("cancelled"));
 
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(3);
     s.keys(&["escape"]);
     let out = s.finish(child, Duration::from_secs(15));
@@ -749,9 +749,9 @@ fn concurrent_region_selection_is_refused() {
         return;
     };
     s.start_daemon();
-    let first = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    let first = s.spawn_quikscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
-    let second = s.quickscope(&["capture", "region", "--no-notify"]);
+    let second = s.quikscope(&["capture", "region", "--no-notify"]);
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("already in progress"));
     s.helper(&["click", "10", "10", "right"]);
@@ -767,9 +767,9 @@ fn editor_draws_copies_saves_and_undo_reaches_disk() {
         return;
     };
     s.start_daemon();
-    let out = s.quickscope(&["capture", "screen", "--edit", "--no-notify"]);
+    let out = s.quikscope(&["capture", "screen", "--edit", "--no-notify"]);
     assert!(out.status.success());
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
 
@@ -830,7 +830,7 @@ fn editor_draws_copies_saves_and_undo_reaches_disk() {
     // Escape with nothing selected closes the editor.
     s.keys(&["escape"]);
     std::thread::sleep(Duration::from_millis(300));
-    assert!(!s.toplevels().iter().any(|l| l.starts_with("quickscope")));
+    assert!(!s.toplevels().iter().any(|l| l.starts_with("quikscope")));
 }
 
 #[test]
@@ -839,11 +839,11 @@ fn notification_click_opens_the_editor() {
         return;
     };
     s.start_daemon();
-    assert!(s.quickscope(&["capture", "screen"]).status.success());
+    assert!(s.quikscope(&["capture", "screen"]).status.success());
     let n = s.wait_notification();
     assert!(s.toplevels().is_empty(), "no editor before the click");
     s.click_notification(n.id, "default");
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
 
     // Clicking again focuses the same editor instead of opening another.
     s.click_notification(n.id, "edit");
@@ -851,7 +851,7 @@ fn notification_click_opens_the_editor() {
     let editors = s
         .toplevels()
         .iter()
-        .filter(|l| l.starts_with("quickscope"))
+        .filter(|l| l.starts_with("quikscope"))
         .count();
     assert_eq!(editors, 1);
 }
@@ -863,7 +863,7 @@ fn open_last_starts_the_daemon_and_restores_the_cached_capture() {
     };
     s.start_daemon();
     assert!(
-        s.quickscope(&["capture", "screen", "--no-notify"])
+        s.quikscope(&["capture", "screen", "--no-notify"])
             .status
             .success()
     );
@@ -872,10 +872,10 @@ fn open_last_starts_the_daemon_and_restores_the_cached_capture() {
     assert!(!s.socket().exists(), "daemon removes its socket on quit");
 
     // No daemon running: the client starts one, which loads the cache.
-    let out = s.quickscope(&["open-last"]);
+    let out = s.quikscope(&["open-last"]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
 }
 
 #[test]
@@ -889,7 +889,7 @@ fn malformed_requests_get_an_error_line() {
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line).unwrap();
     assert!(line.starts_with("err unknown command"), "{line}");
-    assert_eq!(stdout(&s.quickscope(&["ping"])), "ok");
+    assert_eq!(stdout(&s.quikscope(&["ping"])), "ok");
 }
 
 #[test]
@@ -907,7 +907,7 @@ fn rotated_and_scaled_outputs_match_grim() {
     }
     s.start_daemon();
     // 1280x720 rotated 90° at scale 2 is a 360x640 logical output.
-    let out = s.quickscope(&["capture", "screen", "--save", "--no-notify"]);
+    let out = s.quikscope(&["capture", "screen", "--save", "--no-notify"]);
     let ours = decode_png(&saved_path(&out));
     assert_eq!((ours.width, ours.height), (720, 1280));
 
@@ -925,7 +925,7 @@ fn rotated_and_scaled_outputs_match_grim() {
         "same orientation and pixels as grim"
     );
 
-    let out = s.quickscope(&["capture", "-g", "10,20 100x50", "--save", "--no-notify"]);
+    let out = s.quikscope(&["capture", "-g", "10,20 100x50", "--save", "--no-notify"]);
     let ours = decode_png(&saved_path(&out));
     assert_eq!(
         (ours.width, ours.height),
@@ -952,7 +952,7 @@ fn two_outputs_compose_and_a_drag_can_cross_them() {
     s.start_daemon();
 
     // Both outputs side by side; each shows the pattern in its own coordinates.
-    let out = s.quickscope(&["capture", "screen", "--save", "--no-notify"]);
+    let out = s.quikscope(&["capture", "screen", "--save", "--no-notify"]);
     let screen = decode_png(&saved_path(&out));
     assert_eq!((screen.width, screen.height), (2 * OUTPUT_W, OUTPUT_H));
     assert_eq!(
@@ -973,7 +973,7 @@ fn two_outputs_compose_and_a_drag_can_cross_them() {
     }
 
     // The overlay on the first output keeps the pointer grab across the edge.
-    let child = s.spawn_quickscope(&["capture", "region", "--save", "--no-notify"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--save", "--no-notify"]);
     s.wait_overlay(1);
     let x0 = OUTPUT_W - 100;
     s.helper(&[
@@ -994,10 +994,10 @@ fn two_outputs_compose_and_a_drag_can_cross_them() {
     );
 
     // `output` mode without Hyprland takes the first output.
-    let out = s.quickscope(&["capture", "output", "--save", "--no-notify"]);
+    let out = s.quikscope(&["capture", "output", "--save", "--no-notify"]);
     let first = decode_png(&saved_path(&out));
     assert_eq!((first.width, first.height), (OUTPUT_W, OUTPUT_H));
-    let out = s.quickscope(&[
+    let out = s.quikscope(&[
         "capture",
         "output",
         "-o",
@@ -1022,7 +1022,7 @@ fn rapid_captures_then_restart_open_the_newest() {
         .iter()
         .map(|(w, h)| {
             let g = format!("0,0 {w}x{h}");
-            s.spawn_quickscope(&["capture", "-g", &g, "--no-notify", "--no-clipboard"])
+            s.spawn_quikscope(&["capture", "-g", &g, "--no-notify", "--no-clipboard"])
         })
         .collect();
     for child in racing {
@@ -1030,7 +1030,7 @@ fn rapid_captures_then_restart_open_the_newest() {
     }
     // …then back-to-back ones; the last capture taken must win.
     for g in ["0,0 900x500", "0,0 1200x700", "10,10 333x111"] {
-        let out = s.quickscope(&["capture", "-g", g, "--no-notify", "--no-clipboard"]);
+        let out = s.quikscope(&["capture", "-g", g, "--no-notify", "--no-clipboard"]);
         assert!(out.status.success());
     }
     // `quit` returns only after the cache holds the newest capture.
@@ -1045,7 +1045,7 @@ fn rapid_captures_then_restart_open_the_newest() {
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 
-    let out = s.quickscope(&["open-last"]);
+    let out = s.quikscope(&["open-last"]);
     assert_eq!(stdout(&out), "shot 1: 333x111");
 }
 
@@ -1063,23 +1063,23 @@ fn notification_toggle_applies_immediately_and_persists() {
     };
 
     assert_eq!(
-        stdout(&s.quickscope(&["notifications", "status"])),
+        stdout(&s.quikscope(&["notifications", "status"])),
         "notifications on"
     );
     assert_eq!(
-        stdout(&s.quickscope(&["notifications", "toggle"])),
+        stdout(&s.quikscope(&["notifications", "toggle"])),
         "notifications off"
     );
-    let config = std::fs::read_to_string(s.root().join("config/quickscope/config.toml")).unwrap();
+    let config = std::fs::read_to_string(s.root().join("config/quikscope/config.toml")).unwrap();
     assert!(config.contains("notify = false"), "{config}");
     assert!(config.contains("save_dir"), "other settings kept: {config}");
 
-    assert!(s.quickscope(&["capture", "screen"]).status.success());
+    assert!(s.quikscope(&["capture", "screen"]).status.success());
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(captured(&s), 0, "no capture notification while off");
     // An explicit flag still wins for one capture.
     assert!(
-        s.quickscope(&["capture", "screen", "--notify"])
+        s.quikscope(&["capture", "screen", "--notify"])
             .status
             .success()
     );
@@ -1090,18 +1090,18 @@ fn notification_toggle_applies_immediately_and_persists() {
     s.stop_daemon();
     s.start_daemon();
     assert_eq!(
-        stdout(&s.quickscope(&["notifications", "status"])),
+        stdout(&s.quikscope(&["notifications", "status"])),
         "notifications off"
     );
     assert_eq!(
-        stdout(&s.quickscope(&["notifications", "on"])),
+        stdout(&s.quikscope(&["notifications", "on"])),
         "notifications on"
     );
-    assert!(s.quickscope(&["capture", "screen"]).status.success());
+    assert!(s.quikscope(&["capture", "screen"]).status.success());
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(captured(&s), 2);
 
-    let bad = s.quickscope(&["notifications", "maybe"]);
+    let bad = s.quikscope(&["notifications", "maybe"]);
     assert!(!bad.status.success());
 }
 
@@ -1117,12 +1117,12 @@ fn editor_opens_on_a_small_hidpi_display() {
         return;
     };
     s.start_daemon();
-    let out = s.quickscope(&["capture", "screen", "--edit", "--no-notify"]);
+    let out = s.quikscope(&["capture", "screen", "--edit", "--no-notify"]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), format!("shot 1: {OUTPUT_W}x{OUTPUT_H}"));
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
     s.wait_log("editor first frame", Duration::from_secs(10));
-    assert_eq!(stdout(&s.quickscope(&["ping"])), "ok", "daemon still alive");
+    assert_eq!(stdout(&s.quikscope(&["ping"])), "ok", "daemon still alive");
 }
 
 #[test]
@@ -1133,9 +1133,9 @@ fn input_method_composes_and_commits_into_editor_text() {
     s.start_daemon();
     // The input method runs before the editor exists, like fcitx5 does.
     let mut ime = s.input_method();
-    let out = s.quickscope(&["capture", "screen", "--edit", "--no-notify"]);
+    let out = s.quikscope(&["capture", "screen", "--edit", "--no-notify"]);
     assert!(out.status.success());
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
 
     // Focused but not typing text: the editor is no text input, so the
@@ -1204,8 +1204,8 @@ fn input_method_composes_and_commits_into_editor_text() {
         .collect();
     assert!(!xs.is_empty(), "no text in the saved image");
     let ink = (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1) as f32;
-    let layout = quickscope::text::layout("A日本語!", &quickscope::fonts::FontSpec::default());
-    let expected = quickscope::text::ink(&layout, quickscope::geom::Pt::new(0.0, 0.0))
+    let layout = quikscope::text::layout("A日本語!", &quikscope::fonts::FontSpec::default());
+    let expected = quikscope::text::ink(&layout, quikscope::geom::Pt::new(0.0, 0.0))
         .path
         .unwrap()
         .bounds()
@@ -1223,19 +1223,19 @@ fn open_last_keeps_the_last_used_tool() {
     };
     s.start_daemon();
     assert!(
-        s.quickscope(&["capture", "screen", "--edit", "--no-notify"])
+        s.quikscope(&["capture", "screen", "--edit", "--no-notify"])
             .status
             .success()
     );
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
     // Pick the rectangle, then close the editor without drawing.
     s.keys(&["r", "escape"]);
     std::thread::sleep(Duration::from_millis(300));
-    assert!(!s.toplevels().iter().any(|l| l.starts_with("quickscope")));
+    assert!(!s.toplevels().iter().any(|l| l.starts_with("quikscope")));
 
-    assert!(s.quickscope(&["open-last"]).status.success());
+    assert!(s.quikscope(&["open-last"]).status.success());
     s.wait_log_count("editor window opened", 2, Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
     // No tool key: the drag draws with whatever tool the editor opened with.
@@ -1263,12 +1263,12 @@ fn open_last_keeps_the_last_used_tool() {
 }
 
 /// Whether text extraction can run; without Tesseract the OCR tests skip
-/// unless `QUICKSCOPE_REQUIRE_OCR=1`.
+/// unless `QUIKSCOPE_REQUIRE_OCR=1`.
 fn ocr_available() -> bool {
-    let ok = quickscope::ocr::tess::version().is_ok() && quickscope::ocr::tessdata_dir().is_some();
+    let ok = quikscope::ocr::tess::version().is_ok() && quikscope::ocr::tessdata_dir().is_some();
     if !ok {
         assert!(
-            std::env::var_os("QUICKSCOPE_REQUIRE_OCR").is_none(),
+            std::env::var_os("QUIKSCOPE_REQUIRE_OCR").is_none(),
             "Tesseract or its language data is missing"
         );
         eprintln!("skipped: Tesseract is not installed");
@@ -1279,7 +1279,7 @@ fn ocr_available() -> bool {
 /// A small light-theme "screenshot" with two lines of 16 px text, shown
 /// at 100% in the editor.
 fn text_image(path: &std::path::Path) {
-    use quickscope::document::{Document, Rgba, ShapeKind, Style};
+    use quikscope::document::{Document, Rgba, ShapeKind, Style};
     let mut d = Document::new(
         std::sync::Arc::new(Image::filled(560, 90, [250, 250, 250, 255])),
         1.0,
@@ -1293,9 +1293,9 @@ fn text_image(path: &std::path::Path) {
     {
         let s = d.make_shape(
             ShapeKind::Text {
-                origin: quickscope::geom::Pt::new(14.0, 14.0 + i as f32 * 34.0),
+                origin: quikscope::geom::Pt::new(14.0, 14.0 + i as f32 * 34.0),
                 text: (*line).into(),
-                font: quickscope::fonts::FontSpec {
+                font: quikscope::fonts::FontSpec {
                     weight: 400,
                     ..Default::default()
                 }
@@ -1309,8 +1309,8 @@ fn text_image(path: &std::path::Path) {
         );
         d.add(s);
     }
-    quickscope::export::render(&d.snapshot())
-        .save_png(path, quickscope::raster::Compression::Fast)
+    quikscope::export::render(&d.snapshot())
+        .save_png(path, quikscope::raster::Compression::Fast)
         .unwrap();
 }
 
@@ -1326,11 +1326,11 @@ fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
     let png = s.root().join("text.png");
     text_image(&png);
     assert!(
-        s.quickscope(&["open", png.to_str().unwrap()])
+        s.quikscope(&["open", png.to_str().unwrap()])
             .status
             .success()
     );
-    s.wait_for_window("quickscope");
+    s.wait_for_window("quikscope");
     s.wait_log("editor window opened", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(300));
 
@@ -1346,7 +1346,7 @@ fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
 
     // `capture --text` reads the screen (the editor showing that image):
     // printed, on the clipboard, and summarised in the notification.
-    let out = s.quickscope(&["capture", "screen", "--text"]);
+    let out = s.quikscope(&["capture", "screen", "--text"]);
     assert!(
         out.status.success(),
         "{}",
@@ -1374,7 +1374,7 @@ fn portal_capture_fullscreen_selection_and_denial() {
     };
     if !s.has("grim") {
         assert!(
-            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            std::env::var("QUIKSCOPE_E2E").as_deref() != Ok("1"),
             "grim required for portal e2e"
         );
         eprintln!("skipped: portal e2e requires grim");
@@ -1395,7 +1395,7 @@ fn portal_capture_fullscreen_selection_and_denial() {
     let mut times = Vec::new();
     for _ in 0..5 {
         let start = std::time::Instant::now();
-        let out = s.quickscope(&[
+        let out = s.quikscope(&[
             "capture",
             "screen",
             "--save",
@@ -1406,7 +1406,7 @@ fn portal_capture_fullscreen_selection_and_denial() {
         assert_eq!(decode_png(&saved_path(&out)), decode_png(&reference));
     }
     eprintln!("fake portal capture screen end-to-end ms: {times:?}");
-    let child = s.spawn_quickscope(&[
+    let child = s.spawn_quikscope(&[
         "capture",
         "region",
         "--save",
@@ -1419,10 +1419,10 @@ fn portal_capture_fullscreen_selection_and_denial() {
     let selected = decode_png(&saved_path(&out));
     assert_eq!(
         selected,
-        decode_png(&reference).crop(quickscope::geom::IRect::new(100, 100, 320, 230))
+        decode_png(&reference).crop(quikscope::geom::IRect::new(100, 100, 320, 230))
     );
 
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify", "--no-clipboard"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify", "--no-clipboard"]);
     s.wait_overlay(2);
     s.keys(&["escape"]);
     assert_eq!(
@@ -1430,7 +1430,7 @@ fn portal_capture_fullscreen_selection_and_denial() {
         Some(1)
     );
 
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify", "--no-clipboard"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify", "--no-clipboard"]);
     s.wait_overlay(3);
     s.keys(&["enter"]);
     assert!(
@@ -1439,7 +1439,7 @@ fn portal_capture_fullscreen_selection_and_denial() {
     );
     for code in [1, 2] {
         response.store(code, std::sync::atomic::Ordering::Relaxed);
-        let out = s.quickscope(&["capture", "screen", "--no-notify", "--no-clipboard"]);
+        let out = s.quikscope(&["capture", "screen", "--no-notify", "--no-clipboard"]);
         assert_eq!(out.status.code(), Some(1));
         assert!(
             String::from_utf8_lossy(&out.stderr).contains("permission denied"),
@@ -1458,7 +1458,7 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
     };
     if !s.has("grim") {
         assert!(
-            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            std::env::var("QUIKSCOPE_E2E").as_deref() != Ok("1"),
             "grim required for portal e2e"
         );
         return;
@@ -1486,7 +1486,7 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
     );
     s.start_daemon();
     s.helper(&["move", "1400", "200"]);
-    let child = s.spawn_quickscope(&[
+    let child = s.spawn_quikscope(&[
         "capture",
         "region",
         "--save",
@@ -1507,7 +1507,7 @@ fn portal_fullscreen_uses_the_output_it_lands_on() {
         0
     };
     eprintln!("actual fullscreen placement: {mapped}");
-    let logical: quickscope::geom::IRect = mapped
+    let logical: quikscope::geom::IRect = mapped
         .rsplit_once('(')
         .unwrap()
         .1
@@ -1569,7 +1569,7 @@ fn portal_layer_shell_selects_across_outputs() {
     };
     if !s.has("grim") {
         assert!(
-            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            std::env::var("QUIKSCOPE_E2E").as_deref() != Ok("1"),
             "grim required for portal e2e"
         );
         return;
@@ -1579,7 +1579,7 @@ fn portal_layer_shell_selects_across_outputs() {
     let path = s.root().join("whole-desktop.png");
     assert!(s.command("grim").arg(&path).status().unwrap().success());
     let reference = decode_png(&path);
-    let child = s.spawn_quickscope(&[
+    let child = s.spawn_quikscope(&[
         "capture",
         "region",
         "--save",
@@ -1591,7 +1591,7 @@ fn portal_layer_shell_selects_across_outputs() {
     let image = decode_png(&saved_path(&s.finish(child, Duration::from_secs(15))));
     assert_eq!(
         image,
-        reference.crop(quickscope::geom::IRect::new(1100, 100, 350, 230))
+        reference.crop(quikscope::geom::IRect::new(1100, 100, 350, 230))
     );
     assert!(
         !s.daemon_log().contains("fullscreen selection mapped"),
@@ -1611,7 +1611,7 @@ fn selection_overlay_covers_a_large_output_edge_to_edge() {
         return;
     };
     s.start_daemon();
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify"]);
     s.wait_overlay(1);
     // Probe near every corner: dimmed, not live. The frozen frame reaches
     // the screen after input starts, so retain the coverage check's retry.
@@ -1650,7 +1650,7 @@ fn portal_permission_dialog_gets_the_keyboard_before_any_overlay() {
     };
     if !s.has("grim") {
         assert!(
-            std::env::var("QUICKSCOPE_E2E").as_deref() != Ok("1"),
+            std::env::var("QUIKSCOPE_E2E").as_deref() != Ok("1"),
             "grim required for portal e2e"
         );
         eprintln!("skipped: portal e2e requires grim");
@@ -1659,8 +1659,8 @@ fn portal_permission_dialog_gets_the_keyboard_before_any_overlay() {
     // labwc offers layer-shell, the KDE case where overlays could open early.
     s.enable_portal_with_dialog(true);
     s.start_daemon();
-    let child = s.spawn_quickscope(&["capture", "region", "--no-notify"]);
-    s.wait_for_window("quickscope-e2e-dialog");
+    let child = s.spawn_quikscope(&["capture", "region", "--no-notify"]);
+    s.wait_for_window("quikscope-e2e-dialog");
     std::thread::sleep(Duration::from_millis(300));
     s.keys(&["enter"]);
     s.wait_overlay(1);

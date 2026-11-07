@@ -102,7 +102,7 @@ pub fn pictures_dir() -> PathBuf {
 /// its foreground entitlement to the already-running daemon.
 pub fn allow_foreground() {
     unsafe {
-        if let Ok(hwnd) = FindWindowW(w!("quickscope-shell"), PCWSTR::null()) {
+        if let Ok(hwnd) = FindWindowW(w!("quikscope-shell"), PCWSTR::null()) {
             let mut pid = 0;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
             if pid != 0 {
@@ -226,7 +226,7 @@ fn overlay_style(style: i32) -> i32 {
     style & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX).0 as i32
 }
 
-pub const PRINT_SCREEN_NOTICE: &str = "To use PrintScreen in quickscope, turn off Settings → Accessibility → Keyboard → \"Use the Print screen key to open screen capture\".";
+pub const PRINT_SCREEN_NOTICE: &str = "To use PrintScreen in quikscope, turn off Settings → Accessibility → Keyboard → \"Use the Print screen key to open screen capture\".";
 
 /// The Windows 11 default applies when this optional per-user override is absent.
 pub fn print_screen_capture_enabled() -> Result<bool> {
@@ -286,7 +286,7 @@ fn print_screen_default(build: &[u16]) -> Result<bool> {
 pub fn autostart(action: &str) -> Result<bool> {
     anyhow::ensure!(
         matches!(action, "on" | "off" | "status"),
-        "usage: quickscope autostart <on|off|status>"
+        "usage: quikscope autostart <on|off|status>"
     );
     let mut key = HKEY::default();
     unsafe {
@@ -322,10 +322,10 @@ pub fn autostart(action: &str) -> Result<bool> {
                     .collect();
                 let bytes =
                     std::slice::from_raw_parts(command.as_ptr().cast::<u8>(), command.len() * 2);
-                RegSetValueExW(key.0, w!("quickscope"), 0, REG_SZ, Some(bytes)).ok()?;
+                RegSetValueExW(key.0, w!("quikscope"), 0, REG_SZ, Some(bytes)).ok()?;
             }
             "off" => {
-                let status = RegDeleteValueW(key.0, w!("quickscope"));
+                let status = RegDeleteValueW(key.0, w!("quikscope"));
                 if status != ERROR_FILE_NOT_FOUND {
                     status.ok()?;
                 }
@@ -336,7 +336,7 @@ pub fn autostart(action: &str) -> Result<bool> {
         let result = RegGetValueW(
             key.0,
             PCWSTR::null(),
-            w!("quickscope"),
+            w!("quikscope"),
             RRF_RT_REG_SZ,
             None,
             None,

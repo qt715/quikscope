@@ -1,11 +1,11 @@
-# quickscope
+# quikscope
 
 A fast screenshot tool for Linux (wlroots compositors such as Hyprland and
 sway, GNOME, KDE Plasma, X11) and Windows 10/11, with a built-in annotation
 editor written in [GPUI](https://gpui.rs).
 
 ```text
-keybind ─▶ quickscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
+keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ clipboard + notification
                                                                      │ click / --edit
                                                                      ▼
                                       editor (arrows, boxes, text, pen, pixelate, crop…)
@@ -44,19 +44,19 @@ desktop needs; on Windows, see [Windows 10/11](#windows-1011).
 ```sh
 cargo install --locked --path .
 # optional: start the daemon with the graphical session
-install -Dm644 packaging/quickscope.service ~/.config/systemd/user/quickscope.service
-systemctl --user enable --now quickscope.service
+install -Dm644 packaging/quikscope.service ~/.config/systemd/user/quikscope.service
+systemctl --user enable --now quikscope.service
 # optional: launcher entry ("Open last screenshot") and notification icon
-install -Dm644 packaging/quickscope.desktop ~/.local/share/applications/quickscope.desktop
+install -Dm644 packaging/quikscope.desktop ~/.local/share/applications/quikscope.desktop
 ```
 
-The daemon is optional at login: any `quickscope` command starts it on demand
+The daemon is optional at login: any `quikscope` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
 
 On first start, a short welcome window lets you choose frozen or live region
 selection and common capture defaults. Done or closing the welcome window
 writes your configuration; subsequent starts stay in the background.
-Run `quickscope settings` any time (also the editor's gear button or Windows
+Run `quikscope settings` any time (also the editor's gear button or Windows
 tray **Settings…**). Changes save and apply to the running daemon immediately.
 
 Text extraction additionally needs Tesseract and a model per language,
@@ -74,7 +74,7 @@ sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-jpn tesseract-ocr
 ## Desktops
 
 The daemon picks a backend at start-up and logs it (`platform backend: …`);
-`QUICKSCOPE_BACKEND=wlroots|portal|x11` on the daemon forces one.
+`QUIKSCOPE_BACKEND=wlroots|portal|x11` on the daemon forces one.
 
 | Desktop | Capture | Region overlay | Window snapping, `window` mode |
 | --- | --- | --- | --- |
@@ -91,10 +91,10 @@ wlroots compositor and Hyprland provide. Bind keys as shown for
 [Hyprland](#hyprland); on sway:
 
 ```ini
-bindsym Print exec quickscope capture region
-bindsym Shift+Print exec quickscope capture screen
-bindsym $mod+Shift+e exec quickscope open-last
-for_window [app_id="quickscope"] floating enable
+bindsym Print exec quikscope capture region
+bindsym Shift+Print exec quikscope capture screen
+bindsym $mod+Shift+e exec quikscope open-last
+for_window [app_id="quikscope"] floating enable
 ```
 
 ### Hyprland
@@ -102,27 +102,27 @@ for_window [app_id="quickscope"] floating enable
 `hyprland.lua`:
 
 ```lua
-hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("quickscope capture region"), { description = "Screenshot region" })
-hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("quickscope capture output"), { description = "Screenshot monitor" })
-hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quickscope capture region --edit"), { description = "Annotate region" })
-hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quickscope open-last"), { description = "Edit last screenshot" })
-hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quickscope capture region --text"), { description = "Copy text from region" })
+hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("quikscope capture region"), { description = "Screenshot region" })
+hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("quikscope capture output"), { description = "Screenshot monitor" })
+hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quikscope capture region --edit"), { description = "Annotate region" })
+hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quikscope open-last"), { description = "Edit last screenshot" })
+hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quikscope capture region --text"), { description = "Copy text from region" })
 
-hl.window_rule({ match = { class = "^(quickscope)$" }, float = true, center = true })
-hl.layer_rule({ match = { namespace = "^(quickscope-selection)$" }, no_anim = true })
+hl.window_rule({ match = { class = "^(quikscope)$" }, float = true, center = true })
+hl.layer_rule({ match = { namespace = "^(quikscope-selection)$" }, no_anim = true })
 ```
 
 `hyprland.conf`:
 
 ```ini
-bind = $mainMod SHIFT, S, exec, quickscope capture region
-bind = $mainMod SHIFT CTRL, S, exec, quickscope capture output
-bind = $mainMod SHIFT ALT, S, exec, quickscope capture region --edit
-bind = $mainMod SHIFT, E, exec, quickscope open-last
-bind = $mainMod SHIFT, X, exec, quickscope capture region --text
-windowrule = float on, match:class ^(quickscope)$
-windowrule = center on, match:class ^(quickscope)$
-layerrule = no_anim on, match:namespace ^(quickscope-selection)$
+bind = $mainMod SHIFT, S, exec, quikscope capture region
+bind = $mainMod SHIFT CTRL, S, exec, quikscope capture output
+bind = $mainMod SHIFT ALT, S, exec, quikscope capture region --edit
+bind = $mainMod SHIFT, E, exec, quikscope open-last
+bind = $mainMod SHIFT, X, exec, quikscope capture region --text
+windowrule = float on, match:class ^(quikscope)$
+windowrule = center on, match:class ^(quikscope)$
+layerrule = no_anim on, match:namespace ^(quikscope-selection)$
 ```
 
 `no_anim` on the selection layer makes the frozen overlay appear instantly
@@ -134,13 +134,13 @@ Needs a session D-Bus, `xdg-desktop-portal` and the desktop's backend
 (`xdg-desktop-portal-gnome` or `xdg-desktop-portal-kde`), which those
 desktops install by default. Bind keys in Settings → Keyboard → Custom
 Shortcuts (GNOME) or System Settings → Shortcuts → Add New → Command (KDE)
-with commands such as `quickscope capture region`. On GNOME from a terminal:
+with commands such as `quikscope capture region`. On GNOME from a terminal:
 
 ```sh
-p=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/quickscope/
+p=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/quikscope/
 gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$p']"
 gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p name 'Screenshot region'
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p command 'quickscope capture region'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p command 'quikscope capture region'
 gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p binding '<Shift><Super>s'
 ```
 
@@ -148,8 +148,8 @@ gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p 
 if you have some.)
 
 The daemon falls back to `org.freedesktop.portal.Screenshot` when
-`wlr-screencopy` is unavailable. Set `QUICKSCOPE_BACKEND=portal` on the
-daemon to force it (or `QUICKSCOPE_BACKEND=wlroots` to require native capture).
+`wlr-screencopy` is unavailable. Set `QUIKSCOPE_BACKEND=portal` on the
+daemon to force it (or `QUIKSCOPE_BACKEND=wlroots` to require native capture).
 The desktop can still ask permission despite `interactive=false`; accept
 its permission dialog to capture. Cancelling or denying returns a clear error.
 With live region selection (`--no-freeze`), the permission dialog appears
@@ -174,7 +174,7 @@ Clipboard uses data-control where available (including supported KDE
 versions), otherwise Xwayland CLIPBOARD when DISPLAY is set. GNOME normally
 bridges that selection to native Wayland apps. Without either backend, use
 `--no-clipboard --save` (or edit/save). Notifications still work.
-For diagnostics, `QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
+For diagnostics, `QUIKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
 the single-output fullscreen path, even on a layer-shell compositor.
 Portal PNGs are not deleted: the API does not transfer ownership, and
 GNOME/KDE may save into Pictures rather than create disposable files.
@@ -182,7 +182,7 @@ GNOME/KDE may save into Pictures rather than create disposable files.
 ### X11
 
 On X11, `DISPLAY` selects the backend when `WAYLAND_DISPLAY` is unset.
-`QUICKSCOPE_BACKEND=x11` explicitly selects it (including on Xwayland).
+`QUIKSCOPE_BACKEND=x11` explicitly selects it (including on Xwayland).
 MIT-SHM accelerates local captures; remote servers fall back to GetImage.
 RandR 1.5 monitor names identify outputs; older servers expose one `screen-N`
 output. X11 coordinates are physical pixels (scale 1). An EWMH window manager
@@ -191,13 +191,13 @@ without one those queries are unknown. No X11 command-line helpers are needed
 at runtime. Clipboard PNGs are served without re-encoding, including large
 images via the X11 INCR protocol.
 Live selection requires a compositor, an alpha visual and the X Present
-extension; otherwise quickscope logs the limitation and uses frozen selection.
+extension; otherwise quikscope logs the limitation and uses frozen selection.
 
 Bind keys in your window manager or desktop settings, e.g. i3:
 
 ```ini
-bindsym Print exec --no-startup-id quickscope capture region
-bindsym Shift+Print exec --no-startup-id quickscope capture screen
+bindsym Print exec --no-startup-id quikscope capture region
+bindsym Shift+Print exec --no-startup-id quikscope capture screen
 ```
 
 ### Windows 10/11
@@ -206,11 +206,11 @@ Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Stud
 
 ```powershell
 cargo install --locked --path .
-quickscope autostart on
-quickscope capture screen --save
+quikscope autostart on
+quikscope capture screen --save
 ```
 
-`autostart on|off|status` manages only the current user's `quickscope` value
+`autostart on|off|status` manages only the current user's `quikscope` value
 under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The daemon has no
 console window; commands attach to the invoking terminal.
 
@@ -223,13 +223,13 @@ reserve a shortcut, in which case startup logs the registration error.
 
 If Windows opens Snipping Tool instead, turn off **Settings → Accessibility →
 Keyboard → Use the Print screen key to open screen capture**, then restart
-quickscope (Windows may also require refreshing Explorer or signing in again).
-Windows 11 enables this setting by default. quickscope logs a startup warning
+quikscope (Windows may also require refreshing Explorer or signing in again).
+Windows 11 enables this setting by default. quikscope logs a startup warning
 and shows one notification when it is enabled; Settings also shows the remedy
-beside the Windows hotkeys. quickscope does not change that Windows setting.
+beside the Windows hotkeys. quikscope does not change that Windows setting.
 
-Configuration is `%APPDATA%\quickscope\config.toml`, cache/log/IPC live in
-`%LOCALAPPDATA%\quickscope`, and saves use the Windows Pictures known folder
+Configuration is `%APPDATA%\quikscope\config.toml`, cache/log/IPC live in
+`%LOCALAPPDATA%\quikscope`, and saves use the Windows Pictures known folder
 plus `Screenshots` (including redirected Pictures folders). Clipboard images
 offer registered `PNG`, `CF_DIBV5` and `CF_DIB`; text uses `CF_UNICODETEXT`.
 Capture notifications use Windows shell balloons; their display duration and
@@ -237,7 +237,7 @@ visibility follow Windows notification settings.
 
 Capture retains DXGI duplication resources and falls back to reusable GDI
 buffers when duplication is unavailable (including some virtual displays).
-`QUICKSCOPE_WINDOWS_CAPTURE=gdi` forces GDI for comparison. Coordinates passed
+`QUIKSCOPE_WINDOWS_CAPTURE=gdi` forces GDI for comparison. Coordinates passed
 to `--geometry` on Windows are **physical desktop pixels**, including negative
 monitor origins. The per-monitor-v2-aware overlay converts surface DIPs at its
 boundary, so mixed-DPI monitors retain their actual desktop layout and saved
@@ -248,13 +248,13 @@ captured. Text extraction optionally needs Tesseract's `libtesseract-5.dll`
 ## Usage
 
 ```text
-quickscope capture <region|output|window|screen> [options]
-quickscope open-last          open the latest capture in the editor, with the tool you used last
-quickscope open <FILE>        annotate any PNG/JPEG/WebP
-quickscope settings          open or focus capture/editor preferences
-quickscope notifications <on|off|toggle|status>
-quickscope daemon             run the daemon in the foreground
-quickscope ping | quit
+quikscope capture <region|output|window|screen> [options]
+quikscope open-last          open the latest capture in the editor, with the tool you used last
+quikscope open <FILE>        annotate any PNG/JPEG/WebP
+quikscope settings          open or focus capture/editor preferences
+quikscope notifications <on|off|toggle|status>
+quikscope daemon             run the daemon in the foreground
+quikscope ping | quit
 ```
 
 | Mode | Captures |
@@ -282,13 +282,13 @@ occurred. Defaults come from the [configuration](docs/configuration.md).
 ### Notifications on/off
 
 `notify = false` in the config file turns capture notifications off.
-`quickscope notifications toggle` (or `on`/`off`) flips the setting in the
+`quikscope notifications toggle` (or `on`/`off`) flips the setting in the
 running daemon at once and writes it back to the config file, keeping your
 other settings and comments, so it survives restarts; `status` prints it.
 Bind it to a key to switch notifications off while gaming or presenting:
 
 ```lua
-hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quickscope notifications toggle"), { description = "Toggle screenshot notifications" })
+hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quikscope notifications toggle"), { description = "Toggle screenshot notifications" })
 ```
 
 `--notify` / `--no-notify` still override the setting for a single capture.
@@ -327,7 +327,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quickscope notifications tog
 
 Style changes (color, size, fill) apply to every selected shape as one undo step.
 The font bar targets exactly one selected text shape (or text being edited). Closing the
-editor keeps its annotations in the daemon: `quickscope open-last` or another
+editor keeps its annotations in the daemon: `quikscope open-last` or another
 notification click brings them back.
 
 **Drawing past the edges.** Annotations may extend beyond the screenshot,
@@ -364,8 +364,8 @@ build); a real GPU and a high-refresh compositor are faster still.
 
 | Step | Time |
 | --- | --- |
-| `quickscope ping` round trip (client start-up + IPC) | ~1 ms |
-| `quickscope capture screen` round trip | ~15 ms (13 ms is the compositor delivering the next frame) |
+| `quikscope ping` round trip (client start-up + IPC) | ~1 ms |
+| `quikscope capture screen` round trip | ~15 ms (13 ms is the compositor delivering the next frame) |
 | Clipboard PNG ready (encoded in the background) | ~22 ms after capture |
 | Region overlay shows the frozen frame after the request | ~17 ms (window creation overlaps the capture on layer-shell) |
 | Editor first frame after its window is created | ~5 ms |
@@ -399,7 +399,7 @@ test described in [docs/testing.md](docs/testing.md).
 ```sh
 cargo test                                   # unit, golden-image and GPU parity tests
 cargo test --features e2e --test e2e         # end-to-end, in a private headless labwc/sway
-QUICKSCOPE_BLESS=1 cargo test --test render_regression   # regenerate golden images
+QUIKSCOPE_BLESS=1 cargo test --test render_regression   # regenerate golden images
 ```
 
 See [docs/testing.md](docs/testing.md), [docs/ipc.md](docs/ipc.md) and

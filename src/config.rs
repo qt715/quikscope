@@ -1,4 +1,4 @@
-//! User configuration (`$XDG_CONFIG_HOME/quickscope/config.toml`) and the
+//! User configuration (`$XDG_CONFIG_HOME/quikscope/config.toml`) and the
 //! filesystem locations derived from it.
 
 use std::path::{Path, PathBuf};
@@ -345,16 +345,16 @@ fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
 
 pub fn config_path() -> PathBuf {
     #[cfg(windows)]
-    return home_env("APPDATA", "AppData/Roaming").join("quickscope/config.toml");
+    return home_env("APPDATA", "AppData/Roaming").join("quikscope/config.toml");
     #[cfg(not(windows))]
-    xdg_dir("XDG_CONFIG_HOME", ".config").join("quickscope/config.toml")
+    xdg_dir("XDG_CONFIG_HOME", ".config").join("quikscope/config.toml")
 }
 
 pub fn cache_dir() -> PathBuf {
     #[cfg(windows)]
-    return home_env("LOCALAPPDATA", "AppData/Local").join("quickscope");
+    return home_env("LOCALAPPDATA", "AppData/Local").join("quikscope");
     #[cfg(not(windows))]
-    xdg_dir("XDG_CACHE_HOME", ".cache").join("quickscope")
+    xdg_dir("XDG_CACHE_HOME", ".cache").join("quikscope")
 }
 
 #[cfg(windows)]
@@ -377,10 +377,10 @@ pub fn runtime_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// IPC socket. `QUICKSCOPE_SOCKET` overrides it (used by tests and to run
+/// IPC socket. `QUIKSCOPE_SOCKET` overrides it (used by tests and to run
 /// several instances side by side).
 pub fn socket_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("QUICKSCOPE_SOCKET") {
+    if let Some(p) = std::env::var_os("QUIKSCOPE_SOCKET") {
         return PathBuf::from(p);
     }
     #[cfg(windows)]
@@ -397,7 +397,7 @@ pub fn socket_path() -> PathBuf {
             (_, Ok(x)) if !x.is_empty() => format!("x11-{}", x.replace([':', '/'], "")),
             _ => "wayland-0".into(),
         };
-        runtime_dir().join(format!("quickscope-{display}.sock"))
+        runtime_dir().join(format!("quikscope-{display}.sock"))
     }
 }
 
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn persisting_creates_missing_directories_and_returns_config() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested/quickscope/config.toml");
+        let path = dir.path().join("nested/quikscope/config.toml");
         let c = persist_values(&path, &[(&["notify"], false.into())]).unwrap();
         assert!(!c.notify);
         assert_eq!(c.editor, EditorConfig::default());

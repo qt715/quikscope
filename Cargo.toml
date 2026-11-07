@@ -1,5 +1,5 @@
 [package]
-name = "quickscope"
+name = "quikscope"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -8,13 +8,13 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["screenshot", "wayland", "x11", "windows", "annotation"]
 categories = ["multimedia::images", "gui"]
-default-run = "quickscope"
+default-run = "quikscope"
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "quickscope"
+name = "quikscope"
 path = "src/main.rs"
 
 [features]
@@ -26,7 +26,7 @@ e2e = ["dep:wayland-protocols-misc"]
 # Plays the user (virtual pointer/keyboard, clipboard, wallpaper) inside a
 # headless compositor for the e2e suite.
 [[bin]]
-name = "quickscope-e2e-helper"
+name = "quikscope-e2e-helper"
 path = "tests/support/e2e_helper.rs"
 required-features = ["e2e"]
 test = false

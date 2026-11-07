@@ -4,20 +4,20 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use quickscope::config;
-use quickscope::ipc::{self, CaptureOptions, Mode, Request, Response, Switch};
+use quikscope::config;
+use quikscope::ipc::{self, CaptureOptions, Mode, Request, Response, Switch};
 
 const USAGE: &str = "\
-quickscope — screenshot daemon and annotation editor
+quikscope — screenshot daemon and annotation editor
 
 USAGE:
-    quickscope capture <region|output|window|screen> [OPTIONS]
-    quickscope open-last
-    quickscope open <FILE>
-    quickscope settings
-    quickscope notifications <on|off|toggle|status>
-    quickscope daemon
-    quickscope ping | quit
+    quikscope capture <region|output|window|screen> [OPTIONS]
+    quikscope open-last
+    quikscope open <FILE>
+    quikscope settings
+    quikscope notifications <on|off|toggle|status>
+    quikscope daemon
+    quikscope ping | quit
 
 CAPTURE OPTIONS:
     --edit / --no-edit           Open the editor right away (default: on notification click)
@@ -30,8 +30,8 @@ CAPTURE OPTIONS:
     -o, --output <NAME>          Output for `output` mode (default: focused output)
     -g, --geometry <\"X,Y WxH\">   Capture this logical rectangle (slurp format), no selection
 
-Commands talk to the daemon over $XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock
-(override with QUICKSCOPE_SOCKET) and start it on demand.
+Commands talk to the daemon over $XDG_RUNTIME_DIR/quikscope-$WAYLAND_DISPLAY.sock
+(override with QUIKSCOPE_SOCKET) and start it on demand.
 ";
 
 fn main() -> ExitCode {
@@ -46,18 +46,18 @@ fn main() -> ExitCode {
         }
     }
     let level = if args.first().map(String::as_str) == Some("daemon") {
-        "quickscope=info,warn"
+        "quikscope=info,warn"
     } else {
         "warn"
     };
-    env_logger::Builder::from_env(env_logger::Env::new().filter_or("QUICKSCOPE_LOG", level))
+    env_logger::Builder::from_env(env_logger::Env::new().filter_or("QUIKSCOPE_LOG", level))
         .format_timestamp_millis()
         .init();
 
     match run(args) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("quickscope: {e:#}");
+            eprintln!("quikscope: {e:#}");
             ExitCode::FAILURE
         }
     }
@@ -77,20 +77,20 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         "-V" | "--version" => {
-            println!("quickscope {}", env!("CARGO_PKG_VERSION"));
+            println!("quikscope {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
         "daemon" => {
             no_extra(&rest)?;
-            quickscope::daemon::run(socket)?;
+            quikscope::daemon::run(socket)?;
             return Ok(ExitCode::SUCCESS);
         }
         #[cfg(windows)]
         "autostart" => {
             let [action] = rest.as_slice() else {
-                anyhow::bail!("usage: quickscope autostart <on|off|status>");
+                anyhow::bail!("usage: quikscope autostart <on|off|status>");
             };
-            let on = quickscope::platform::windows::autostart(action)?;
+            let on = quikscope::platform::windows::autostart(action)?;
             println!("autostart {}", if on { "on" } else { "off" });
             return Ok(ExitCode::SUCCESS);
         }
@@ -104,13 +104,13 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             [path] => {
                 Request::Open(std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             }
-            _ => anyhow::bail!("usage: quickscope open <FILE>"),
+            _ => anyhow::bail!("usage: quikscope open <FILE>"),
         },
         "notifications" | "notify" => match rest.as_slice() {
             [s] => Request::Notifications(Switch::parse(s).ok_or_else(|| {
-                anyhow::anyhow!("usage: quickscope notifications <on|off|toggle|status>")
+                anyhow::anyhow!("usage: quikscope notifications <on|off|toggle|status>")
             })?),
-            _ => anyhow::bail!("usage: quickscope notifications <on|off|toggle|status>"),
+            _ => anyhow::bail!("usage: quikscope notifications <on|off|toggle|status>"),
         },
         "ping" => {
             no_extra(&rest)?;
@@ -125,7 +125,7 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
                 Some(Duration::from_secs(5)),
             ));
         }
-        other => anyhow::bail!("unknown command {other:?}; see `quickscope --help`"),
+        other => anyhow::bail!("unknown command {other:?}; see `quikscope --help`"),
     };
     // Interactive selection waits on the user; everything else is quick.
     let timeout = match &request {
@@ -150,7 +150,7 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Response::Text { text, .. } if text.is_empty() => {
-            eprintln!("quickscope: no text found");
+            eprintln!("quikscope: no text found");
             Ok(ExitCode::from(1))
         }
         Response::Text { text, .. } => {
@@ -166,7 +166,7 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Response::Cancelled => {
-            eprintln!("quickscope: cancelled");
+            eprintln!("quikscope: cancelled");
             Ok(ExitCode::from(1))
         }
         Response::Error(e) => anyhow::bail!(e),
@@ -233,7 +233,7 @@ fn parse_capture(args: &[String]) -> anyhow::Result<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quickscope::geom::IRect;
+    use quikscope::geom::IRect;
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()

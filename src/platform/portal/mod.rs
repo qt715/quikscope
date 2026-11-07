@@ -60,7 +60,7 @@ impl Capture for Screenshot {
             .build();
         let responses = MessageIterator::for_match_rule(rule, &self.connection, Some(16))?;
         let token = format!(
-            "quickscope_{}_{}",
+            "quikscope_{}_{}",
             std::process::id(),
             TOKEN.fetch_add(1, Ordering::Relaxed)
         );

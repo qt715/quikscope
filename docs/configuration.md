@@ -1,11 +1,11 @@
 # Configuration
 
-`$XDG_CONFIG_HOME/quickscope/config.toml` (usually `~/.config/quickscope/config.toml`).
-On Windows: `%APPDATA%\quickscope\config.toml`; the default save directory
+`$XDG_CONFIG_HOME/quikscope/config.toml` (usually `~/.config/quikscope/config.toml`).
+On Windows: `%APPDATA%\quikscope\config.toml`; the default save directory
 is the Pictures known folder plus `Screenshots`, and `~` means `%USERPROFILE%`.
 Every key is optional; unknown keys are rejected so typos do not pass
 silently. The daemon reads the file at start-up; hand edits require
-`quickscope quit` to reload, but changes through `quickscope settings` apply
+`quikscope quit` to reload, but changes through `quikscope settings` apply
 immediately to the running daemon and future captures/editors.
 
 ```toml
@@ -20,7 +20,7 @@ filename = "screenshot_%Y%m%d_%H%M%S.png"
 copy_to_clipboard = true
 
 # Show a notification after each capture; clicking it opens the editor.
-# `quickscope notifications on|off|toggle` changes this at runtime and saves it here.
+# `quikscope notifications on|off|toggle` changes this at runtime and saves it here.
 notify = true
 
 # Open the editor right after capturing instead of waiting for a click.
@@ -78,7 +78,7 @@ with a log message. Windows live selection compiles but is unverified natively.
 
 ## Settings and first run
 
-Open preferences with `quickscope settings`, the editor toolbar's gear button
+Open preferences with `quikscope settings`, the editor toolbar's gear button
 or **Settings…** in the Windows tray. A second request focuses the same window.
 Capture toggles apply as soon as clicked; text values apply when submitted
 with Enter, Tab or leaving the field. Invalid values show an inline error and
@@ -97,7 +97,7 @@ region mode and common toggles, then Done. Done or closing the window writes
 the chosen values, so onboarding does not recur. Choices preview immediately
 but the config file is created only when onboarding is finished.
 
-All UI edits (and `quickscope notifications on|off|toggle`) validate before an
+All UI edits (and `quikscope notifications on|off|toggle`) validate before an
 atomic config replacement. Comments, ordering and formatting are preserved,
 including inline comments and unrelated sections. Unknown keys still fail
 strict validation. If loading fails, the daemon logs the error and uses
@@ -108,9 +108,9 @@ until it is repaired.
 
 | Variable | Effect |
 | --- | --- |
-| `QUICKSCOPE_SOCKET` | IPC socket path. |
-| `QUICKSCOPE_LOG` | Log filter (`env_logger` syntax), e.g. `quickscope=debug` for per-step timings. |
+| `QUIKSCOPE_SOCKET` | IPC socket path. |
+| `QUIKSCOPE_LOG` | Log filter (`env_logger` syntax), e.g. `quikscope=debug` for per-step timings. |
 | `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | Standard locations. |
 | `HYPRLAND_INSTANCE_SIGNATURE` | Hyprland instance to query; when unset, a single running instance is found automatically. |
 | `APPDATA`, `LOCALAPPDATA`, `USERPROFILE` | Windows config, cache/IPC and home locations. |
-| `QUICKSCOPE_WINDOWS_CAPTURE` | Windows capture method: `dxgi` (default with GDI availability fallback) or forced `gdi`, for measurements. |
+| `QUIKSCOPE_WINDOWS_CAPTURE` | Windows capture method: `dxgi` (default with GDI availability fallback) or forced `gdi`, for measurements. |

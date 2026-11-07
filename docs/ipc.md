@@ -1,14 +1,14 @@
 # IPC protocol
 
-The daemon listens on `$XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock`
-(mode 0600); on X11 the name is `quickscope-x11-<display>.sock`, e.g.
-`quickscope-x11-0.sock` for `DISPLAY=:0`. On Windows it is an AF_UNIX
-socket at `%LOCALAPPDATA%\quickscope\ipc.sock`. `QUICKSCOPE_SOCKET`
+The daemon listens on `$XDG_RUNTIME_DIR/quikscope-$WAYLAND_DISPLAY.sock`
+(mode 0600); on X11 the name is `quikscope-x11-<display>.sock`, e.g.
+`quikscope-x11-0.sock` for `DISPLAY=:0`. On Windows it is an AF_UNIX
+socket at `%LOCALAPPDATA%\quikscope\ipc.sock`. `QUIKSCOPE_SOCKET`
 overrides the path for both sides. Each connection carries exactly one request line and one response line, UTF-8,
 `\n`-terminated.
 
 ```sh
-echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/quickscope-$WAYLAND_DISPLAY.sock
+echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/quikscope-$WAYLAND_DISPLAY.sock
 ```
 
 ## Requests
@@ -61,9 +61,9 @@ escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
 
 ## Lifecycle
 
-- `quickscope` commands other than `daemon` and `quit` start a detached daemon
+- `quikscope` commands other than `daemon` and `quit` start a detached daemon
   (`setsid`) when nothing listens on the socket, logging to
-  `$XDG_CACHE_HOME/quickscope/daemon.log`, and wait up to 5 s for it.
+  `$XDG_CACHE_HOME/quikscope/daemon.log`, and wait up to 5 s for it.
 - A daemon refuses to start while another one answers on the socket; a stale
   socket file left by a crash is replaced.
 - `quit` replies, then exits the daemon and removes the socket.

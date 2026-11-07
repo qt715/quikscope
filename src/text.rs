@@ -538,12 +538,12 @@ mod tests {
     }
 
     /// Script fonts are system fonts: CI installs them and sets
-    /// `QUICKSCOPE_REQUIRE_FONTS=1`; elsewhere a test without them is skipped.
+    /// `QUIKSCOPE_REQUIRE_FONTS=1`; elsewhere a test without them is skipped.
     fn has_font_for(sample: &str) -> bool {
         let found = fonts::fallback_family(sample, Lang::Ja).is_some();
         if !found {
             assert!(
-                std::env::var_os("QUICKSCOPE_REQUIRE_FONTS").is_none(),
+                std::env::var_os("QUIKSCOPE_REQUIRE_FONTS").is_none(),
                 "no installed font draws {sample:?}"
             );
             eprintln!("skipped: no installed font draws {sample:?}");
@@ -590,14 +590,14 @@ mod tests {
     #[test]
     fn bold_is_wider_and_italic_leans() {
         let regular = layout(
-            "quickscope",
+            "quikscope",
             &FontSpec {
                 weight: 400,
                 ..font(40.0)
             },
         );
         let bold = layout(
-            "quickscope",
+            "quikscope",
             &FontSpec {
                 weight: 800,
                 ..font(40.0)

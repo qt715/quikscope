@@ -90,7 +90,7 @@ impl SelectionOwner {
         wake_rx.set_nonblocking(true)?;
         wake_tx.set_nonblocking(true)?;
         std::thread::Builder::new()
-            .name("quickscope-x11-clipboard".into())
+            .name("quikscope-x11-clipboard".into())
             .spawn(move || {
                 if let Err(e) = owner.run(rx, wake_rx) {
                     log::error!("X11 clipboard thread stopped: {e:#}");
@@ -127,7 +127,7 @@ impl Clipboard for SelectionOwner {
         let ready = png.clone();
         let sender = self.sender.clone();
         if let Err(e) = std::thread::Builder::new()
-            .name("quickscope-x11-png".into())
+            .name("quikscope-x11-png".into())
             .spawn(move || {
                 let _ = ready.wait();
                 if let Err(e) = sender.send(Command::Encoded(ready, true)) {

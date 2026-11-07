@@ -1,7 +1,7 @@
 //! Tesseract's C API, loaded at run time.
 //!
 //! `libtesseract` is opened with `dlopen` the first time text is extracted,
-//! so quickscope builds and runs without it and only text extraction needs the
+//! so quikscope builds and runs without it and only text extraction needs the
 //! package. One [`Engine`] holds one initialised model set; Tesseract
 //! instances are not thread-safe, so each stays on the thread that made it.
 

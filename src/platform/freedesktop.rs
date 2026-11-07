@@ -37,7 +37,7 @@ impl Notifications {
         let invoked = proxy.receive_signal("ActionInvoked")?;
         let closed = proxy.receive_signal("NotificationClosed")?;
         std::thread::Builder::new()
-            .name("quickscope-notify-closed".into())
+            .name("quikscope-notify-closed".into())
             .spawn({
                 let pending = pending.clone();
                 move || {
@@ -49,7 +49,7 @@ impl Notifications {
                 }
             })?;
         std::thread::Builder::new()
-            .name("quickscope-notify".into())
+            .name("quikscope-notify".into())
             .spawn(move || {
                 for msg in invoked {
                     let Ok((id, key)) = msg.body().deserialize::<(u32, String)>() else {
@@ -82,7 +82,7 @@ impl Notifier for Notifications {
             .build()?;
         let mut hints: HashMap<&str, Value> = HashMap::new();
         hints.insert("image-data", Value::Structure(image_data));
-        hints.insert("desktop-entry", Value::from("quickscope"));
+        hints.insert("desktop-entry", Value::from("quikscope"));
         hints.insert("transient", Value::from(true));
         let actions = [DEFAULT_ACTION, "Open in editor", EDIT_ACTION, "Edit"];
         let reply = self.conn.call_method(
@@ -91,7 +91,7 @@ impl Notifier for Notifications {
             Some(DEST),
             "Notify",
             &(
-                "quickscope",
+                "quikscope",
                 0u32,
                 "camera-photo",
                 "Screenshot captured",
@@ -115,7 +115,7 @@ impl Notifier for Notifications {
             Some(DEST),
             "Notify",
             &(
-                "quickscope",
+                "quikscope",
                 0u32,
                 "camera-photo",
                 summary,

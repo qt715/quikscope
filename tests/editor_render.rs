@@ -15,10 +15,10 @@ mod scene;
 use std::sync::Arc;
 
 use gpui::{AppContext as _, HeadlessAppContext, px, size};
-use quickscope::document::Document;
-use quickscope::raster::Image;
-use quickscope::ui::editor::Editor;
-use quickscope::ui::{Assets, Shot};
+use quikscope::document::Document;
+use quikscope::raster::Image;
+use quikscope::ui::editor::Editor;
+use quikscope::ui::{Assets, Shot};
 
 fn context() -> HeadlessAppContext {
     let text = gpui_platform::current_platform(true).text_system();
@@ -27,7 +27,7 @@ fn context() -> HeadlessAppContext {
         Arc::new(Assets),
         gpui_platform::current_headless_renderer,
     );
-    cx.update(quickscope::ui::init);
+    cx.update(quikscope::ui::init);
     cx
 }
 
@@ -78,7 +78,7 @@ fn render_editor(doc: Document, w: f32, h: f32) -> Rendered {
 #[test]
 fn editor_canvas_matches_the_exported_png() {
     let doc = scene::document();
-    let exported = quickscope::export::render(&doc.snapshot());
+    let exported = quikscope::export::render(&doc.snapshot());
     let Rendered {
         screenshot: shot,
         origin: (ox, oy),
@@ -110,14 +110,14 @@ fn editor_canvas_matches_the_exported_png() {
         let dir = std::env::temp_dir();
         on_screen
             .save_png(
-                &dir.join("quickscope-parity-gpu.png"),
-                quickscope::raster::Compression::Fast,
+                &dir.join("quikscope-parity-gpu.png"),
+                quikscope::raster::Compression::Fast,
             )
             .unwrap();
         exported
             .save_png(
-                &dir.join("quickscope-parity-cpu.png"),
-                quickscope::raster::Compression::Fast,
+                &dir.join("quikscope-parity-cpu.png"),
+                quikscope::raster::Compression::Fast,
             )
             .unwrap();
         panic!(

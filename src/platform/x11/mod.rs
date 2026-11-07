@@ -97,7 +97,7 @@ impl ScreenCapture {
         let (jobs, requests) = mpsc::channel::<Job>();
         let (ready, started) = mpsc::sync_channel(1);
         std::thread::Builder::new()
-            .name("quickscope-x11-capture".into())
+            .name("quikscope-x11-capture".into())
             .spawn(move || {
                 let mut worker = match Worker::connect(shm) {
                     Ok(w) => {

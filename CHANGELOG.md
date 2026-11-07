@@ -19,7 +19,7 @@ First release.
 - Windows 10/11: resident DXGI capture with GDI fallback, per-monitor-v2 DPI,
   DWM window snapping, delayed PNG/DIB clipboard, tray menu, configurable
   global hotkeys, clickable shell notifications and per-user `autostart`.
-- `QUICKSCOPE_BACKEND=wlroots|portal|x11` forces a Linux backend.
+- `QUIKSCOPE_BACKEND=wlroots|portal|x11` forces a Linux backend.
 
 ### Capture and daemon
 
@@ -38,7 +38,7 @@ First release.
 - With native wlroots capture, selection overlays are created while the
   capture runs.
 - Desktop notification with a thumbnail whose click opens the editor;
-  `quickscope notifications on|off|toggle|status` switches them at runtime
+  `quikscope notifications on|off|toggle|status` switches them at runtime
   and saves the change to the config file.
 - `open-last` (with the tool used last) and `open <file>`; annotations
   survive closing the editor. The last-capture cache has a single ordered

@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=quickscope
+Name=quikscope
 GenericName=Screenshot annotator
-Comment=Open the last screenshot in the quickscope editor
-Exec=quickscope open-last
+Comment=Open the last screenshot in the quikscope editor
+Exec=quikscope open-last
 Icon=camera-photo
 Terminal=false
 Categories=Graphics;Utility;
@@ -13,8 +13,8 @@ Actions=region;screen;
 
 [Desktop Action region]
 Name=Capture a region
-Exec=quickscope capture region
+Exec=quikscope capture region
 
 [Desktop Action screen]
 Name=Capture all screens
-Exec=quickscope capture screen
+Exec=quikscope capture screen

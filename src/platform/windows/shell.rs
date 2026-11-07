@@ -83,7 +83,7 @@ pub fn spawn(events: EventSink, hotkeys: &Hotkeys) -> Result<Arc<Shell>> {
     let (commands, receive) = mpsc::channel();
     let (ready, started) = mpsc::sync_channel(1);
     let thread = thread::Builder::new()
-        .name("quickscope-win32".into())
+        .name("quikscope-win32".into())
         .spawn(move || {
             // All Win32 resources, including cleanup on failed initialization, stay
             // on this thread. The box pins the address stored in GWLP_USERDATA.
@@ -224,7 +224,7 @@ unsafe fn run(
     bindings: Vec<(i32, u32, u32, String)>,
     ready: &mpsc::SyncSender<std::result::Result<usize, String>>,
 ) -> Result<()> {
-    let name: Vec<u16> = "quickscope-shell".encode_utf16().chain(Some(0)).collect();
+    let name: Vec<u16> = "quikscope-shell".encode_utf16().chain(Some(0)).collect();
     let instance = HINSTANCE(unsafe { GetModuleHandleW(None)? }.0);
     let class = WNDCLASSW {
         lpfnWndProc: Some(window_proc),
@@ -262,7 +262,7 @@ unsafe fn run(
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             PCWSTR(class.name.as_ptr()),
-            w!("quickscope"),
+            w!("quikscope"),
             WS_OVERLAPPED,
             0,
             0,
@@ -361,7 +361,7 @@ impl State {
         data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         data.uCallbackMessage = TRAY;
         data.hIcon = self.icon.get();
-        wide_copy(&mut data.szTip, "quickscope");
+        wide_copy(&mut data.szTip, "quikscope");
         unsafe { Shell_NotifyIconW(NIM_ADD, &data).ok() }.context("adding tray icon")?;
         self.tray_present.set(true);
         Ok(())

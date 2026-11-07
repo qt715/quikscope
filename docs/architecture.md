@@ -1,14 +1,14 @@
 # Architecture
 
-One binary, two roles: a thin **client** (`quickscope capture …`) that sends one
-line over a Unix socket, and a resident **daemon** (`quickscope daemon`) that does
+One binary, two roles: a thin **client** (`quikscope capture …`) that sends one
+line over a Unix socket, and a resident **daemon** (`quikscope daemon`) that does
 the work. Keeping the daemon alive is the main latency win: the Wayland
 connections, bound globals, shared-memory buffers, GPU device and shader
 pipelines all exist before the keybind is pressed.
 
 ```mermaid
 flowchart LR
-    key[keybind] --> client[quickscope client]
+    key[keybind] --> client[quikscope client]
     client -- "capture region\n(Unix socket)" --> ipc[IPC thread]
     ipc --> main[GPUI main thread]
     main -- job --> cap[capture thread\nwlr-screencopy]
@@ -31,11 +31,11 @@ and synchronized overlay teardown.
 | Thread | Owns | Notes |
 | --- | --- | --- |
 | GPUI main | windows, shots, documents | UI state; short atomic config edits and teardown barriers; capture/encoding stay on workers. |
-| `quickscope-ipc` | the listening socket | One short-lived thread per connection, so an interactive selection never blocks `open-last` or `ping`. |
-| `quickscope-capture` | its own Wayland connection, outputs, `wl_shm` buffers | Captures every requested output concurrently; buffers are reused while an output's mode is unchanged. Waits are bounded (3 s) so a wedged compositor cannot hang it. |
-| `quickscope-clipboard` | a second Wayland connection, the data-control selection | Claims the selection immediately; a paste blocks only until the background PNG encoder finishes. |
-| `quickscope-notify` | D-Bus signal subscriptions | Maps notification ids to shots; a click opens the editor. |
-| `quickscope-ocr-<lang>` | one Tesseract instance (`libtesseract`, opened with `dlopen`) | One thread per language model; the primary stays loaded, others unload after 2 idle minutes. See [text extraction](text-extraction.md). |
+| `quikscope-ipc` | the listening socket | One short-lived thread per connection, so an interactive selection never blocks `open-last` or `ping`. |
+| `quikscope-capture` | its own Wayland connection, outputs, `wl_shm` buffers | Captures every requested output concurrently; buffers are reused while an output's mode is unchanged. Waits are bounded (3 s) so a wedged compositor cannot hang it. |
+| `quikscope-clipboard` | a second Wayland connection, the data-control selection | Claims the selection immediately; a paste blocks only until the background PNG encoder finishes. |
+| `quikscope-notify` | D-Bus signal subscriptions | Maps notification ids to shots; a click opens the editor. |
+| `quikscope-ocr-<lang>` | one Tesseract instance (`libtesseract`, opened with `dlopen`) | One thread per language model; the primary stays loaded, others unload after 2 idle minutes. See [text extraction](text-extraction.md). |
 | GPUI background pool | PNG encoding, tile building, composition, export | |
 
 The capture and clipboard threads use their own connections rather than
@@ -74,7 +74,7 @@ There is no X11 GPU prewarm window because it could flash on the desktop.
 ### Screenshot portal
 
 On Wayland, native screencopy is attempted first; if it is unavailable, use
-the Screenshot portal. `QUICKSCOPE_BACKEND=portal|wlroots` forces the choice.
+the Screenshot portal. `QUIKSCOPE_BACKEND=portal|wlroots` forces the choice.
 Both the session-bus connection and a separate Wayland output-layout
 connection are kept alive. A Request/Response subscription is installed
 before `Screenshot("", {interactive: false, handle_token: …})`; filtering
@@ -104,7 +104,7 @@ limitation, not a silent crop of the first output.
 Compositor animations and fullscreen focus policy cannot be overridden.
 Esc/Enter use the same selection handlers as native capture. No GPU
 prewarm window is opened on the fullscreen path, avoiding a visible flash.
-`QUICKSCOPE_DEBUG_NO_LAYER_SHELL=1` forces this path for diagnostics/tests.
+`QUIKSCOPE_DEBUG_NO_LAYER_SHELL=1` forces this path for diagnostics/tests.
 Screen/geometry capture still covers every output, independent of overlay
 placement.
 
@@ -135,7 +135,7 @@ See the [Screenshot portal specification][portal-screenshot] for its
 permission and cursor limitations.
 
 
-GPUI's executable manifest requests per-monitor-v2 DPI awareness; quickscope
+GPUI's executable manifest requests per-monitor-v2 DPI awareness; quikscope
 verifies it (and sets it if absent) before creating any HWND. Its
 snapshot coordinate unit is a physical desktop pixel (scale = 1), preserving
 the virtual desktop lattice at mixed DPI, including negative origins.
@@ -301,7 +301,7 @@ swapped, so there is no conversion pass in either direction.
 ## Persistence
 
 - The latest capture is written uncompressed to
-  `$XDG_CACHE_HOME/quickscope/last.raw` (20-byte header + BGRA) in the
+  `$XDG_CACHE_HOME/quikscope/last.raw` (20-byte header + BGRA) in the
   background; `open-last` after a daemon restart reads it in one `read`
   without decoding. Without it, the newest image in the screenshots folder
   is opened.
