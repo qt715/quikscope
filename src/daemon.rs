@@ -142,8 +142,9 @@ pub fn run(socket: PathBuf) -> Result<()> {
                 next_id: 1,
                 selecting: false,
             });
-            if let Some(options) = prewarm {
-                prewarm_gpu(options, cx);
+            match prewarm {
+                Some(options) => prewarm_gpu(options, cx),
+                None => log::debug!("GPU prewarm skipped: no invisible surface on this backend"),
             }
             cx.on_action::<OpenSettings>(|_, cx| {
                 if let Err(error) = open_settings(false, cx) {

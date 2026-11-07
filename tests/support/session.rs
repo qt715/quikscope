@@ -437,6 +437,10 @@ impl Session {
         cmd.arg("daemon").stdout(Stdio::null()).stderr(log);
         self.daemon = Some(cmd.spawn().unwrap());
         self.wait_log("daemon ready", Duration::from_secs(20));
+        // The prewarm compiles shader pipelines on the main thread, which takes
+        // seconds under software Vulkan; a window opened meanwhile receives
+        // keyboard focus only after it, and input sent earlier is lost.
+        self.wait_log("GPU prewarm", Duration::from_secs(30));
     }
 
     pub fn daemon_log(&self) -> String {
