@@ -221,6 +221,13 @@ foreground window, `Shift+PrintScreen` = open last. Configure or disable them
 in [`[hotkeys]`](docs/configuration.md); Windows or another application can
 reserve a shortcut, in which case startup logs the registration error.
 
+If Windows opens Snipping Tool instead, turn off **Settings → Accessibility →
+Keyboard → Use the Print screen key to open screen capture**, then restart
+quickscope (Windows may also require refreshing Explorer or signing in again).
+Windows 11 enables this setting by default. quickscope logs a startup warning
+and shows one notification when it is enabled; Settings also shows the remedy
+beside the Windows hotkeys. quickscope does not change that Windows setting.
+
 Configuration is `%APPDATA%\quickscope\config.toml`, cache/log/IPC live in
 `%LOCALAPPDATA%\quickscope`, and saves use the Windows Pictures known folder
 plus `Screenshots` (including redirected Pictures folders). Clipboard images

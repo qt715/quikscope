@@ -59,18 +59,32 @@ GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
 The Wayland-only `e2e` feature is not enabled by Windows CI.
 
 Native verification on a Windows 11 virtual machine at 2560×1440 / 96 DPI passed release build, warning-denying Clippy
-and 154 tests (one interactive benchmark ignored). Screen capture matched a
+and 161 tests (one interactive benchmark ignored). Screen capture matched a
 GDI reference visually, and the PowerShell STA clipboard bitmap matched the
 saved PNG exactly. A real 600×400 drag saved exactly 600×400 in frozen and live
 modes: repainting a red reference window blue during selection preserved red
 when frozen and captured clean blue when live. Escape cancelled both modes.
 This does not verify mixed-DPI or multiple-monitor operation.
 
-Notifications were visible, but notification activation, editor drawing/save,
-PrintScreen and per-method latency still need interactive acceptance. The
-native log also contains GPUI `RefCell already borrowed` / window-handle
-errors around overlay lifecycle; passing capture checks does not establish
-that those diagnostics are harmless.
+Notification activation opened the editor; a real rectangle drag and Ctrl+S
+saved the annotated 2560×1440 image into Pictures\\Screenshots. The tray
+Settings entry opened the native settings window. Physical PrintScreen
+opened quickscope's overlay after disabling Windows' competing keyboard
+setting and refreshing Explorer; the original absent registry override was
+restored afterward. Startup with the Windows 11 default emitted the warning
+and displayed its notification. See the [Windows setup note](../README.md#windows-1011).
+
+Native overlay activation and teardown must occur outside GPUI App borrows.
+Live captures also flush composition before removing their GPUI windows.
+After these fixes, repeated frozen/live drags and cancellation produced no
+`RefCell already borrowed` or window-not-found lifecycle errors.
+
+The ignored benchmark passed in an interactive session at 2560×1440: GDI
+median/p95 **33.620/36.249 ms**, DXGI-requested **0.032/0.086 ms** (100 warm
+captures after ten warmups). The desktop was static, so the DXGI path can
+reuse its cached desktop; these are not fresh-frame or changing-screen
+latencies. The benchmark permits GDI fallback and does not independently
+prove duplication provenance.
 
 Interactive verification must use a private Windows VM desktop, never a
 non-interactive service session or another user's live desktop. Check the tray,
