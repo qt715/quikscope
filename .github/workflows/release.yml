@@ -1,0 +1,175 @@
+name: Packages
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: scripts/ci-deps-ubuntu.sh
+      - run: sudo apt-get install -y rpm dpkg-dev python3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.4
+      - run: cargo install cargo-about --locked --version 0.8.4
+      - run: packaging/licenses.sh
+      - name: Build once for both Linux formats
+        run: cargo build --frozen --release --bin quikscope
+      - run: packaging/linux.sh
+      - name: Release source archive and AUR-ready recipe
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo 'Tag does not match Cargo.toml version' >&2; exit 1
+          fi
+          mkdir -p "dist/source/quikscope-$version"
+          git archive HEAD | tar -x -C "dist/source/quikscope-$version"
+          cp THIRD-PARTY-LICENSES.html "dist/source/quikscope-$version/"
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C dist/source -czf "dist/quikscope-$version-source.tar.gz" "quikscope-$version"
+          cp packaging/arch/PKGBUILD dist/PKGBUILD
+          checksum=$(sha256sum "dist/quikscope-$version-source.tar.gz" | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('$checksum')/; s/^pkgver=.*/pkgver=$version/" dist/PKGBUILD
+          rm -rf dist/source
+      - name: Generate SRCINFO and check recipe
+        run: |
+          docker run --rm -v "$PWD/dist:/work" archlinux:latest bash -ec '
+            pacman -Syu --noconfirm --needed base-devel namcap
+            useradd -m builder
+            chown -R builder:builder /work
+            cd /work
+            runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
+            namcap PKGBUILD
+          '
+      - name: Install and capture in Debian, Ubuntu and Fedora containers
+        run: packaging/containers.sh
+      - name: Reclaim packaged native build space before Arch
+        run: rm -rf target
+      - name: Build, test, lint and install Arch source package
+        run: packaging/arch-container.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quikscope-linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*-source.tar.gz
+            dist/PKGBUILD
+            dist/.SRCINFO
+          include-hidden-files: true
+          if-no-files-found: error
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo install cargo-about --locked --version 0.8.4
+      - name: Generate licence report
+        shell: bash
+        run: packaging/licenses.sh
+      - name: Build native executable and record Cargo's output path
+        id: native
+        shell: pwsh
+        env:
+          # setup-rust-toolchain exports RUSTFLAGS, overriding target config.
+          RUSTFLAGS: -D warnings -C target-feature=+crt-static
+        run: |
+          $messages = Join-Path $env:RUNNER_TEMP 'quikscope-build.jsonl'
+          cargo build --frozen --release --target x86_64-pc-windows-msvc --bin quikscope --message-format=json-render-diagnostics | Set-Content -Path $messages -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $artifacts = @(Get-Content $messages | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'quikscope' -and $_.executable })
+          if ($artifacts.Count -ne 1) { throw 'Cargo did not report exactly one quikscope executable' }
+          $binary = (Resolve-Path -LiteralPath $artifacts[0].executable).Path
+          "binary=$binary" >> $env:GITHUB_OUTPUT
+      - name: Assert the executable needs no Visual C++ runtime DLLs
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (!$dumpbin) { throw 'Cannot find MSVC dumpbin for the runtime import audit' }
+          $imports = & $dumpbin /nologo /imports '${{ steps.native.outputs.binary }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $runtime = @($imports | Where-Object { $_ -match '^\s*(VCRUNTIME\S*|MSVCP\S*|api-ms-win-crt-\S*)\.dll\s*$' })
+          if ($runtime.Count) { throw "Unexpected runtime DLL imports: $($runtime -join ', ')" }
+          Write-Output 'PASS: no VCRUNTIME, MSVCP or api-ms-win-crt DLL imports'
+      - run: choco install nsis --no-progress -y
+      - name: Build per-user installer
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /WX "/DVERSION=$version" "/DSOURCE=$pwd" "/DBINARY=${{ steps.native.outputs.binary }}" packaging/windows/installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quikscope-windows
+          path: dist/*-installer.exe
+          if-no-files-found: error
+  macos:
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.3'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: cargo install cargo-about --locked --version 0.8.4
+      - run: packaging/licenses.sh
+      - name: Check macOS packaging prerequisites
+        run: |
+          test -f packaging/macos/Info.plist
+          test -x packaging/macos/assemble-app.sh
+          test -f assets/branding/quikscope.icns
+      - run: cargo build --frozen --release --target aarch64-apple-darwin --bin quikscope
+      - run: cargo build --frozen --release --target x86_64-apple-darwin --bin quikscope
+      - name: Assemble universal app and unsigned disk image
+        run: |
+          mkdir -p dist/dmg
+          lipo -create target/aarch64-apple-darwin/release/quikscope target/x86_64-apple-darwin/release/quikscope -output dist/quikscope
+          packaging/macos/assemble-app.sh dist/quikscope dist/dmg/quikscope.app
+          ln -s /Applications dist/dmg/Applications
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          hdiutil create -volname quikscope -srcfolder dist/dmg -ov -format UDZO "dist/quikscope-$version-macos-universal.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quikscope-macos
+          path: dist/*.dmg
+          if-no-files-found: error
+  publish:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: quikscope-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and changelog notes
+        run: |
+          cd dist
+          sha256sum *.deb *.rpm *.exe *.dmg *-source.tar.gz PKGBUILD .SRCINFO > SHA256SUMS
+          cd ..
+          python3 packaging/release-notes.py > dist/RELEASE-NOTES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quikscope-release
+          path: dist/
+          include-hidden-files: true
+      - name: Draft tagged release (dispatch never publishes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "quikscope $GITHUB_REF_NAME" --notes-file dist/RELEASE-NOTES.txt dist/*.deb dist/*.rpm dist/*.exe dist/*.dmg dist/*-source.tar.gz dist/PKGBUILD dist/.SRCINFO dist/SHA256SUMS
