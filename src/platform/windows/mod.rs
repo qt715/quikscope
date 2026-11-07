@@ -141,9 +141,19 @@ pub fn focus_overlay(window: &gpui::Window, physical: crate::geom::IRect) {
                 DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
             };
             use windows::Win32::UI::WindowsAndMessaging::{
-                HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos,
+                GWL_STYLE, GetWindowLongW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos,
             };
             let hwnd = HWND(handle.hwnd.get() as *mut _);
+            // GPUI's transparent titlebar still keeps WS_THICKFRAME, leaving
+            // invisible resize borders inside these monitor-sized bounds.
+            // Remove the non-client frame before sizing so the viewport and
+            // physical capture lattice agree exactly.
+            SetWindowLongW(
+                hwnd,
+                GWL_STYLE,
+                overlay_style(GetWindowLongW(hwnd, GWL_STYLE)),
+            );
             let disabled = 1i32;
             for attribute in [
                 DWMWA_TRANSITIONS_FORCEDISABLED,
@@ -159,11 +169,18 @@ pub fn focus_overlay(window: &gpui::Window, physical: crate::geom::IRect) {
                 physical.y,
                 physical.w,
                 physical.h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
             let _ = SetForegroundWindow(hwnd);
         }
     }
+}
+
+fn overlay_style(style: i32) -> i32 {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    };
+    style & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX).0 as i32
 }
 
 /// Per-user login startup. No elevation, scheduler task or machine-wide key.
@@ -231,5 +248,25 @@ pub fn autostart(action: &str) -> Result<bool> {
         }
         result.ok()?;
         Ok(size > 2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overlay_style;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_CAPTION, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+        WS_VISIBLE,
+    };
+
+    #[test]
+    fn overlay_has_no_nonclient_frame_and_preserves_other_styles() {
+        let frame = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX;
+        let retained = WS_VISIBLE | WS_CLIPCHILDREN;
+        assert_eq!(
+            overlay_style((frame | retained).0 as i32),
+            retained.0 as i32
+        );
+        assert_eq!(overlay_style(retained.0 as i32), retained.0 as i32);
     }
 }
