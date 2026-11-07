@@ -290,6 +290,8 @@ and capture effects add unmeasured latency; these are not GNOME/KDE numbers.
 test suite with Mesa lavapipe, Noto fonts and Tesseract on Ubuntu, an MSRV
 check, the Wayland e2e suite in an Arch Linux container with labwc and
 Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, a Windows
-build with clippy and the non-GPU tests, and release builds for Linux
-(`quikscope-x86_64-linux.tar.gz`) and Windows (`quikscope-x86_64-windows.zip`)
-that are attached to `v*` tags.
+build with clippy and the non-GPU tests, and dependency licence/advisory checks.
+The separate `.github/workflows/release.yml` builds native `.deb`, `.rpm`,
+Arch source recipes and a Windows NSIS installer, with macOS `.dmg` packaging
+gated until the backend is ready. Dispatch uploads artifacts without publishing;
+`v*` tags create a draft release. See [package verification and release procedure](../packaging/README.md).

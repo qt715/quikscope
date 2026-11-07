@@ -43,18 +43,57 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
 
 ## Install
 
-Build with Rust ≥ 1.95. On Linux, see [Desktops](#desktops) for what each
-desktop needs; on Windows, see [Windows 10/11](#windows-1011);
-on macOS, see [macOS](#macos).
+Download packages from [GitHub Releases](https://github.com/qt715/quikscope/releases).
+Packages include the complete third-party licence report and bundled asset licences.
+
+### Linux packages
+
+Linux x86_64 builds target Ubuntu 24.04's glibc baseline (2.39); use a source
+build on older distributions. Install a `.deb` with `sudo apt install ./quikscope_*_amd64.deb`
+or an `.rpm` with `sudo dnf install ./quikscope-*.x86_64.rpm`.
+On openSUSE use `sudo zypper install ./quikscope-*.x86_64.rpm`.
+The packages install the desktop launcher, hicolor icons and a systemd user unit:
+
+```sh
+systemctl --user enable --now quikscope.service # optional login startup
+```
+
+Arch users can download the release `PKGBUILD` and `.SRCINFO`, inspect them,
+then run `makepkg -si`. This recipe is AUR-ready, not a claim of an AUR listing.
+See [Desktops](#desktops) for compositor requirements. OCR and a portal backend
+are optional; a working Vulkan driver is needed for the editor.
+
+### Windows installer
+
+Run `quikscope-<version>-windows-x86_64-installer.exe`. It installs for the current
+user under `%LOCALAPPDATA%\Programs\quikscope`, without administrator access,
+and offers optional **Start at login**. Start quikscope from the Start menu.
+Re-running the installer upgrades in place; remove it through Installed Apps.
+User settings and saved screenshots are retained on uninstall; app cache files are removed.
+
+The installer is unsigned. SmartScreen may warn; only proceed with **More info →
+Run anyway** after checking the download source and published SHA-256 checksum.
+See [Windows 10/11](#windows-1011) for usage and optional OCR setup.
+
+### macOS disk image
+
+Open `quikscope-<version>-macos-universal.dmg` and drag the app to Applications.
+The bundle supports Apple Silicon and Intel. It is ad-hoc signed, not
+Developer ID signed or notarized: right-click it in Finder and choose
+**Open**, or remove quarantine from the trusted installed app with
+`xattr -d com.apple.quarantine /Applications/quikscope.app`.
+
+### Build from source
+
+Build with Rust ≥ 1.95 and the platform development dependencies described below:
 
 ```sh
 cargo install --locked --path .
-# optional: start the daemon with the graphical session
-install -Dm644 packaging/quikscope.service ~/.config/systemd/user/quikscope.service
-systemctl --user enable --now quikscope.service
-# optional: launcher entry ("Open last screenshot") and notification icon
-install -Dm644 packaging/quikscope.desktop ~/.local/share/applications/quikscope.desktop
 ```
+
+The packaged service uses `/usr/bin/quikscope`. For a Cargo installation, copy
+it to `~/.config/systemd/user/quikscope.service` and change `ExecStart` to the
+absolute path of your Cargo-installed executable before enabling it.
 
 The daemon is optional at login: any `quikscope` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
