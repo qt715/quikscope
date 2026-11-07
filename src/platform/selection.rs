@@ -82,8 +82,9 @@ impl SelectionBarrier {
         }
     }
 
-    /// Call on the UI thread while App (and its display) is alive, after GPUI
-    /// has dropped the windows, not just marked them removed.
+    /// Call on the UI thread while App (and its display) is alive. Wayland/X11
+    /// wait after GPUI has dropped the windows; Windows hides and flushes before
+    /// GPUI removal, outside an App borrow, so native callbacks remain valid.
     pub(crate) fn wait(self) -> Result<()> {
         match self {
             #[cfg(target_os = "linux")]
@@ -139,9 +140,9 @@ impl SelectionBarrier {
             #[cfg(windows)]
             Self::Windows(handles) => {
                 use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SW_HIDE, ShowWindow};
-                // GPUI queues ShowWindowAsync/DestroyWindow from Drop. Explicitly
-                // hide on the owning UI thread before flushing DWM; a deferred
-                // destroy task need not run before this capture to keep it clean.
+                // Hide/flush before GPUI removes the windows: DwmFlush can
+                // dispatch frame callbacks. Native destruction can remain
+                // deferred after this barrier without contaminating capture.
                 for hwnd in handles {
                     unsafe {
                         if IsWindow(hwnd).as_bool() {

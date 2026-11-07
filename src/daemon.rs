@@ -744,13 +744,21 @@ async fn select_region(
     let rect = done.await.ok().flatten();
     #[cfg(target_os = "linux")]
     drop(selection_focus);
-    end_selection_windows(overlays, cx).await;
+    #[cfg(windows)]
     if let Some(barrier) = barrier {
-        #[cfg(windows)]
+        // DwmFlush can dispatch queued GPUI frame callbacks. The windows must
+        // remain registered until native hiding/composition has completed.
         barrier.wait()?;
-        #[cfg(not(windows))]
+    }
+    end_selection_windows(overlays, cx).await;
+    #[cfg(not(windows))]
+    if let Some(barrier) = barrier {
         cx.update(|_| barrier.wait())?;
     } else {
+        daemon(cx, |d, _| d.selecting = false);
+    }
+    #[cfg(windows)]
+    if !live {
         daemon(cx, |d, _| d.selecting = false);
     }
     Ok(rect.filter(|r| !r.is_empty()))
