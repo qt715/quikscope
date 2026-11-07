@@ -326,9 +326,27 @@ impl Session {
             bus,
             notifications: log,
         };
+        session.hold_pointer();
         before_pattern(&session);
         session.start_pattern();
         Some(session)
+    }
+
+    /// Keeps a virtual pointer for the whole session, so the seat's pointer
+    /// capability never toggles when helper commands add and remove theirs.
+    fn hold_pointer(&mut self) {
+        let mut cmd = Command::new(HELPER);
+        cmd.arg("hold-pointer").stdout(Stdio::piped());
+        let mut child = spawn_quiet(cmd, &self.env, None);
+        let mut buf = [0u8; 6];
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_exact(&mut buf)
+            .expect("pointer helper starts");
+        assert_eq!(&buf, b"ready\n");
+        self.children.push(child);
     }
 
     fn start_pattern(&mut self) {

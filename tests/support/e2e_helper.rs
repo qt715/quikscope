@@ -442,6 +442,24 @@ fn main() {
             kb.destroy();
             queue.roundtrip(&mut state).unwrap();
         }
+        "hold-pointer" => {
+            // The seat's pointer capability exists only while some pointer
+            // does. Without one held for the whole session, every helper
+            // click would toggle wl_seat.capabilities, and GPUI re-creates
+            // its wl_keyboard and wl_pointer on each toggle, dropping input
+            // that is in flight to the released objects.
+            let mgr: zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1 =
+                globals.bind(&qh, 1..=2, ()).expect("virtual pointer");
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).expect("seat");
+            let _ptr = mgr.create_virtual_pointer(Some(&seat), &qh, ());
+            queue.roundtrip(&mut state).unwrap();
+            println!("ready");
+            std::io::stdout().flush().unwrap();
+            // Held until the session kills this process (its stdin is null).
+            loop {
+                queue.blocking_dispatch(&mut state).unwrap();
+            }
+        }
         "ime" => run_ime(&globals, &mut queue, &mut state),
         "pattern" => run_pattern(
             &globals,
