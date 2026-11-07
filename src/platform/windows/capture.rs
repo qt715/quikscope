@@ -627,7 +627,13 @@ mod tests {
             let image = copy_bgra(&bytes, 8, 2, 3, rotation);
             assert_eq!((image.width, image.height), dimensions);
             assert_eq!(
-                image.data.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+                image
+                    .data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|p| p[0])
+                    .collect::<Vec<_>>(),
                 expected
             );
         }

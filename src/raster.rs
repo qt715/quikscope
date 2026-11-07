@@ -271,7 +271,10 @@ impl Image {
                 let avg = acc.map(|v| (v / n) as u8);
                 for y in by..by + bh {
                     let start = (y as usize * self.width as usize + bx as usize) * 4;
-                    for px in out.data[start..start + bw as usize * 4].chunks_exact_mut(4) {
+                    for px in out.data[start..start + bw as usize * 4]
+                        .as_chunks_mut::<4>()
+                        .0
+                    {
                         px.copy_from_slice(&avg);
                     }
                 }
@@ -330,20 +333,20 @@ impl Image {
     }
 
     pub fn is_opaque(&self) -> bool {
-        self.data.chunks_exact(4).all(|px| px[3] == 255)
+        self.data.as_chunks::<4>().0.iter().all(|px| px[3] == 255)
     }
 
     /// Straight-alpha RGBA copy (for D-Bus image hints and `image` interop).
     pub fn to_rgba(&self) -> Vec<u8> {
         let mut out = self.data.clone();
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
         out
     }
 
     pub fn from_rgba(width: u32, height: u32, mut rgba: Vec<u8>) -> Result<Image> {
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
         Image::from_bgra(width, height, rgba)
@@ -383,7 +386,7 @@ impl Image {
         for y in 0..self.height {
             for (dst, src) in row
                 .chunks_exact_mut(channels)
-                .zip(self.row(y).chunks_exact(4))
+                .zip(self.row(y).as_chunks::<4>().0)
             {
                 dst[0] = src[2];
                 dst[1] = src[1];
@@ -517,8 +520,8 @@ mod tests {
 
     fn numbered(w: u32, h: u32) -> Image {
         let mut img = Image::new(w, h);
-        for (i, px) in img.data.chunks_exact_mut(4).enumerate() {
-            px.copy_from_slice(&[i as u8, (i >> 8) as u8, 7, 255]);
+        for (i, px) in img.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *px = [i as u8, (i >> 8) as u8, 7, 255];
         }
         img
     }
@@ -580,7 +583,13 @@ mod tests {
         let img = Image::filled(3, 3, [10, 20, 30, 255]);
         let r = img.resize(7, 5);
         assert_eq!((r.width, r.height), (7, 5));
-        assert!(r.data.chunks_exact(4).all(|p| p == [10, 20, 30, 255]));
+        assert!(
+            r.data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [10, 20, 30, 255])
+        );
     }
 
     #[test]

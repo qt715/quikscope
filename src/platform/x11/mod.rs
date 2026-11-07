@@ -386,7 +386,7 @@ impl PixelFormat {
             && (self.red, self.green, self.blue) == (0xff0000, 0xff00, 0xff)
         {
             let mut data = bytes[..stride * height as usize].to_vec();
-            for pixel in data.chunks_exact_mut(4) {
+            for pixel in data.as_chunks_mut::<4>().0 {
                 pixel[3] = 255;
             }
             return Ok(Image {
@@ -405,7 +405,7 @@ impl PixelFormat {
             for (src, dst) in src
                 .chunks_exact(bpp)
                 .take(width as usize)
-                .zip(dst.chunks_exact_mut(4))
+                .zip(dst.as_chunks_mut::<4>().0)
             {
                 let mut pixel = 0u32;
                 for (index, byte) in src.iter().enumerate() {

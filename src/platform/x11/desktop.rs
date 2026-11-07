@@ -217,7 +217,9 @@ impl Desktop for Ewmh {
         // reply so reversing the stack needs no intermediate window-ID vector.
         let clients = clients
             .value
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|bytes| u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
         topmost_windows(clients, |window| {
             if !self.visible(&conn, window, current) {

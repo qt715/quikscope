@@ -177,7 +177,13 @@ pub fn diff(a: &Image, b: &Image, tolerance: u8) -> (usize, f64) {
     );
     let mut over = 0;
     let mut total: u64 = 0;
-    for (pa, pb) in a.data.chunks_exact(4).zip(b.data.chunks_exact(4)) {
+    for (pa, pb) in a
+        .data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.data.as_chunks::<4>().0)
+    {
         let d = pa
             .iter()
             .zip(pb)

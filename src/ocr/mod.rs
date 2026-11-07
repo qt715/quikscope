@@ -101,7 +101,7 @@ pub fn prepare(image: &Image, region: IRect, upscale: u32) -> Gray {
     let mut luma = Vec::with_capacity(w * h);
     for y in r.y..r.bottom() {
         let row = &image.row(y as u32)[r.x as usize * 4..r.right() as usize * 4];
-        for p in row.chunks_exact(4) {
+        for p in row.as_chunks::<4>().0 {
             // BGRA, Rec. 601 weights in fixed point.
             luma.push(((p[2] as u32 * 77 + p[1] as u32 * 150 + p[0] as u32 * 29) >> 8) as u8);
         }

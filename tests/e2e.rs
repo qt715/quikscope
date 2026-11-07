@@ -792,7 +792,14 @@ fn editor_draws_copies_saves_and_undo_reaches_disk() {
     let img = decode_png(saved);
     assert_eq!((img.width, img.height), (OUTPUT_W, OUTPUT_H));
     let red = [0x31, 0x31, 0xe0, 0xff];
-    let red_pixels = |img: &Image| img.data.chunks_exact(4).filter(|p| *p == red).count();
+    let red_pixels = |img: &Image| {
+        img.data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| **p == red)
+            .count()
+    };
     let with_both = red_pixels(&img);
     assert!(
         with_both > 600,
@@ -1165,8 +1172,10 @@ fn input_method_composes_and_commits_into_editor_text() {
         let during = shot("during.png");
         let changed = before
             .data
-            .chunks_exact(4)
-            .zip(during.data.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(during.data.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count();
         assert!(changed > 300, "pre-edit drawn: {changed} pixels changed");
@@ -1197,9 +1206,11 @@ fn input_method_composes_and_commits_into_editor_text() {
     let red = [0x31, 0x31, 0xe0, 0xff];
     let xs: Vec<u32> = img
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
-        .filter(|(_, p)| *p == red)
+        .filter(|(_, p)| **p == red)
         .map(|(i, _)| i as u32 % img.width)
         .collect();
     assert!(!xs.is_empty(), "no text in the saved image");
@@ -1253,7 +1264,14 @@ fn open_last_keeps_the_last_used_tool() {
     // the same drag is diagonal and never fills 150 px of one row.
     let red = [0x31, 0x31, 0xe0, 0xff];
     let longest_row = (0..img.height)
-        .map(|y| img.row(y).chunks_exact(4).filter(|p| *p == red).count())
+        .map(|y| {
+            img.row(y)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| **p == red)
+                .count()
+        })
         .max()
         .unwrap();
     assert!(

@@ -398,26 +398,31 @@ fn convert(src: &[u8], spec: BufferSpec) -> Result<Image> {
     let mut data = vec![0u8; w * h * 4];
     for (y, dst_row) in data.chunks_exact_mut(w * 4).enumerate() {
         let src_row = &src[y * stride..y * stride + w * 4];
+        let pixels = dst_row
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src_row.as_chunks::<4>().0);
         match spec.format {
             F::Xrgb8888 | F::Argb8888 => {
-                for (d, s) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
-                    d.copy_from_slice(&[s[0], s[1], s[2], 255]);
+                for (d, &[b, g, r, _]) in pixels {
+                    *d = [b, g, r, 255];
                 }
             }
             F::Xbgr8888 | F::Abgr8888 => {
-                for (d, s) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
-                    d.copy_from_slice(&[s[2], s[1], s[0], 255]);
+                for (d, &[r, g, b, _]) in pixels {
+                    *d = [b, g, r, 255];
                 }
             }
             F::Xrgb2101010 | F::Argb2101010 | F::Xbgr2101010 | F::Abgr2101010 => {
                 let rgb_order = matches!(spec.format, F::Xrgb2101010 | F::Argb2101010);
-                for (d, s) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
-                    let v = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+                for (d, &s) in pixels {
+                    let v = u32::from_le_bytes(s);
                     let hi = ((v >> 20) & 0x3ff) >> 2;
                     let mid = ((v >> 10) & 0x3ff) >> 2;
                     let lo = (v & 0x3ff) >> 2;
                     let (r, b) = if rgb_order { (hi, lo) } else { (lo, hi) };
-                    d.copy_from_slice(&[b as u8, mid as u8, r as u8, 255]);
+                    *d = [b as u8, mid as u8, r as u8, 255];
                 }
             }
             other => bail!("unsupported screencopy format {other:?}"),

@@ -87,7 +87,12 @@ fn hidpi_documents_scale_annotations() {
         );
         doc.add(s);
         let out = export::render(&doc.snapshot());
-        out.data.chunks_exact(4).filter(|p| p[2] > 128).count()
+        out.data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[2] > 128)
+            .count()
     };
     let (x1, x2) = (count(1.0), count(2.0));
     assert!(
