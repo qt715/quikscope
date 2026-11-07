@@ -285,6 +285,26 @@ unsafe fn run(
     unsafe {
         state.update_hotkeys(bindings);
     }
+    match super::print_screen_capture_enabled() {
+        Ok(true) => {
+            log::warn!(
+                "Windows intercepts PrintScreen. {}",
+                super::PRINT_SCREEN_NOTICE
+            );
+            if let Err(error) = unsafe {
+                state.notify(
+                    None,
+                    "PrintScreen opens Windows screen capture",
+                    super::PRINT_SCREEN_NOTICE,
+                    10000,
+                )
+            } {
+                log::warn!("showing Windows PrintScreen warning: {error:#}");
+            }
+        }
+        Ok(false) => {}
+        Err(error) => log::warn!("checking the Windows PrintScreen setting: {error:#}"),
+    }
     let _ = ready.send(Ok(hwnd.0 as usize));
     let mut message = MSG::default();
     loop {

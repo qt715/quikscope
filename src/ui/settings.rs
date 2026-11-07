@@ -610,6 +610,12 @@ impl Render for Settings {
             #[cfg(windows)]
             {
                 body = body.child(div().child("Global shortcuts (click to enable/disable)"));
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(crate::platform::windows::PRINT_SCREEN_NOTICE),
+                );
                 for (index, key, label, binding) in [
                     (0, "region", "Region", &c.hotkeys.region),
                     (1, "screen", "Screen", &c.hotkeys.screen),

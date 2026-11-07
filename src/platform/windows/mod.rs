@@ -226,6 +226,62 @@ fn overlay_style(style: i32) -> i32 {
     style & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX).0 as i32
 }
 
+pub const PRINT_SCREEN_NOTICE: &str = "To use PrintScreen in quickscope, turn off Settings → Accessibility → Keyboard → \"Use the Print screen key to open screen capture\".";
+
+/// The Windows 11 default applies when this optional per-user override is absent.
+pub fn print_screen_capture_enabled() -> Result<bool> {
+    use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
+
+    let mut enabled = 0u32;
+    let mut size = std::mem::size_of_val(&enabled) as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Control Panel\\Keyboard"),
+            w!("PrintScreenKeyForSnippingEnabled"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut enabled as *mut u32).cast()),
+            Some(&mut size),
+        )
+    };
+    if status != ERROR_FILE_NOT_FOUND {
+        status
+            .ok()
+            .context("reading the Windows PrintScreen setting")?;
+        return Ok(enabled != 0);
+    }
+    let mut build = [0u16; 16];
+    let mut size = std::mem::size_of_val(&build) as u32;
+    unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"),
+            w!("CurrentBuildNumber"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(build.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+        .ok()
+    }
+    .context("reading the Windows build number")?;
+    print_screen_default(&build)
+}
+
+fn print_screen_default(build: &[u16]) -> Result<bool> {
+    let build = build
+        .iter()
+        .take_while(|&&c| c != 0)
+        .try_fold(0u32, |build, &c| {
+            let digit = c.checked_sub(u16::from(b'0'))?;
+            (digit < 10).then_some(())?;
+            build.checked_mul(10)?.checked_add(u32::from(digit))
+        })
+        .context("invalid Windows build number")?;
+    Ok(build >= 22000)
+}
+
 /// Per-user login startup. No elevation, scheduler task or machine-wide key.
 pub fn autostart(action: &str) -> Result<bool> {
     anyhow::ensure!(
@@ -296,7 +352,7 @@ pub fn autostart(action: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::overlay_style;
+    use super::{overlay_style, print_screen_default};
     use windows::Win32::UI::WindowsAndMessaging::{
         WS_CAPTION, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         WS_VISIBLE,
@@ -311,5 +367,14 @@ mod tests {
             retained.0 as i32
         );
         assert_eq!(overlay_style(retained.0 as i32), retained.0 as i32);
+    }
+
+    #[test]
+    fn print_screen_default_changes_with_windows_11() {
+        for (build, expected) in [("19045", false), ("22000", true), ("26300", true)] {
+            let build: Vec<_> = build.encode_utf16().chain(Some(0)).collect();
+            assert_eq!(print_screen_default(&build).unwrap(), expected);
+        }
+        assert!(print_screen_default(&[b'x' as u16]).is_err());
     }
 }
