@@ -53,6 +53,12 @@ install -Dm644 packaging/quickscope.desktop ~/.local/share/applications/quicksco
 The daemon is optional at login: any `quickscope` command starts it on demand
 (the first capture then pays the daemon start-up, about 0.3 s, once).
 
+On first start, a short welcome window lets you choose frozen or live region
+selection and common capture defaults. Done or closing the welcome window
+writes your configuration; subsequent starts stay in the background.
+Run `quickscope settings` any time (also the editor's gear button or Windows
+tray **Settings…**). Changes save and apply to the running daemon immediately.
+
 Text extraction additionally needs Tesseract and a model per language,
 loaded at run time (nothing extra to build):
 
@@ -238,6 +244,7 @@ captured. Text extraction optionally needs Tesseract's `libtesseract-5.dll`
 quickscope capture <region|output|window|screen> [options]
 quickscope open-last          open the latest capture in the editor, with the tool you used last
 quickscope open <FILE>        annotate any PNG/JPEG/WebP
+quickscope settings          open or focus capture/editor preferences
 quickscope notifications <on|off|toggle|status>
 quickscope daemon             run the daemon in the foreground
 quickscope ping | quit

@@ -17,6 +17,7 @@ echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/quicksco
 capture <mode> [flag]... [output=NAME] [geometry=X,Y,WxH]
 open-last
 open <path>          # rest of the line, spaces allowed
+settings            # open or focus the settings window; replies `ok pong`
 notifications <on|off|toggle|status>   # alias: notify
 ping
 quit
@@ -43,7 +44,7 @@ commands, modes or flags, extra arguments, or invalid geometry.
 ```text
 ok <shot-id> <width>x<height>          # capture/open succeeded
 ok <shot-id> <width>x<height> <path>   # … and `save` wrote <path>
-ok pong                                # ping, quit
+ok pong                                # ping, quit, settings
 ok text <shot-id> <text>               # capture … text: the text read (empty: none)
 ok notifications <on|off>             # notifications: the setting now in effect
 cancelled                              # the user cancelled the selection

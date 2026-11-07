@@ -7,6 +7,7 @@
 | Golden-image regression | `tests/render_regression.rs`, `tests/golden/` | nothing |
 | GPU/CPU parity | `tests/editor_render.rs` | Vulkan or GL (Mesa lavapipe/llvmpipe is enough) |
 | Editor interaction | `tests/editor_ui.rs` | Vulkan or GL, as above |
+| Settings interaction | `tests/settings_ui.rs` | Vulkan or GL, as above |
 | Text extraction | `tests/ocr.rs` | Tesseract and its language models; skips without them |
 | End to end | `tests/e2e.rs` (feature `e2e`) | `labwc` or `sway`, `dbus-daemon`; `grim` for reference comparisons; `bwrap` optional; Tesseract for the text extraction test |
 | X11 end to end | `tests/x11_e2e.rs` (feature `e2e`) | Xvfb, Mesa software GL/Vulkan |
@@ -129,6 +130,26 @@ single-undo tests. Restore each mutation before running the full suite.
 
 The small-window help test opens a 480×320 offscreen window and checks the
 actual scroll-panel bounds against the 16-pixel window margin.
+
+## Settings interaction
+
+Offscreen GPUI tests dispatch real clicks and field edits: toggles persist
+without losing comments, invalid values display an inline error and leave the
+file unchanged, and successful edits invoke live config application. Welcome
+Done persists the selected region mode. Native close and focus-loss submission
+are covered in private-compositor e2e: GPUI's offscreen backend has no active
+window and does not dispatch blur or native-close callbacks.
+
+Persistence unit tests cover typed paths in top-level keys, tables, dotted
+keys and inline tables, arrays, atomic creation and invalid-batch rejection.
+Settings CLI/IPC parsing and serialization have unit coverage. Real daemon
+tests open/refocus the settings window, complete onboarding without an
+existing file, and verify the next capture uses the changed freeze default.
+Mutation checks remove the changed value's comment suffix, omit inline error
+painting, force welcome's saved mode to frozen, and skip the daemon config
+swap. The comment-preserving toggle, visible-error, welcome-choice and real
+next-capture live-apply tests must respectively fail. Restore every mutation
+before running the complete suite.
 
 ## End to end
 

@@ -44,6 +44,11 @@ First release.
   survive closing the editor. The last-capture cache has a single ordered
   writer, so rapid or overlapping captures always leave the newest one, and
   `quit` waits for it.
+- Themed settings window from `settings`, the editor gear and the Windows tray;
+  capture/editor/OCR defaults save immediately with formatting-preserving,
+  validated config edits. Windows hotkeys can be enabled/disabled live.
+- First-run welcome chooses frozen/live region selection and common capture
+  defaults; Done or closing it writes the config and completes onboarding.
 
 ### Editor
 

@@ -30,7 +30,7 @@ and synchronized overlay teardown.
 
 | Thread | Owns | Notes |
 | --- | --- | --- |
-| GPUI main | windows, shots, documents | All UI state; never blocks. |
+| GPUI main | windows, shots, documents | UI state; short atomic config edits and teardown barriers; capture/encoding stay on workers. |
 | `quickscope-ipc` | the listening socket | One short-lived thread per connection, so an interactive selection never blocks `open-last` or `ping`. |
 | `quickscope-capture` | its own Wayland connection, outputs, `wl_shm` buffers | Captures every requested output concurrently; buffers are reused while an output's mode is unchanged. Waits are bounded (3 s) so a wedged compositor cannot hang it. |
 | `quickscope-clipboard` | a second Wayland connection, the data-control selection | Claims the selection immediately; a paste blocks only until the background PNG encoder finishes. |
@@ -307,6 +307,28 @@ swapped, so there is no conversion pass in either direction.
   is opened.
 - Saves are atomic (`*.png.part` then rename).
 - The daemon keeps the last eight shots and their documents in memory.
+
+## Settings and onboarding
+
+The daemon keeps one settings-window handle; command-line IPC, the editor's
+`OpenSettings` action and Windows tray request all open or focus that handle.
+The view uses the editor theme and reusable single-line fields. Typed values
+are written through `config::persist_values`, which parses the original,
+edits the relevant TOML paths with `toml_edit`, validates the entire result,
+and atomically replaces the file while retaining comments and decorations.
+Invalid original files or edits remain untouched and display an inline error.
+Config writes from UI and notification IPC run on the app thread to serialize
+their read/edit/replace transactions.
+
+After a successful edit, the daemon swaps its `Arc<Config>` and the
+`EditorServices` config together, updating capture notification state and
+Windows hotkey registrations. Existing editor styles are not rewritten.
+An open settings view refreshes after the originating entity update ends,
+so IPC/tray changes cannot leave stale toggle state or re-enter a borrowed
+view. Dirty field text is retained; Escape discards it back to the saved value.
+Missing config files trigger a short welcome form; its choices preview in
+memory, and Done or native close commits them. Creating the validated config
+file is the onboarding marker, not a second flag or state file.
 
 ## IPC
 
