@@ -118,7 +118,7 @@ jobs:
       - name: System dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel git rustup labwc grim dbus \
-            mesa vulkan-swrast wayland libxkbcommon fontconfig tesseract tesseract-data-eng
+            mesa vulkan-swrast wayland libxkbcommon libxkbcommon-x11 fontconfig tesseract tesseract-data-eng
           rustup default stable
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
