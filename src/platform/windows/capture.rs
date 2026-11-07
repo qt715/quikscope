@@ -296,12 +296,15 @@ impl Duplication {
             if info.LastMouseUpdateTime != 0 {
                 self.separate_pointer = info.PointerPosition.Visible.as_bool();
             }
-            // Pointer-only updates leave the desktop texture unchanged.
-            if info.LastPresentTime == 0
-                && let Some(image) = &self.cached
-            {
+            // Pointer-only updates have no new desktop pixels. In particular,
+            // a new duplication may deliver one before its first desktop frame;
+            // its texture must not be read or cached as a black desktop.
+            if info.LastPresentTime == 0 {
                 self.duplication.ReleaseFrame()?;
-                return Ok(Some((image.clone(), self.separate_pointer)));
+                return Ok(self
+                    .cached
+                    .clone()
+                    .map(|image| (image, self.separate_pointer)));
             }
             let result = (|| -> Result<Arc<Image>> {
                 let texture: ID3D11Texture2D =
