@@ -645,6 +645,22 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // A failing test leaves its screen, windows and logs behind for CI to
+        // upload; logs alone cannot tell lost focus from a misplaced click.
+        let failed = std::thread::panicking();
+        if failed {
+            let root = self.root().to_path_buf();
+            let _ = self
+                .command("grim")
+                .arg(root.join("failure.png"))
+                .stderr(Stdio::null())
+                .status();
+            // Not `toplevels()`: its assertion would panic again while
+            // unwinding and abort the whole test binary.
+            if let Ok(out) = self.command(HELPER).arg("toplevels").output() {
+                let _ = std::fs::write(root.join("failure-toplevels.txt"), out.stdout);
+            }
+        }
         if let Some(mut d) = self.daemon.take() {
             let _ = d.kill();
             let _ = d.wait();
@@ -655,7 +671,7 @@ impl Drop for Session {
             let _ = c.kill();
             let _ = c.wait();
         }
-        if std::env::var_os("QUIKSCOPE_E2E_KEEP").is_some() {
+        if failed || std::env::var_os("QUIKSCOPE_E2E_KEEP").is_some() {
             let kept = self.dir.path().to_path_buf();
             eprintln!("keeping {}", kept.display());
             std::mem::forget(std::mem::replace(

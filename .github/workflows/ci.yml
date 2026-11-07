@@ -233,6 +233,15 @@ jobs:
           QUIKSCOPE_E2E_COMPOSITOR: labwc
           QUIKSCOPE_REQUIRE_OCR: "1"
         run: cargo test --locked --features e2e --test e2e -- --test-threads=4
+      - name: Collect failed sessions
+        if: failure()
+        run: tar czf /tmp/e2e-failures.tgz --exclude='*.sock' --exclude=bus /tmp/quikscope-e2e* || true
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failures
+          path: /tmp/e2e-failures.tgz
+          if-no-files-found: ignore
 
   x11-e2e:
     name: End-to-end (private Xvfb)
