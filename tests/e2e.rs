@@ -1383,7 +1383,13 @@ fn text_extraction_copies_plain_text_from_the_editor_and_from_a_capture() {
         n.summary.starts_with("Copied ") && n.summary.ends_with(" of text"),
         "{n:?}"
     );
-    assert!(n.body.contains("quick brown fox"), "{n:?}");
+    // The body previews the first lines of the extracted text; how many lines
+    // the whole-screen capture yields above the sentence depends on the UI
+    // font and compositor theme, so check the preview rather than one line.
+    let lines: Vec<&str> = printed.lines().filter(|l| !l.trim().is_empty()).collect();
+    let preview = n.body.trim_end_matches('…');
+    assert!(!preview.is_empty(), "{n:?}");
+    assert!(lines.join("\n").starts_with(preview), "{n:?}\n{printed}");
 }
 
 #[test]
