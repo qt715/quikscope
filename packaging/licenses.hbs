@@ -1,0 +1,7 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>quikscope third-party licences</title>
+<style>body{max-width:75em;margin:2em auto;font-family:sans-serif}pre{white-space:pre-wrap}</style>
+<h1>quikscope third-party licences</h1>
+<p>This report covers the full locked dependency tree, including build and test dependencies, for Linux x86_64, Windows x86_64 and macOS x86_64/ARM64. Some listed dependencies are not linked into a particular package.</p>
+<h2>MPL-2.0 source availability</h2>
+<p>The MPL-2.0 components (including dwrote and option-ext) are distributed unmodified. Their exact source, licence and version can be obtained using each component link below or from <code>https://crates.io/api/v1/crates/NAME/VERSION/download</code>. Cargo.lock identifies every version and checksum. MPL-covered source files remain available under MPL-2.0; this does not change quikscope's own MIT/Apache-2.0 licence.</p>
+{{#each licenses}}<h2>{{name}}</h2><ul>{{#each used_by}}<li><a href="https://crates.io/crates/{{crate.name}}/{{crate.version}}">{{crate.name}} {{crate.version}}</a></li>{{/each}}</ul><pre>{{text}}</pre>{{/each}}
