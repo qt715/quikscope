@@ -1,3 +1,5 @@
+![quikscope — Capture. Annotate. Carry on.](assets/branding/banner.svg)
+
 # quikscope
 
 A fast screenshot tool for Linux (wlroots compositors such as Hyprland and
@@ -404,6 +406,22 @@ QUIKSCOPE_BLESS=1 cargo test --test render_regression   # regenerate golden imag
 
 See [docs/testing.md](docs/testing.md), [docs/ipc.md](docs/ipc.md) and
 [docs/architecture.md](docs/architecture.md).
+
+### Branding assets
+
+Run `scripts/render-icons.sh` with resvg, ImageMagick 7 (`magick`) and Python 3
+to regenerate the committed PNG, multi-resolution ICO and PNG-backed ICNS
+assets in `assets/branding/`. The 16 px PNG uses the pixel-aligned symbolic
+variant; larger sizes use `icon.svg`. All icons have transparent backgrounds
+and use the UI accent (`#8f8cf2`). The banner's wordmark and tagline are
+outlines of the bundled Inter variable font (weight 650, optical size 32),
+so rendering needs no installed fonts.
+
+Linux launchers and notifications request the `quikscope` theme icon; notification
+servers choose their normal fallback if it is not installed, and screenshot
+notifications still carry their `image-data` thumbnail. GPUI 0.3.10 supports
+`WindowOptions.icon` on X11 only; Wayland uses the desktop entry, while the
+Windows executable and tray use the embedded ICO resource.
 
 ## License
 

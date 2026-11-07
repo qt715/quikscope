@@ -20,6 +20,8 @@ First release.
   DWM window snapping, delayed PNG/DIB clipboard, tray menu, configurable
   global hotkeys, clickable shell notifications and per-user `autostart`.
 - `QUIKSCOPE_BACKEND=wlroots|portal|x11` forces a Linux backend.
+- Branded selection-reticle icon for Linux launchers, notifications and X11
+  editor/settings windows, plus embedded Windows executable and tray icons.
 
 ### Capture and daemon
 
