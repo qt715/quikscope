@@ -9,6 +9,11 @@ readme = "README.md"
 keywords = ["screenshot", "wayland", "x11", "windows", "annotation"]
 categories = ["multimedia::images", "gui"]
 default-run = "quikscope"
+repository = "https://github.com/qt715/quikscope"
+homepage = "https://github.com/qt715/quikscope"
+authors = ["quikscope contributors"]
+documentation = "https://github.com/qt715/quikscope/tree/main/docs"
+exclude = ["/.github", "/docs/images", "/scripts", "/packaging", "/CONTRIBUTING.md", "/SECURITY.md", "/CODE_OF_CONDUCT.md"]
 
 [lib]
 path = "src/lib.rs"
