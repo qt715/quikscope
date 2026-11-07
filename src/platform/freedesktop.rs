@@ -93,7 +93,7 @@ impl Notifier for Notifications {
             &(
                 "quikscope",
                 0u32,
-                "camera-photo",
+                "quikscope",
                 "Screenshot captured",
                 body,
                 &actions[..],
@@ -117,7 +117,7 @@ impl Notifier for Notifications {
             &(
                 "quikscope",
                 0u32,
-                "camera-photo",
+                "quikscope",
                 summary,
                 body,
                 &actions[..],

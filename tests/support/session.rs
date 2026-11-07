@@ -27,6 +27,7 @@ pub const OUTPUT_H: u32 = 720;
 #[derive(Clone, Debug)]
 pub struct Notified {
     pub id: u32,
+    pub app_icon: String,
     pub summary: String,
     pub body: String,
     pub actions: Vec<String>,
@@ -90,7 +91,7 @@ impl FakeNotifications {
         &mut self,
         _app_name: String,
         _replaces_id: u32,
-        _app_icon: String,
+        app_icon: String,
         summary: String,
         body: String,
         actions: Vec<String>,
@@ -101,6 +102,7 @@ impl FakeNotifications {
         let id = log.len() as u32 + 1;
         log.push(Notified {
             id,
+            app_icon,
             summary,
             body,
             actions,

@@ -64,6 +64,22 @@ pub mod theme {
     }
 }
 
+/// GPUI 0.3.10 consumes this on X11; Wayland uses the desktop entry's icon.
+#[cfg(target_os = "linux")]
+pub fn window_icon() -> Arc<image::RgbaImage> {
+    static ICON: std::sync::LazyLock<Arc<image::RgbaImage>> = std::sync::LazyLock::new(|| {
+        Arc::new(
+            image::load_from_memory_with_format(
+                include_bytes!("../../assets/branding/png/256x256.png"),
+                image::ImageFormat::Png,
+            )
+            .expect("bundled application icon is a valid PNG")
+            .into_rgba8(),
+        )
+    });
+    Arc::clone(&ICON)
+}
+
 /// Embedded icons (Lucide) and the UI font.
 pub struct Assets;
 
@@ -340,6 +356,20 @@ pub fn paint_prims(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn window_icon_preserves_transparency_and_reuses_decoded_pixels() {
+        let icon = window_icon();
+        assert!(Arc::ptr_eq(&icon, &window_icon()));
+        assert_eq!(icon.dimensions(), (256, 256));
+        assert_eq!(icon.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(icon.get_pixel(128, 128).0, [0x8f, 0x8c, 0xf2, 255]);
+        for (x, y) in [(32, 32), (224, 32), (32, 224), (224, 224)] {
+            assert_eq!(icon.get_pixel(x, y).0, [0x8f, 0x8c, 0xf2, 255]);
+        }
+        assert_eq!(icon.get_pixel(128, 32).0, [0, 0, 0, 0]);
+    }
 
     #[test]
     fn tiles_cover_the_image_exactly_once() {

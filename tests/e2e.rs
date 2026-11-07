@@ -638,6 +638,7 @@ fn screen_capture_notifies_caches_and_fills_the_clipboard() {
 
     let n = s.wait_notification();
     assert_eq!(n.summary, "Screenshot captured");
+    assert_eq!(n.app_icon, "quikscope");
     assert!(
         n.actions.contains(&"default".to_string()),
         "{:?}",

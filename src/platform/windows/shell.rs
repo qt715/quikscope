@@ -276,9 +276,12 @@ unsafe fn run(
     }
     .context("creating shell window")?;
     state.hwnd.set(hwnd);
-    state
-        .icon
-        .set(unsafe { CopyIcon(LoadIconW(None, IDI_APPLICATION)?)? });
+    state.icon.set(unsafe {
+        CopyIcon(LoadIconW(
+            instance,
+            PCWSTR(std::ptr::without_provenance(1)),
+        )?)?
+    });
     unsafe {
         state.add_tray()?;
     }

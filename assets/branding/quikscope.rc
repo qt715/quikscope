@@ -1,0 +1,2 @@
+// Resource 1 is shared by the executable and the notification-area icon.
+1 ICON QUIKSCOPE_ICON_PATH

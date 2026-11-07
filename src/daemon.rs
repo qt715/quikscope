@@ -1116,6 +1116,8 @@ fn open_settings(welcome: bool, cx: &mut App) -> Result<()> {
             }),
             window_bounds: Some(WindowBounds::centered(bounds, cx)),
             app_id: Some("quikscope-settings".into()),
+            #[cfg(target_os = "linux")]
+            icon: Some(crate::ui::window_icon()),
             focus: true,
             show: true,
             window_min_size: Some(size(px(360.), px(320.))),
@@ -1279,6 +1281,8 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
             }),
             window_bounds: Some(WindowBounds::centered(size(px(w), px(h)), cx)),
             app_id: Some("quikscope".into()),
+            #[cfg(target_os = "linux")]
+            icon: Some(crate::ui::window_icon()),
             focus: true,
             show: true,
             window_min_size: Some(size(px(480.), px(320.))),
