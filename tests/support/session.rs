@@ -592,9 +592,14 @@ impl Session {
             .collect()
     }
 
+    /// Waits until a window of `app_id` holds keyboard focus. Mapping alone is
+    /// not enough: under load the compositor focuses it later, and keys sent
+    /// in between go nowhere.
     pub fn wait_for_window(&self, app_id: &str) {
-        wait_for("an editor window", Duration::from_secs(10), || {
-            self.toplevels().iter().any(|l| l.starts_with(app_id))
+        wait_for("a focused window", Duration::from_secs(10), || {
+            self.toplevels()
+                .iter()
+                .any(|l| l.starts_with(app_id) && l.ends_with("\tactivated"))
         });
     }
 

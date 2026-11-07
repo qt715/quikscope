@@ -174,6 +174,8 @@ struct Toplevel {
     id: Option<ObjectId>,
     app_id: String,
     title: String,
+    /// Holds keyboard focus, per the compositor.
+    activated: bool,
 }
 
 #[derive(Default)]
@@ -342,7 +344,8 @@ fn main() {
                 queue.roundtrip(&mut state).unwrap();
             } else {
                 for t in &state.toplevels {
-                    println!("{}\t{}", t.app_id, t.title);
+                    let focus = if t.activated { "activated" } else { "" };
+                    println!("{}\t{}\t{focus}", t.app_id, t.title);
                 }
             }
         }
@@ -845,6 +848,14 @@ impl Dispatch<zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1, ()> 
         match event {
             zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => t.app_id = app_id,
             zwlr_foreign_toplevel_handle_v1::Event::Title { title } => t.title = title,
+            zwlr_foreign_toplevel_handle_v1::Event::State { state } => {
+                let activated = zwlr_foreign_toplevel_handle_v1::State::Activated as u32;
+                t.activated = state
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|s| u32::from_ne_bytes(*s) == activated);
+            }
             _ => {}
         }
     }
