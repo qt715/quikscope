@@ -4,7 +4,7 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-ExecStart=%h/.cargo/bin/quikscope daemon
+ExecStart=/usr/bin/quikscope daemon
 Restart=on-failure
 # The daemon owns the clipboard and editor windows; stop with the session.
 KillMode=mixed

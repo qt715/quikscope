@@ -1,0 +1,48 @@
+# Maintainer: quikscope contributors <212748636+qt715@users.noreply.github.com>
+pkgname=quikscope
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Screenshot daemon and GPUI annotation editor'
+arch=('x86_64')
+url='https://github.com/qt715/quikscope'
+license=('MIT' 'Apache-2.0')
+# makepkg's GCC LTO breaks wayland-backend's C log trampoline at Rust link time.
+# Keep Cargo's own release LTO, but disable makepkg's injected C/C++ LTO flags.
+# Cargo strips release debuginfo, so makepkg must not create an empty debug split.
+options=('!lto' '!debug')
+depends=('glibc' 'libgcc' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'libxcb' 'hicolor-icon-theme')
+makedepends=('cargo' 'clang' 'cmake' 'pkgconf' 'python' 'openssl' 'libx11' 'zstd' 'alsa-lib' 'fontconfig' 'freetype2')
+optdepends=('tesseract: OCR text extraction' 'tesseract-data-eng: English OCR model' 'xdg-desktop-portal: GNOME/KDE capture backend' 'vulkan-driver: GPU rendering')
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver-source.tar.gz")
+# The release workflow replaces this with the source archive's SHA-256 before
+# shipping this PKGBUILD and generates .SRCINFO from that exact file.
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  cargo fetch --locked
+}
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --frozen --release
+}
+check() {
+  cd "$pkgname-$pkgver"
+  # Library tests need no display; reuse the release dependency tree.
+  cargo test --frozen --release --lib
+}
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/quikscope" "$pkgdir/usr/bin/quikscope"
+  install -Dm644 packaging/quikscope.desktop "$pkgdir/usr/share/applications/quikscope.desktop"
+  install -Dm644 packaging/quikscope.service "$pkgdir/usr/lib/systemd/user/quikscope.service"
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "assets/branding/png/${size}x${size}.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/quikscope.png"
+  done
+  for file in LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html assets/fonts/INTER-LICENSE.txt assets/icons/LICENSE; do
+    install -Dm644 "$file" "$pkgdir/usr/share/licenses/$pkgname/$(basename "$file")"
+  done
+  for file in README.md CHANGELOG.md docs/*.md; do
+    install -Dm644 "$file" "$pkgdir/usr/share/doc/$pkgname/$(basename "$file")"
+  done
+}
