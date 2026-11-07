@@ -57,10 +57,19 @@ optional OCR tests. Missing Tesseract/models skip OCR unless
 GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
 The Wayland-only `e2e` feature is not enabled by Windows CI.
 
-Live region selection compiles for Windows but is unverified natively.
-In a private Windows VM, also check that changing content during selection
-appears in the final live capture, that no dimming/selection border remains,
-and that `--freeze` still captures the original frame.
+Native verification on a Windows 11 virtual machine at 2560×1440 / 96 DPI passed release build, warning-denying Clippy
+and 154 tests (one interactive benchmark ignored). Screen capture matched a
+GDI reference visually, and the PowerShell STA clipboard bitmap matched the
+saved PNG exactly. A real 600×400 drag saved exactly 600×400 in frozen and live
+modes: repainting a red reference window blue during selection preserved red
+when frozen and captured clean blue when live. Escape cancelled both modes.
+This does not verify mixed-DPI or multiple-monitor operation.
+
+Notifications were visible, but notification activation, editor drawing/save,
+PrintScreen and per-method latency still need interactive acceptance. The
+native log also contains GPUI `RefCell already borrowed` / window-handle
+errors around overlay lifecycle; passing capture checks does not establish
+that those diagnostics are harmless.
 
 Interactive verification must use a private Windows VM desktop, never a
 non-interactive service session or another user's live desktop. Check the tray,
