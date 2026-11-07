@@ -151,6 +151,10 @@ pub enum Response {
 
 impl Request {
     pub fn parse(line: &str) -> Result<Request, String> {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        if line.contains('\n') {
+            return Err("newlines are not supported in requests".into());
+        }
         let mut words = line.split_whitespace();
         let cmd = words.next().ok_or("empty request")?;
         let req = match cmd {
@@ -188,7 +192,9 @@ impl Request {
             "settings" => Request::Settings,
             "open" => {
                 // Paths may contain spaces: take the rest of the line verbatim.
-                let path = line.trim_start()["open".len()..].trim();
+                let path = line.trim_start()["open".len()..]
+                    .strip_prefix(' ')
+                    .ok_or("open needs a space before its path")?;
                 if path.is_empty() {
                     return Err("open needs a path".into());
                 }
@@ -395,6 +401,10 @@ pub fn send_or_spawn(socket: &Path, req: &Request, timeout: Option<Duration>) ->
 }
 
 fn exchange(mut stream: UnixStream, req: &Request, timeout: Option<Duration>) -> Result<Response> {
+    if let Request::Open(path) = req {
+        let path = path.to_str().context("IPC paths must be UTF-8")?;
+        anyhow::ensure!(!path.contains('\n'), "IPC paths cannot contain newlines");
+    }
     #[cfg(windows)]
     crate::platform::windows::allow_foreground();
     stream.set_read_timeout(timeout)?;
@@ -421,8 +431,9 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     }
     let log_file = std::fs::File::create(&log).ok();
     let mut cmd = std::process::Command::new(exe);
+    // Detaching on Windows changes CWD; retain the client's socket location.
     cmd.arg("daemon")
-        .env("QUIKSCOPE_SOCKET", socket)
+        .env("QUIKSCOPE_SOCKET", std::path::absolute(socket)?)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     match log_file {
@@ -439,12 +450,7 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
         });
     }
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no inherited console,
-        // and no console is created (CREATE_NO_WINDOW is ignored when detached).
-        cmd.creation_flags(0x0000_0008 | 0x0000_0200);
-    }
+    configure_windows_daemon(&mut cmd);
     cmd.spawn().context("starting the daemon")?;
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -457,9 +463,37 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     bail!("the daemon did not start within 5s; see {}", log.display())
 }
 
+#[cfg(windows)]
+fn configure_windows_daemon(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    // Never inherit an untrusted download directory as the DLL search CWD.
+    cmd.current_dir(crate::config::cache_dir());
+    // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no inherited console.
+    cmd.creation_flags(0x0000_0008 | 0x0000_0200);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn detached_windows_daemon_does_not_inherit_cwd() {
+        let mut cmd = std::process::Command::new("quikscope.exe");
+        configure_windows_daemon(&mut cmd);
+        assert_eq!(
+            cmd.get_current_dir(),
+            Some(crate::config::cache_dir().as_path())
+        );
+    }
+
+    #[test]
+    fn open_preserves_trailing_spaces_and_rejects_newlines() {
+        assert_eq!(
+            Request::parse("open /tmp/shot.png  \n"),
+            Ok(Request::Open(PathBuf::from("/tmp/shot.png  ")))
+        );
+        assert!(Request::parse("open /tmp/a\nb").is_err());
+    }
 
     #[test]
     fn capture_requests_round_trip() {
@@ -481,6 +515,7 @@ mod tests {
             ),
             Request::OpenLast,
             Request::Open(PathBuf::from("/tmp/with space/shot.png")),
+            Request::Open(PathBuf::from("/tmp/ leading and trailing ")),
             Request::Settings,
             Request::Notifications(Switch::On),
             Request::Notifications(Switch::Off),

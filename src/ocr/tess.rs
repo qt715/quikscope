@@ -59,6 +59,88 @@ struct Lib {
     delete_text: unsafe extern "C" fn(*const c_char),
 }
 
+#[cfg(not(windows))]
+unsafe fn load_library(name: &str) -> Result<libloading::Library, libloading::Error> {
+    unsafe { libloading::Library::new(name) }
+}
+
+#[cfg(windows)]
+unsafe fn load_library(name: &str) -> Result<libloading::Library, libloading::Error> {
+    use libloading::os::windows::Library;
+    use windows::Win32::System::LibraryLoader::{
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+    };
+    // Search only explicit absolute directories, never the process CWD or
+    // relative PATH entries. Dependencies may come from the DLL directory or
+    // Windows' safe default directories, not the legacy search order.
+    let dirs = windows_library_dirs(
+        std::env::current_exe().ok().as_deref(),
+        std::env::var_os("ProgramFiles").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    );
+    let mut last = None;
+    for dir in dirs {
+        let path = dir.join(name);
+        if path.is_file() {
+            let flags = (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS).0;
+            match unsafe { Library::load_with_flags(path, flags) } {
+                Ok(lib) => return Ok(lib.into()),
+                Err(err) => last = Some(err),
+            }
+        }
+    }
+    match last {
+        Some(err) => Err(err),
+        // Safe default directories exclude the CWD even when no explicit
+        // candidate exists, and provide the ordinary loader diagnostic.
+        None => unsafe {
+            Library::load_with_flags(name, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS.0).map(Into::into)
+        },
+    }
+}
+
+#[cfg(windows)]
+fn windows_library_dirs(
+    exe: Option<&Path>,
+    program_files: Option<&std::ffi::OsStr>,
+    path: Option<&std::ffi::OsStr>,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = exe.and_then(Path::parent) {
+        dirs.push(dir.to_path_buf());
+    }
+    if let Some(dir) = program_files {
+        dirs.push(std::path::PathBuf::from(dir).join("Tesseract-OCR"));
+    }
+    if let Some(path) = path {
+        dirs.extend(std::env::split_paths(path));
+    }
+    dirs.retain(|dir| dir.is_absolute());
+    dirs
+}
+
+#[cfg(all(test, windows))]
+mod windows_loader_tests {
+    use super::*;
+
+    #[test]
+    fn library_search_excludes_cwd_and_relative_path_entries() {
+        let dirs = windows_library_dirs(
+            Some(Path::new(r"C:\app\quikscope.exe")),
+            Some(std::ffi::OsStr::new(r"C:\Program Files")),
+            Some(std::ffi::OsStr::new(r".;relative;;C:\Tesseract")),
+        );
+        assert_eq!(
+            dirs,
+            [
+                std::path::PathBuf::from(r"C:\app"),
+                std::path::PathBuf::from(r"C:\Program Files\Tesseract-OCR"),
+                std::path::PathBuf::from(r"C:\Tesseract"),
+            ]
+        );
+    }
+}
+
 impl Lib {
     fn open() -> Result<Lib> {
         let mut last = None;
@@ -69,7 +151,7 @@ impl Lib {
         for name in names {
             // SAFETY: loading a shared library runs its initialisers;
             // libtesseract's are ordinary C++ static constructors.
-            match unsafe { libloading::Library::new(name) } {
+            match unsafe { load_library(name) } {
                 Ok(lib) => return Lib::bind(lib),
                 Err(e) => last = Some(e),
             }

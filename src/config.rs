@@ -300,7 +300,11 @@ pub fn persist_values(path: &Path, values: &[(&[&str], toml_edit::Value)]) -> Re
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension(format!("toml.{}.part", std::process::id()));
-    std::fs::write(&tmp, out)?;
+    use std::io::Write as _;
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(out.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
     Ok(config)
 }
@@ -379,12 +383,12 @@ pub fn runtime_dir() -> PathBuf {
 
 /// IPC socket. `QUIKSCOPE_SOCKET` overrides it (used by tests and to run
 /// several instances side by side).
-pub fn socket_path() -> PathBuf {
+pub fn socket_path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("QUIKSCOPE_SOCKET") {
-        return PathBuf::from(p);
+        return Ok(PathBuf::from(p));
     }
     #[cfg(windows)]
-    return cache_dir().join("ipc.sock");
+    return Ok(cache_dir().join("ipc.sock"));
     #[cfg(not(windows))]
     {
         // Keyed by display so a nested compositor or X server gets its own
@@ -397,8 +401,36 @@ pub fn socket_path() -> PathBuf {
             (_, Ok(x)) if !x.is_empty() => format!("x11-{}", x.replace([':', '/'], "")),
             _ => "wayland-0".into(),
         };
-        runtime_dir().join(format!("quikscope-{display}.sock"))
+        let dir = match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(dir) => PathBuf::from(dir),
+            None => private_socket_dir(&std::env::temp_dir())?,
+        };
+        Ok(dir.join(format!("quikscope-{display}.sock")))
     }
+}
+
+#[cfg(unix)]
+fn private_socket_dir(base: &Path) -> Result<PathBuf> {
+    // Never repair a directory created by another user.
+    private_socket_dir_for_uid(base, unsafe { libc::geteuid() })
+}
+
+#[cfg(unix)]
+fn private_socket_dir_for_uid(base: &Path, uid: u32) -> Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+    let path = base.join(format!("quikscope-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
+    let metadata = std::fs::symlink_metadata(&path)?;
+    anyhow::ensure!(
+        metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o7777 == 0o700,
+        "unsafe IPC directory: {}",
+        path.display()
+    );
+    Ok(path)
 }
 
 /// Local broken-down time via libc, so filenames follow the user's timezone
@@ -510,6 +542,23 @@ pub fn local_tm(secs: i64) -> LocalTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn hardening_fallback_socket_directory_refuses_unsafe_entries() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
+        let base = tempfile::tempdir().unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let dir = private_socket_dir(base.path()).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(private_socket_dir(base.path()).unwrap(), dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private_socket_dir(base.path()).is_err());
+        std::fs::remove_dir(&dir).unwrap();
+        symlink(base.path(), &dir).unwrap();
+        assert!(private_socket_dir(base.path()).is_err());
+        // This new directory belongs to us, not the requested foreign UID.
+        assert!(private_socket_dir_for_uid(base.path(), uid.wrapping_add(1)).is_err());
+    }
 
     #[test]
     fn hotkeys_validate_modifiers_keys_and_collisions() {

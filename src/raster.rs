@@ -460,8 +460,21 @@ impl Image {
         let w = u32::from_le_bytes(header[8..12].try_into().unwrap());
         let h = u32::from_le_bytes(header[12..16].try_into().unwrap());
         let scale = f32::from_le_bytes(header[16..20].try_into().unwrap());
-        let len = w as usize * h as usize * 4;
-        let mut data = Vec::with_capacity(len);
+        let len = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .context("cache dimensions overflow")?;
+        let file_len = (len as u64)
+            .checked_add(header.len() as u64)
+            .context("cache file size overflows")?;
+        ensure!(
+            w > 0 && h > 0 && scale.is_finite() && scale > 0.0 && f.metadata()?.len() == file_len,
+            "{} has invalid dimensions, scale or file size",
+            path.display()
+        );
+        let mut data = Vec::new();
+        data.try_reserve_exact(len)
+            .context("allocating cache pixels")?;
         f.take(len as u64 + 1).read_to_end(&mut data)?;
         ensure!(
             data.len() == len,
@@ -623,12 +636,24 @@ mod tests {
     }
 
     #[test]
-    fn raw_cache_round_trip_and_rejects_garbage() {
+    fn hardening_raw_cache_round_trip_and_rejects_garbage() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("last.raw");
         let img = numbered(31, 7);
         img.write_raw(&path, 1.5).unwrap();
         let (back, scale) = Image::read_raw(&path).unwrap();
+        let mut malicious = RAW_MAGIC.to_vec();
+        malicious.extend_from_slice(&u32::MAX.to_le_bytes());
+        malicious.extend_from_slice(&u32::MAX.to_le_bytes());
+        malicious.extend_from_slice(&1.0f32.to_le_bytes());
+        std::fs::write(&path, malicious).unwrap();
+        assert!(Image::read_raw(&path).is_err());
+        let mut overflowing_file_size = RAW_MAGIC.to_vec();
+        overflowing_file_size.extend_from_slice(&2_147_483_647u32.to_le_bytes());
+        overflowing_file_size.extend_from_slice(&2_147_483_649u32.to_le_bytes());
+        overflowing_file_size.extend_from_slice(&1.0f32.to_le_bytes());
+        std::fs::write(&path, overflowing_file_size).unwrap();
+        assert!(Image::read_raw(&path).is_err());
         assert_eq!(back, img);
         assert_eq!(scale, 1.5);
 
@@ -637,7 +662,12 @@ mod tests {
         let mut truncated = RAW_MAGIC.to_vec();
         truncated.extend_from_slice(&[4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 128, 63, 1, 2]);
         std::fs::write(&path, truncated).unwrap();
-        assert!(Image::read_raw(&path).is_err());
+        assert!(
+            Image::read_raw(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("file size")
+        );
     }
 
     #[test]

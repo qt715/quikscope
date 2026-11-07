@@ -47,18 +47,32 @@ const WORD_GAP: f32 = 0.36;
 /// directory itself or its parent), then the distributions' locations.
 pub fn tessdata_dir() -> Option<PathBuf> {
     let env = std::env::var_os("TESSDATA_PREFIX").map(PathBuf::from);
+    let mut platform_dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(dir) = std::env::var_os("ProgramFiles") {
+            platform_dirs.push(PathBuf::from(dir).join("Tesseract-OCR/tessdata"));
+        }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            platform_dirs.push(dir.join("tessdata"));
+        }
+    }
+    #[cfg(not(windows))]
+    platform_dirs.extend(
+        [
+            "/usr/share/tessdata",
+            "/usr/share/tesseract-ocr/5/tessdata",
+            "/usr/share/tesseract-ocr/4.00/tessdata",
+            "/usr/local/share/tessdata",
+        ]
+        .map(PathBuf::from),
+    );
     let candidates = env
         .iter()
         .flat_map(|p| [p.clone(), p.join("tessdata")])
-        .chain(
-            [
-                "/usr/share/tessdata",
-                "/usr/share/tesseract-ocr/5/tessdata",
-                "/usr/share/tesseract-ocr/4.00/tessdata",
-                "/usr/local/share/tessdata",
-            ]
-            .map(PathBuf::from),
-        );
+        .chain(platform_dirs);
     candidates
         .into_iter()
         .find(|d| !installed_languages(d).is_empty())

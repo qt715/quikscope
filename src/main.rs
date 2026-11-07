@@ -69,7 +69,7 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
         eprint!("{USAGE}");
         return Ok(ExitCode::from(2));
     };
-    let socket = config::socket_path();
+    let socket = config::socket_path()?;
     let rest: Vec<String> = it.collect();
     let request = match cmd.as_str() {
         "-h" | "--help" | "help" => {

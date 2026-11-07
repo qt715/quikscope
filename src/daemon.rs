@@ -3,7 +3,7 @@
 //! threads, recent shots, and the IPC socket.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read as _, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(unix)]
@@ -261,12 +261,12 @@ fn spawn_listener(listener: UnixListener, tx: mpsc::UnboundedSender<Msg>) {
 
 fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Msg>) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let mut line = String::new();
-    if BufReader::new(&stream).read_line(&mut line)? == 0 {
+    let line = read_request_line(&stream)?;
+    if line.is_empty() {
         // Connected and closed without a request (a liveness probe).
         return Ok(());
     }
-    let response = match Request::parse(line.trim()) {
+    let response = match parse_request_line(&line) {
         Err(e) => Response::Error(e),
         Ok(req) => {
             log::debug!("request: {req}");
@@ -279,6 +279,51 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Msg>) -> Result<()> {
     let mut stream = stream;
     writeln!(stream, "{response}")?;
     Ok(())
+}
+
+const IPC_LINE_LIMIT: u64 = 64 * 1024;
+
+fn read_request_line(reader: impl std::io::Read) -> std::io::Result<String> {
+    let mut line = String::new();
+    BufReader::new(reader)
+        .take(IPC_LINE_LIMIT + 1)
+        .read_line(&mut line)?;
+    Ok(line)
+}
+
+fn parse_request_line(line: &str) -> Result<Request, String> {
+    if line.len() as u64 > IPC_LINE_LIMIT {
+        return Err("request exceeds 64 KiB".into());
+    }
+    Request::parse(line)
+}
+
+#[cfg(test)]
+mod ipc_limit_tests {
+    use super::*;
+
+    #[test]
+    fn hardening_reading_requests_is_bounded_without_a_newline() {
+        let input = std::io::repeat(b'a');
+        let line = read_request_line(input).unwrap();
+        assert_eq!(line.len() as u64, IPC_LINE_LIMIT + 1);
+        assert!(parse_request_line(&line).is_err());
+    }
+
+    #[test]
+    fn hardening_oversized_request_is_rejected_before_parsing() {
+        let prefix = "open ";
+        let mut line = format!(
+            "{prefix}{}",
+            "a".repeat(IPC_LINE_LIMIT as usize - prefix.len())
+        );
+        assert!(parse_request_line(&line).is_ok());
+        line.push('a');
+        assert_eq!(
+            parse_request_line(&line),
+            Err("request exceeds 64 KiB".into())
+        );
+    }
 }
 
 async fn handle(req: Request, cx: &mut AsyncApp) -> Response {
