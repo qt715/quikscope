@@ -444,7 +444,7 @@ async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<
                         Ok(snap) => snap,
                         Err(e) => {
                             let windows = early.map(|e| e.windows.into_iter().map(|(_, w)| w));
-                            end_selection(windows.into_iter().flatten(), cx);
+                            end_selection(windows.into_iter().flatten(), cx).await;
                             return Err(e);
                         }
                     };
@@ -527,13 +527,12 @@ fn begin_selection(platform: &Platform, cx: &mut App) -> Result<Option<EarlyOver
 }
 
 /// Closes selection overlays and releases the selection claim.
-fn end_selection(overlays: impl IntoIterator<Item = WindowHandle<Overlay>>, cx: &mut AsyncApp) {
-    cx.update(|cx| {
-        for o in overlays {
-            let _ = o.update(cx, |_, window, _| window.remove_window());
-        }
-        cx.update_global::<Daemon, _>(|d, _| d.selecting = false);
-    });
+async fn end_selection(
+    overlays: impl IntoIterator<Item = WindowHandle<Overlay>>,
+    cx: &mut AsyncApp,
+) {
+    end_selection_windows(overlays, cx).await;
+    daemon(cx, |d, _| d.selecting = false);
 }
 
 /// Shows live or frozen overlays and waits for global logical coordinates.
@@ -585,10 +584,10 @@ async fn select_region(
                     started.elapsed().as_secs_f64() * 1e3
                 );
                 let rect = done.await.ok().flatten();
-                end_selection(overlays, cx);
+                end_selection(overlays, cx).await;
                 return Ok(rect.filter(|r| !r.is_empty()));
             }
-            Err(unused) => end_selection_windows(unused, cx),
+            Err(unused) => end_selection_windows(unused, cx).await,
         }
     }
 
@@ -636,7 +635,7 @@ async fn select_region(
             let selection = selection.clone();
             let opened = cx.open_window(options(&name, logical, cx), move |window, cx| {
                 #[cfg(windows)]
-                platform::windows::focus_overlay(window, logical);
+                platform::windows::focus_overlay(window, logical, cx);
                 cx.new(|cx| {
                     if live {
                         Overlay::live(selection, logical, width, window, cx)
@@ -688,7 +687,7 @@ async fn select_region(
         match result {
             Ok(barrier) => Some(barrier),
             Err(error) => {
-                end_selection(overlays, cx);
+                end_selection(overlays, cx).await;
                 return Err(error);
             }
         }
@@ -745,8 +744,11 @@ async fn select_region(
     let rect = done.await.ok().flatten();
     #[cfg(target_os = "linux")]
     drop(selection_focus);
-    end_selection_windows(overlays, cx);
+    end_selection_windows(overlays, cx).await;
     if let Some(barrier) = barrier {
+        #[cfg(windows)]
+        barrier.wait()?;
+        #[cfg(not(windows))]
         cx.update(|_| barrier.wait())?;
     } else {
         daemon(cx, |d, _| d.selecting = false);
@@ -795,10 +797,23 @@ fn adopt_early(
 
 /// Closes early overlays that could not be used; the selection stays
 /// claimed for the overlays that replace them.
-fn end_selection_windows(overlays: Vec<WindowHandle<Overlay>>, cx: &mut AsyncApp) {
+async fn end_selection_windows(
+    overlays: impl IntoIterator<Item = WindowHandle<Overlay>>,
+    cx: &mut AsyncApp,
+) {
+    #[cfg(windows)]
+    for overlay in overlays {
+        if let Err(error) = platform::windows::hide_overlay(overlay, cx).await {
+            log::error!("hiding selection overlay: {error:#}");
+        }
+        cx.update(|cx| {
+            let _ = overlay.update(cx, |_, window, _| window.remove_window());
+        });
+    }
+    #[cfg(not(windows))]
     cx.update(|cx| {
-        for o in overlays {
-            let _ = o.update(cx, |_, window, _| window.remove_window());
+        for overlay in overlays {
+            let _ = overlay.update(cx, |_, window, _| window.remove_window());
         }
     });
 }

@@ -136,50 +136,87 @@ pub(super) fn overlay_geometry(
     )
 }
 
-pub fn focus_overlay(window: &gpui::Window, physical: crate::geom::IRect) {
+pub fn focus_overlay(window: &gpui::Window, physical: crate::geom::IRect, cx: &gpui::App) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     if let Ok(handle) = HasWindowHandle::window_handle(window)
         && let RawWindowHandle::Win32(handle) = handle.as_raw()
     {
-        unsafe {
-            use windows::Win32::Graphics::Dwm::{
-                DWMWA_NCRENDERING_POLICY, DWMWA_TRANSITIONS_FORCEDISABLED,
-                DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
-            };
-            use windows::Win32::UI::WindowsAndMessaging::{
-                GWL_STYLE, GetWindowLongW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-                SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos,
-            };
-            let hwnd = HWND(handle.hwnd.get() as *mut _);
-            // GPUI's transparent titlebar still keeps WS_THICKFRAME, leaving
-            // invisible resize borders inside these monitor-sized bounds.
-            // Remove the non-client frame before sizing so the viewport and
-            // physical capture lattice agree exactly.
-            SetWindowLongW(
-                hwnd,
-                GWL_STYLE,
-                overlay_style(GetWindowLongW(hwnd, GWL_STYLE)),
-            );
-            let disabled = 1i32;
-            for attribute in [
-                DWMWA_TRANSITIONS_FORCEDISABLED,
-                DWMWA_NCRENDERING_POLICY,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-            ] {
-                let _ = DwmSetWindowAttribute(hwnd, attribute, (&disabled as *const i32).cast(), 4);
-            }
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                physical.x,
-                physical.y,
-                physical.w,
-                physical.h,
-                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            let _ = SetForegroundWindow(hwnd);
-        }
+        let hwnd = HWND(handle.hwnd.get() as *mut _);
+        // Native resizing/activation synchronously calls GPUI's window
+        // callbacks. Poll outside App::update/open_window, not while App is
+        // mutably borrowed by the window constructor.
+        cx.foreground_executor()
+            .spawn(async move {
+                unsafe {
+                    use windows::Win32::Graphics::Dwm::{
+                        DWMWA_NCRENDERING_POLICY, DWMWA_TRANSITIONS_FORCEDISABLED,
+                        DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
+                    };
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GWL_STYLE, GetWindowLongW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                        SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos,
+                    };
+                    // GPUI's transparent titlebar still keeps WS_THICKFRAME, leaving
+                    // invisible resize borders inside these monitor-sized bounds.
+                    // Remove the non-client frame before sizing so the viewport and
+                    // physical capture lattice agree exactly.
+                    SetWindowLongW(
+                        hwnd,
+                        GWL_STYLE,
+                        overlay_style(GetWindowLongW(hwnd, GWL_STYLE)),
+                    );
+                    let disabled = 1i32;
+                    for attribute in [
+                        DWMWA_TRANSITIONS_FORCEDISABLED,
+                        DWMWA_NCRENDERING_POLICY,
+                        DWMWA_WINDOW_CORNER_PREFERENCE,
+                    ] {
+                        let _ = DwmSetWindowAttribute(
+                            hwnd,
+                            attribute,
+                            (&disabled as *const i32).cast(),
+                            4,
+                        );
+                    }
+                    let _ = SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        physical.x,
+                        physical.y,
+                        physical.w,
+                        physical.h,
+                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                    let _ = SetForegroundWindow(hwnd);
+                }
+            })
+            .detach();
     }
+}
+
+pub async fn hide_overlay<V: 'static>(
+    overlay: gpui::WindowHandle<V>,
+    cx: &mut gpui::AsyncApp,
+) -> Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+
+    let hwnd = overlay.update(cx, |_, window, _| {
+        let handle = HasWindowHandle::window_handle(window)
+            .map_err(|error| anyhow::anyhow!("selection window handle: {error}"))?;
+        match handle.as_raw() {
+            RawWindowHandle::Win32(handle) => Ok(HWND(handle.hwnd.get() as *mut _)),
+            _ => anyhow::bail!("Windows overlay has no Win32 handle"),
+        }
+    })??;
+    // Hide while its GPUI window still exists, and outside an App borrow.
+    // WM_ACTIVATE queues another foreground task; drain it before removal so
+    // that task cannot attempt to update an already-removed window.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    cx.foreground_executor().spawn(async {}).await;
+    Ok(())
 }
 
 fn overlay_style(style: i32) -> i32 {
