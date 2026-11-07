@@ -14,6 +14,7 @@ USAGE:
     quickscope capture <region|output|window|screen> [OPTIONS]
     quickscope open-last
     quickscope open <FILE>
+    quickscope settings
     quickscope notifications <on|off|toggle|status>
     quickscope daemon
     quickscope ping | quit
@@ -98,6 +99,7 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             no_extra(&rest)?;
             Request::OpenLast
         }
+        "settings" => parse_settings(&rest)?,
         "open" => match rest.as_slice() {
             [path] => {
                 Request::Open(std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
@@ -178,6 +180,11 @@ fn no_extra(rest: &[String]) -> anyhow::Result<()> {
     }
 }
 
+fn parse_settings(args: &[String]) -> anyhow::Result<Request> {
+    no_extra(args)?;
+    Ok(Request::Settings)
+}
+
 fn parse_capture(args: &[String]) -> anyhow::Result<Request> {
     let mut mode = None;
     let mut o = CaptureOptions::default();
@@ -230,6 +237,13 @@ mod tests {
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn settings_opens_without_extra_arguments() {
+        assert_eq!(parse_settings(&args("")).unwrap(), Request::Settings);
+        assert!(parse_settings(&args("--bogus")).is_err());
+        assert!(parse_settings(&args("extra")).is_err());
     }
 
     #[test]

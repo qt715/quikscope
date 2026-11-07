@@ -138,6 +138,8 @@ pub struct Platform {
     /// The desktop may show its own dialog while capturing (the Screenshot
     /// portal asks for permission), so nothing may take input meanwhile.
     pub capture_may_prompt: bool,
+    #[cfg(windows)]
+    pub(crate) shell: Option<Arc<windows::Shell>>,
 }
 
 /// Connects the backends for the current session. Missing pieces are

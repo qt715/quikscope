@@ -12,6 +12,7 @@
 //! quickscope-e2e-helper ime                          # resident input method: steps on stdin, reports activation
 //! quickscope-e2e-helper dialog                       # permission-dialog stand-in: a toplevel; prints "accepted" on Enter
 //! quickscope-e2e-helper toplevels                    # print "app_id\ttitle" per window
+//! quickscope-e2e-helper close APP_ID               # request native close of exactly one toplevel
 //! quickscope-e2e-helper paste MIME                   # write the clipboard contents to stdout
 //! quickscope-e2e-helper output NAME TRANSFORM SCALE [WxH]  # reconfigure an output
 //! ```
@@ -230,7 +231,7 @@ fn main() {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let num = |i: usize| -> f64 { args[i].parse().expect("number") };
     match cmd {
-        "move" | "click" | "drag" | "drag-hold" => {
+        "move" | "click" | "scroll" | "drag" | "drag-hold" => {
             let mgr: zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1 =
                 globals.bind(&qh, 1..=2, ()).expect("virtual pointer");
             let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).expect("seat");
@@ -258,6 +259,20 @@ fn main() {
             match cmd {
                 "move" => {
                     goto(num(1), num(2));
+                    pause(&mut queue, &mut state);
+                }
+                "scroll" => {
+                    goto(num(1), num(2));
+                    pause(&mut queue, &mut state);
+                    // GPUI consumes continuous deltas only for touchpad/finger
+                    // sources; wheel sources require discrete axis events.
+                    ptr.axis_source(wayland_client::protocol::wl_pointer::AxisSource::Finger);
+                    ptr.axis(
+                        ms(),
+                        wayland_client::protocol::wl_pointer::Axis::VerticalScroll,
+                        num(3),
+                    );
+                    ptr.frame();
                     pause(&mut queue, &mut state);
                 }
                 "click" => {
@@ -301,13 +316,34 @@ fn main() {
             ptr.destroy();
             queue.roundtrip(&mut state).unwrap();
         }
-        "toplevels" => {
+        "toplevels" | "close" => {
             let _mgr: zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1 =
                 globals.bind(&qh, 1..=3, ()).expect("foreign toplevel");
             queue.roundtrip(&mut state).unwrap();
             queue.roundtrip(&mut state).unwrap();
-            for t in &state.toplevels {
-                println!("{}\t{}", t.app_id, t.title);
+            if cmd == "close" {
+                let app_id = args.get(1).expect("app id");
+                let matching: Vec<_> = state
+                    .toplevels
+                    .iter()
+                    .filter(|t| &t.app_id == app_id)
+                    .collect();
+                assert_eq!(
+                    matching.len(),
+                    1,
+                    "close requires exactly one matching toplevel"
+                );
+                let handle = zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1::from_id(
+                    &conn,
+                    matching[0].id.clone().unwrap(),
+                )
+                .unwrap();
+                handle.close();
+                queue.roundtrip(&mut state).unwrap();
+            } else {
+                for t in &state.toplevels {
+                    println!("{}\t{}", t.app_id, t.title);
+                }
             }
         }
         "paste" => {

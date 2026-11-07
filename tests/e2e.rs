@@ -40,6 +40,282 @@ fn saved_path(out: &std::process::Output) -> PathBuf {
     PathBuf::from(stdout(out))
 }
 
+fn settings_visual(s: &Session, path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(s.command("grim").arg(path).status().unwrap().success());
+        let image = decode_png(path);
+        if image.pixel(640, 360) != pattern_pixel(640, 360) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "settings never painted: {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn settings_closed(s: &Session) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s
+        .toplevels()
+        .iter()
+        .any(|t| t.starts_with("quickscope-settings\t"))
+    {
+        assert!(Instant::now() < deadline, "settings window did not close");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+#[test]
+fn settings_command_opens_and_refocuses_one_window() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("settings");
+    s.start_daemon();
+    assert!(s.quickscope(&["settings"]).status.success());
+    s.wait_for_window("quickscope-settings");
+    settings_visual(&s, &artifacts.join("settings.png"));
+    assert!(s.quickscope(&["settings"]).status.success());
+    assert_eq!(
+        s.toplevels()
+            .iter()
+            .filter(|t| t.starts_with("quickscope-settings\t"))
+            .count(),
+        1,
+        "all settings requests must focus the existing window"
+    );
+    assert!(s.quickscope(&["notifications", "off"]).status.success());
+    // External changes must refresh the open view: clicking the now-off card
+    // turns notifications ON, rather than toggling stale local state to off.
+    s.helper(&["click", "640", "350"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if stdout(&s.quickscope(&["notifications", "status"])) == "notifications on" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "settings displayed stale notification state"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    s.helper(&["close", "quickscope-settings"]);
+    settings_closed(&s);
+    assert!(s.quickscope(&["settings"]).status.success());
+    s.wait_for_window("quickscope-settings");
+    settings_visual(&s, &artifacts.join("reopened.png"));
+    s.helper(&["scroll", "640", "400", "1000"]);
+    settings_visual(&s, &artifacts.join("settings-advanced.png"));
+}
+
+#[test]
+fn settings_text_saves_on_focus_loss_and_native_close() {
+    for finish in ["blur", "native-close"] {
+        let Some(mut s) = live_session() else { return };
+        let artifacts = s.live_artifacts(&format!("settings-fields-{finish}"));
+        s.start_daemon();
+        assert!(s.quickscope(&["settings"]).status.success());
+        s.wait_for_window("quickscope-settings");
+        settings_visual(&s, &artifacts.join("before-scroll.png"));
+        s.helper(&["scroll", "640", "400", "100"]);
+        settings_visual(&s, &artifacts.join("fields.png"));
+        if finish == "blur" {
+            // A repaired/hand-edited file is read on the next UI save. Its
+            // other values must refresh clean fields, not only toggle cards.
+            let before = decode_png(&artifacts.join("fields.png"));
+            let path = s.root().join("config/quickscope/config.toml");
+            std::fs::write(&path, "save_dir = '/tmp/repaired-settings-save'\n").unwrap();
+            s.helper(&["click", "640", "164"]);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let image_path = artifacts.join("repaired-fields.png");
+                assert!(
+                    s.command("grim")
+                        .arg(&image_path)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                let after = decode_png(&image_path);
+                let changed = (352..372)
+                    .flat_map(|y| (280..990).map(move |x| (x, y)))
+                    .filter(|&(x, y)| before.pixel(x, y) != after.pixel(x, y))
+                    .count();
+                if quickscope::config::Config::parse(&std::fs::read_to_string(&path).unwrap())
+                    .unwrap()
+                    .cursor
+                    && changed > 30
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "saved config never refreshed the save-directory field"
+                );
+                std::thread::sleep(Duration::from_millis(30));
+            }
+        }
+        s.helper(&["click", "640", "417"]);
+        s.type_text("changed.png");
+        settings_visual(&s, &artifacts.join("pending-field.png"));
+        let config_path = s.root().join("config/quickscope/config.toml");
+        let read = || {
+            quickscope::config::Config::parse(&std::fs::read_to_string(&config_path).unwrap())
+                .unwrap()
+        };
+        assert_ne!(
+            read().filename,
+            "changed.png",
+            "typing alone must not submit"
+        );
+        if finish == "blur" {
+            s.helper(&["click", "640", "362"]);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while read().filename != "changed.png" {
+                assert!(Instant::now() < deadline, "blur did not commit filename");
+                std::thread::sleep(Duration::from_millis(30));
+            }
+        }
+        s.helper(&["close", "quickscope-settings"]);
+        settings_closed(&s);
+        assert_eq!(
+            read().filename,
+            "changed.png",
+            "{finish} discarded a focused edit"
+        );
+    }
+}
+
+#[test]
+fn settings_live_apply_changes_the_next_capture_without_restart() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("settings-live-apply");
+    s.start_daemon();
+    assert!(s.quickscope(&["settings"]).status.success());
+    s.wait_for_window("quickscope-settings");
+    settings_visual(&s, &artifacts.join("settings.png"));
+    // The centered 760x660 form's second card chooses live selection.
+    s.helper(&["click", "640", "230"]);
+    let path = s.root().join("config/quickscope/config.toml");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while quickscope::config::Config::parse(&std::fs::read_to_string(&path).unwrap())
+        .unwrap()
+        .freeze
+    {
+        assert!(Instant::now() < deadline, "live choice did not save");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    s.helper(&["close", "quickscope-settings"]);
+    settings_closed(&s);
+    s.repaint_pattern(0);
+    let capture = s.spawn_quickscope(&[
+        "capture",
+        "region",
+        "--save",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    s.wait_overlay(1);
+    s.repaint_pattern(1);
+    s.helper(&["drag", "100", "100", "420", "330"]);
+    let image = decode_png(&saved_path(&s.finish(capture, Duration::from_secs(15))));
+    assert_eq!((image.width, image.height), (320, 230));
+    assert_exact_phase(&image, 100, 100, 1);
+}
+
+#[test]
+fn welcome_done_and_native_close_persist_the_chosen_mode_once() {
+    for finish in ["done", "native-close"] {
+        let Some(mut s) = live_session() else { return };
+        let artifacts = s.live_artifacts(&format!("welcome-{finish}"));
+        let config_path = s.root().join("config/quickscope/config.toml");
+        std::fs::remove_file(&config_path).unwrap();
+        s.start_daemon();
+        s.wait_for_window("quickscope-settings");
+        assert!(
+            s.toplevels()
+                .iter()
+                .any(|t| t.contains("Welcome to quickscope"))
+        );
+        settings_visual(&s, &artifacts.join("welcome.png"));
+        assert!(!config_path.exists(), "opening welcome is not completion");
+        // The centered 640x540 welcome form uses the same second mode card.
+        s.helper(&["click", "640", "290"]);
+        assert!(
+            !config_path.exists(),
+            "choices preview until Done/native close"
+        );
+        settings_visual(&s, &artifacts.join("welcome-live.png"));
+        if finish == "done" {
+            s.helper(&["click", "640", "610"]);
+        } else {
+            s.helper(&["close", "quickscope-settings"]);
+        }
+        settings_closed(&s);
+        let config =
+            quickscope::config::Config::parse(&std::fs::read_to_string(&config_path).unwrap())
+                .unwrap();
+        assert!(!config.freeze, "{finish} lost the live choice");
+        s.stop_daemon();
+        s.start_daemon();
+        // Startup logs the open before "daemon ready", independently of when
+        // the compositor publishes its toplevel, so this negative check cannot race.
+        assert!(!s.daemon_log().contains("welcome window opened"));
+        assert!(
+            !s.toplevels()
+                .iter()
+                .any(|t| t.starts_with("quickscope-settings\t")),
+            "completed onboarding must not reappear"
+        );
+    }
+}
+
+#[test]
+fn settings_reports_invalid_existing_config_without_overwriting_it() {
+    let Some(mut s) = live_session() else { return };
+    let artifacts = s.live_artifacts("settings-invalid");
+    let path = s.root().join("config/quickscope/config.toml");
+    let invalid = "# repair this typo\nfreze = false\n";
+    std::fs::write(&path, invalid).unwrap();
+    s.start_daemon();
+    assert!(s.daemon_log().contains("configuration could not be loaded"));
+    assert!(s.quickscope(&["settings"]).status.success());
+    s.wait_for_window("quickscope-settings");
+    settings_visual(&s, &artifacts.join("invalid-config.png"));
+    let before = decode_png(&artifacts.join("invalid-config.png"));
+    s.helper(&["click", "640", "230"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let image_path = artifacts.join("refused-edit.png");
+        assert!(
+            s.command("grim")
+                .arg(&image_path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let after = decode_png(&image_path);
+        let changed = (520..638)
+            .step_by(2)
+            .flat_map(|y| (276..1000).step_by(2).map(move |x| (x, y)))
+            .filter(|&(x, y)| before.pixel(x, y) != after.pixel(x, y))
+            .count();
+        if changed > 30 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "invalid edit never produced updated inline error text"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+    s.helper(&["close", "quickscope-settings"]);
+    settings_closed(&s);
+}
+
 fn phase_pixel(x: u32, y: u32, phase: u8) -> [u8; 4] {
     let mut pixel = pattern_pixel(x, y);
     if phase % 2 == 1 {

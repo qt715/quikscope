@@ -12,7 +12,7 @@ use super::{hsla, theme};
 use crate::document::PALETTE;
 
 /// Every icon the toolbar references (checked against the asset table in tests).
-pub const ICONS: [&str; 19] = [
+pub const ICONS: [&str; 20] = [
     "palette",
     "mouse-pointer-2",
     "hand",
@@ -32,6 +32,7 @@ pub const ICONS: [&str; 19] = [
     "copy",
     "scan-text",
     "save",
+    "settings",
 ];
 
 fn icon(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
@@ -253,6 +254,13 @@ pub fn toolbar(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
             button("save", "Save to screenshots folder (Ctrl+S)", false, true)
                 .on_click(cx.listener(|e, _, window, cx| e.save(false, window, cx)))
                 .child(icon("save", theme::accent())),
+        )
+        .child(
+            button("settings", "Settings", false, true)
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(super::settings::OpenSettings), cx);
+                })
+                .child(icon("settings", theme::text())),
         )
         .child(
             button(

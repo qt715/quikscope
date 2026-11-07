@@ -7,6 +7,7 @@ pub mod field;
 pub mod font_menu;
 pub mod motion;
 pub mod overlay;
+pub mod settings;
 pub mod toolbar;
 pub mod zoom;
 
@@ -98,6 +99,7 @@ impl AssetSource for Assets {
             "scan-text",
             "paint-bucket",
             "palette",
+            "settings",
             "italic",
             "chevron-down",
             "plus",

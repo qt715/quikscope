@@ -57,12 +57,11 @@ enum Command {
         timeout: u32,
         reply: mpsc::SyncSender<std::result::Result<(), String>>,
     },
+    Hotkeys(Vec<(i32, u32, u32, String)>),
     Quit,
 }
 
-/// A reserved shortcut must not take clipboard/tray services down with it;
-/// registration failures are reported separately with the config remedy.
-pub fn spawn(events: EventSink, hotkeys: &Hotkeys) -> Result<Arc<Shell>> {
+fn hotkey_bindings(hotkeys: &Hotkeys) -> Result<Vec<(i32, u32, u32, String)>> {
     let mut bindings = Vec::new();
     for (id, value) in [
         (1, &hotkeys.region),
@@ -74,6 +73,13 @@ pub fn spawn(events: EventSink, hotkeys: &Hotkeys) -> Result<Arc<Shell>> {
             bindings.push((id, modifiers, key, value.clone()));
         }
     }
+    Ok(bindings)
+}
+
+/// A reserved shortcut must not take clipboard/tray services down with it;
+/// registration failures are reported separately with the config remedy.
+pub fn spawn(events: EventSink, hotkeys: &Hotkeys) -> Result<Arc<Shell>> {
+    let bindings = hotkey_bindings(hotkeys)?;
     let (commands, receive) = mpsc::channel();
     let (ready, started) = mpsc::sync_channel(1);
     let thread = thread::Builder::new()
@@ -106,6 +112,14 @@ pub fn spawn(events: EventSink, hotkeys: &Hotkeys) -> Result<Arc<Shell>> {
 }
 
 impl Shell {
+    pub fn update_hotkeys(&self, hotkeys: &Hotkeys) {
+        let result =
+            hotkey_bindings(hotkeys).and_then(|bindings| self.send(Command::Hotkeys(bindings)));
+        if let Err(error) = result {
+            log::error!("updating Windows global hotkeys: {error:#}");
+        }
+    }
+
     fn send(&self, command: Command) -> Result<()> {
         self.commands
             .send(command)
@@ -268,15 +282,8 @@ unsafe fn run(
     unsafe {
         state.add_tray()?;
     }
-    for (id, modifiers, key, name) in bindings {
-        match unsafe { RegisterHotKey(hwnd, id, HOT_KEY_MODIFIERS(modifiers) | MOD_NOREPEAT, key) }
-        {
-            Ok(()) => state.hotkeys.borrow_mut().push(id),
-            Err(error) => log::error!(
-                "global hotkey {name:?} unavailable (already in use or reserved by Windows): {error}; \
-                 choose another binding in [hotkeys]"
-            ),
-        }
+    unsafe {
+        state.update_hotkeys(bindings);
     }
     let _ = ready.send(Ok(hwnd.0 as usize));
     let mut message = MSG::default();
@@ -300,6 +307,26 @@ unsafe fn run(
 }
 
 impl State {
+    unsafe fn update_hotkeys(&self, bindings: Vec<(i32, u32, u32, String)>) {
+        let hwnd = self.hwnd.get();
+        for id in self.hotkeys.borrow_mut().drain(..) {
+            if let Err(error) = unsafe { UnregisterHotKey(hwnd, id) } {
+                log::error!("unregistering global hotkey {id}: {error}");
+            }
+        }
+        for (id, modifiers, key, name) in bindings {
+            match unsafe {
+                RegisterHotKey(hwnd, id, HOT_KEY_MODIFIERS(modifiers) | MOD_NOREPEAT, key)
+            } {
+                Ok(()) => self.hotkeys.borrow_mut().push(id),
+                Err(error) => log::error!(
+                    "global hotkey {name:?} unavailable (already in use or reserved by Windows): {error}; \
+                     choose another binding in [hotkeys]"
+                ),
+            }
+        }
+    }
+
     fn tray_data(&self) -> NOTIFYICONDATAW {
         NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -346,6 +373,7 @@ impl State {
             4 => Request::OpenLast,
             5 => Request::Notifications(Switch::Toggle),
             6 => Request::Quit,
+            7 => Request::Settings,
             _ => return,
         };
         (self.events)(Event::Request(request));
@@ -368,6 +396,7 @@ impl State {
             (3, "Capture window"),
             (4, "Open last"),
             (5, "Toggle notifications"),
+            (7, "Settings…"),
             (6, "Quit"),
         ] {
             let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
@@ -431,6 +460,9 @@ impl State {
                         .map_err(|error| format!("{error:#}"));
                     let _ = reply.send(result);
                 }
+                Ok(Command::Hotkeys(bindings)) => unsafe {
+                    self.update_hotkeys(bindings);
+                },
                 Ok(Command::Quit) => {
                     unsafe {
                         PostQuitMessage(0);

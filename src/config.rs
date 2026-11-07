@@ -170,6 +170,17 @@ impl Config {
 
     pub fn parse(text: &str) -> Result<Config> {
         let config: Config = toml::from_str(text)?;
+        anyhow::ensure!(
+            !config.save_dir.trim().is_empty() && !config.save_dir.contains('\0'),
+            "save_dir must be a nonempty directory path without NUL characters"
+        );
+        anyhow::ensure!(
+            !config.filename.trim().is_empty()
+                && config.filename != "."
+                && config.filename != ".."
+                && !config.filename.contains('\0'),
+            "filename must be nonempty and contain no NUL characters"
+        );
         let e = &config.editor;
         crate::color::parse_hex(&e.color)
             .with_context(|| format!("editor.color {:?} is not #rrggbb or #rrggbbaa", e.color))?;
@@ -235,21 +246,55 @@ impl Config {
     }
 }
 
-/// Sets top-level `key = value` in the config file at `path`, keeping every
-/// other key, comment and the file's layout; creates the file if missing.
-/// The result is validated before it replaces the old file.
-pub fn persist_bool(path: &Path, key: &str, value: bool) -> Result<()> {
+/// Updates typed config paths (for example `["editor", "stroke"]`) together.
+/// Preserves existing comments, value decorations and ordering, creating missing
+/// sections and parent directories as needed. Both the original config and the
+/// complete batch must be valid before anything is written.
+pub fn persist_values(path: &Path, values: &[(&[&str], toml_edit::Value)]) -> Result<Config> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
+    if !text.is_empty() {
+        Config::parse(&text).with_context(|| {
+            format!(
+                "in {}; fix the config before saving settings",
+                path.display()
+            )
+        })?;
+    }
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .with_context(|| format!("parsing {}", path.display()))?;
-    doc[key] = toml_edit::value(value);
+    for (keys, value) in values {
+        anyhow::ensure!(
+            !keys.is_empty() && keys.iter().all(|key| !key.is_empty()),
+            "config path must contain nonempty keys"
+        );
+        let (key, sections) = keys.split_last().expect("nonempty path checked above");
+        let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+        for section in sections {
+            if !table.contains_key(section) {
+                table.insert(section, toml_edit::Item::Table(toml_edit::Table::new()));
+            }
+            table = table
+                .get_mut(section)
+                .and_then(toml_edit::Item::as_table_like_mut)
+                .with_context(|| format!("config path {} is not a section", keys.join(".")))?;
+        }
+        let mut replacement = value.clone();
+        if let Some(existing) = table.get_mut(key) {
+            if let Some(old_value) = existing.as_value() {
+                *replacement.decor_mut() = old_value.decor().clone();
+            }
+            *existing = toml_edit::Item::Value(replacement);
+        } else {
+            table.insert(key, toml_edit::Item::Value(replacement));
+        }
+    }
     let out = doc.to_string();
-    Config::parse(&out)
+    let config = Config::parse(&out)
         .with_context(|| format!("updating {} would make it invalid", path.display()))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -257,7 +302,7 @@ pub fn persist_bool(path: &Path, key: &str, value: bool) -> Result<()> {
     let tmp = path.with_extension(format!("toml.{}.part", std::process::id()));
     std::fs::write(&tmp, out)?;
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    Ok(config)
 }
 
 fn default_save_dir() -> String {
@@ -512,37 +557,175 @@ mod tests {
     }
 
     #[test]
-    fn persisting_a_toggle_keeps_comments_and_other_keys() {
+    fn persisting_creates_missing_directories_and_returns_config() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("quickscope/config.toml");
-        persist_bool(&path, "notify", false).unwrap();
-        assert!(
-            !Config::parse(&std::fs::read_to_string(&path).unwrap())
-                .unwrap()
-                .notify
+        let path = dir.path().join("nested/quickscope/config.toml");
+        let c = persist_values(&path, &[(&["notify"], false.into())]).unwrap();
+        assert!(!c.notify);
+        assert_eq!(c.editor, EditorConfig::default());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "notify = false\n");
+        assert_eq!(
+            Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap(),
+            c
         );
-
-        let original = "# my settings\nsave_dir = \"/tmp/x\" # inline\nnotify = false\n\n[editor]\nstroke = 2\n";
-        std::fs::write(&path, original).unwrap();
-        persist_bool(&path, "notify", true).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            text.contains("# my settings") && text.contains("# inline"),
-            "{text}"
-        );
-        let c = Config::parse(&text).unwrap();
-        assert!(c.notify);
-        assert_eq!(c.editor.stroke, 2);
-        assert_eq!(c.save_dir, "/tmp/x");
     }
 
     #[test]
-    fn persisting_never_writes_an_invalid_file() {
+    fn persisting_batch_preserves_comments_decorations_and_order() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "bogus_key = 1\n").unwrap();
-        assert!(persist_bool(&path, "notify", true).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "bogus_key = 1\n");
+        let original = "# my settings\nsave_dir = '/tmp/x' # directory\nnotify  =  false  # toggle\nfilename = 'old.png' # pattern\n\n[editor] # tools\nstroke = 1 # thickness\nfont_size = 18.0 # size\n\n[ocr]\nlanguages = ['eng'] # models\n\n[hotkeys] # unchanged\nregion = 'F1'\n";
+        std::fs::write(&path, original).unwrap();
+        let mut languages = toml_edit::Array::new();
+        languages.push("eng");
+        languages.push("jpn");
+        let c = persist_values(
+            &path,
+            &[
+                (&["notify"], true.into()),
+                (&["filename"], "shot_%s.png".into()),
+                (&["editor", "stroke"], 2_i64.into()),
+                (&["editor", "font_size"], 24.5_f64.into()),
+                (&["ocr", "languages"], languages.into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# my settings\nsave_dir = '/tmp/x' # directory\nnotify  =  true  # toggle\nfilename = \"shot_%s.png\" # pattern\n\n[editor] # tools\nstroke = 2 # thickness\nfont_size = 24.5 # size\n\n[ocr]\nlanguages = [\"eng\", \"jpn\"] # models\n\n[hotkeys] # unchanged\nregion = 'F1'\n"
+        );
+        assert!(c.notify);
+        assert_eq!(c.filename, "shot_%s.png");
+        assert_eq!(c.save_dir, "/tmp/x");
+        assert_eq!(c.editor.stroke, 2);
+        assert_eq!(c.editor.font_size, 24.5);
+        assert_eq!(c.ocr.languages, ["eng", "jpn"]);
+        assert_eq!(c.hotkeys.region, "F1");
+    }
+
+    #[test]
+    fn persisting_creates_sections_and_updates_inline_tables_and_dotted_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let c = persist_values(
+            &path,
+            &[
+                (&["editor", "stroke"], 0_i64.into()),
+                (&["hotkeys", "region"], "F1".into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(c.editor.stroke, 0);
+        assert_eq!(c.hotkeys.region, "F1");
+        for (original, expected) in [
+            (
+                "editor = { stroke = 1 } # inline section\n",
+                "editor = { stroke = 2 } # inline section\n",
+            ),
+            (
+                "editor.stroke = 1 # dotted\n",
+                "editor.stroke = 2 # dotted\n",
+            ),
+        ] {
+            std::fs::write(&path, original).unwrap();
+            let c = persist_values(&path, &[(&["editor", "stroke"], 2_i64.into())]).unwrap();
+            assert_eq!(c.editor.stroke, 2);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn persisting_invalid_batches_leaves_original_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "# keep exactly\nnotify = false # disabled\n[editor]\nstroke = 1\n";
+        let invalid: Vec<(&[&str], toml_edit::Value)> = vec![
+            (&["notify"], "true".into()),
+            (&["editor", "stroke"], (-1_i64).into()),
+            (&["editor", "color"], "red".into()),
+            (&["editor", "font_size"], 0.0_f64.into()),
+            (&["editor", "font_size"], f64::NAN.into()),
+            (&["editor", "font_weight"], 0_i64.into()),
+            (&["save_dir"], "".into()),
+            (&["filename"], "".into()),
+            (&["ocr", "languages"], "eng".into()),
+            (&["unknown"], true.into()),
+            (&["notify", "nested"], true.into()),
+            (&["editor", "unknown"], true.into()),
+            (&[], true.into()),
+            (&[""], true.into()),
+        ];
+        for (keys, value) in invalid {
+            std::fs::write(&path, original).unwrap();
+            assert!(
+                persist_values(&path, &[(&["notify"], true.into()), (keys, value)]).is_err(),
+                "{keys:?}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn persisting_refuses_invalid_original_even_when_batch_would_fix_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for original in [
+            "bogus_key = 1\n",
+            "[editor]\nunknown = true\n",
+            "notify = 'wrong type'\n",
+            "[editor]\nfont_size = 0\n",
+            "not valid toml [\n",
+        ] {
+            std::fs::write(&path, original).unwrap();
+            assert!(
+                persist_values(
+                    &path,
+                    &[
+                        (&["notify"], true.into()),
+                        (&["editor", "stroke"], 1_i64.into()),
+                    ],
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn invalid_new_config_does_not_create_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing/config.toml");
+        assert!(persist_values(&path, &[(&["notify"], 1_i64.into())]).is_err());
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn save_paths_validate_without_restricting_existing_patterns_or_strokes() {
+        for text in [
+            "save_dir = ''",
+            "save_dir = '   '",
+            "save_dir = \"bad\\u0000path\"",
+            "filename = ''",
+            "filename = '.'",
+            "filename = '..'",
+            "filename = \"bad\\u0000name\"",
+        ] {
+            assert!(Config::parse(text).is_err(), "{text}");
+        }
+        let c = Config::parse(
+            "save_dir = 'new/directory'\nfilename = 'shot_%q_%.png'\n[editor]\nstroke = 0",
+        )
+        .unwrap();
+        assert_eq!(c.save_dir, "new/directory");
+        assert_eq!(c.filename, "shot_%q_%.png");
+        assert_eq!(c.editor.stroke, 0);
+        assert!(Config::parse("[editor]\nstroke = 2").is_ok());
+        assert!(Config::parse("filename = '%Y/%m/shot_%H%M%S.png'").is_ok());
+        assert!(Config::parse("filename = 'sub\\shot.png'").is_ok());
+        assert_eq!(
+            Config::parse("[editor]\nstroke = 3").unwrap().editor.stroke,
+            3
+        );
     }
 
     #[test]

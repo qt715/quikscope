@@ -32,6 +32,7 @@ use crate::platform::{self, Capture, Clipboard, Event, Notifier, Platform};
 use crate::raster::{Compression, Image};
 use crate::ui::editor::{Editor, EditorServices, LastTool};
 use crate::ui::overlay::{Overlay, Selection};
+use crate::ui::settings::{OpenSettings, Settings};
 use crate::ui::{self, Assets, Shot};
 
 /// Shots kept in memory (newest last). Older ones remain reachable through
@@ -53,6 +54,7 @@ struct Daemon {
     shots: VecDeque<Arc<Shot>>,
     docs: HashMap<u64, Entity<Document>>,
     editors: HashMap<u64, WindowHandle<Editor>>,
+    settings: Option<WindowHandle<Settings>>,
     next_id: u64,
     selecting: bool,
     /// Capture notifications; starts from the config, changed by
@@ -88,7 +90,14 @@ pub fn run(socket: PathBuf) -> Result<()> {
     #[cfg(windows)]
     platform::windows::initialize()?;
     let started = Instant::now();
-    let config = Arc::new(Config::load()?);
+    let welcome = matches!(
+        std::fs::metadata(config::config_path()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    let config = Arc::new(Config::load().unwrap_or_else(|error| {
+        log::error!("configuration could not be loaded; using defaults: {error:#}");
+        Config::default()
+    }));
     // Index system fonts off the main thread before the font menu needs them.
     crate::fonts::warm();
     // The primary OCR model loads in the background and stays loaded, so
@@ -129,11 +138,20 @@ pub fn run(socket: PathBuf) -> Result<()> {
                 shots: VecDeque::new(),
                 docs: HashMap::new(),
                 editors: HashMap::new(),
+                settings: None,
                 next_id: 1,
                 selecting: false,
             });
             if let Some(options) = prewarm {
                 prewarm_gpu(options, cx);
+            }
+            cx.on_action::<OpenSettings>(|_, cx| {
+                if let Err(error) = open_settings(false, cx) {
+                    log::error!("opening settings: {error:#}");
+                }
+            });
+            if welcome && let Err(error) = open_settings(true, cx) {
+                log::error!("opening welcome settings: {error:#}");
             }
             log::info!(
                 "daemon ready on {} in {:.0}ms",
@@ -277,6 +295,9 @@ async fn handle(req: Request, cx: &mut AsyncApp) -> Response {
         Request::OpenLast => open_last(cx).await,
         Request::Notifications(switch) => set_notifications(switch, cx).await,
         Request::Open(path) => open_path(path, cx).await,
+        Request::Settings => cx
+            .update(|cx| open_settings(false, cx))
+            .map(|_| Some(Response::Pong)),
     };
     match result {
         Ok(Some(r)) => r,
@@ -973,11 +994,18 @@ async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<R
     let (current, notifier) = daemon(cx, |d, _| (d.notify, d.platform.notifier.clone()));
     let on = switch.apply(current);
     if switch != Switch::Status {
-        cx.background_spawn(
-            async move { config::persist_bool(&config::config_path(), "notify", on) },
-        )
-        .await?;
-        daemon(cx, |d, _| d.notify = on);
+        cx.update(|cx| -> Result<()> {
+            // UI writes and IPC toggles share the app thread, so their atomic
+            // read/edit/replace operations cannot overwrite each other's keys.
+            config::persist_values(
+                &config::config_path(),
+                &[(&["notify"], toml_edit::Value::from(on))],
+            )?;
+            let mut config = (*cx.global::<Daemon>().config).clone();
+            config.notify = on;
+            apply_config(Arc::new(config), cx);
+            Ok(())
+        })?;
         log::info!("capture notifications {}", if on { "on" } else { "off" });
         // Feedback for keybind users; shown even when turning them off.
         if on != current
@@ -997,6 +1025,92 @@ async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<R
         }
     }
     Ok(Some(Response::Notifications(on)))
+}
+
+/// Every settings entry point shares the same in-process config generation.
+/// Existing editor tools retain their current styles; future editors/captures
+/// and save/clipboard services immediately use these new defaults.
+fn apply_config(config: Arc<Config>, cx: &mut App) {
+    cx.update_global::<Daemon, _>(|d, _| {
+        #[cfg(windows)]
+        if d.config.hotkeys != config.hotkeys
+            && let Some(shell) = &d.platform.shell
+        {
+            shell.update_hotkeys(&config.hotkeys);
+        }
+        d.notify = config.notify;
+        d.config = config.clone();
+    });
+    cx.update_global::<EditorServices, _>(|services, _| services.config = config.clone());
+    let settings = cx.global::<Daemon>().settings;
+    // UI edits invoke this while the Settings entity is borrowed. Refresh only
+    // after that update ends; external IPC/tray changes use the same path.
+    cx.defer(move |cx| {
+        if let Some(settings) = settings {
+            let _ = settings.update(cx, |view, window, cx| {
+                view.refresh_config(config, window, cx)
+            });
+        }
+    });
+}
+
+fn open_settings(welcome: bool, cx: &mut App) -> Result<()> {
+    let (config, existing) = cx.read_global::<Daemon, _>(|d, _| (d.config.clone(), d.settings));
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        return Ok(());
+    }
+    let screen = cx
+        .displays()
+        .first()
+        .map(|display| display.bounds().size)
+        .unwrap_or(size(px(1280.), px(720.)));
+    let (preferred_w, preferred_h) = if welcome {
+        (640_f32, 540_f32)
+    } else {
+        (760_f32, 660_f32)
+    };
+    let bounds = size(
+        px(preferred_w.min(f32::from(screen.width) * 0.95)),
+        px(preferred_h.min(f32::from(screen.height) * 0.95)),
+    );
+    let path = config::config_path();
+    let handle = cx.open_window(
+        WindowOptions {
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some(
+                    if welcome {
+                        "Welcome to quickscope"
+                    } else {
+                        "quickscope — Settings"
+                    }
+                    .into(),
+                ),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::centered(bounds, cx)),
+            app_id: Some("quickscope-settings".into()),
+            focus: true,
+            show: true,
+            window_min_size: Some(size(px(360.), px(320.))),
+            ..Default::default()
+        },
+        move |window, cx| {
+            let view = cx
+                .new(|cx| Settings::new(config, path, welcome, Arc::new(apply_config), window, cx));
+            window.activate_window();
+            view
+        },
+    )?;
+    cx.update_global::<Daemon, _>(|d, _| d.settings = Some(handle));
+    log::debug!(
+        "{} window opened",
+        if welcome { "welcome" } else { "settings" }
+    );
+    Ok(())
 }
 
 fn shot_response(shot: &Shot) -> Response {

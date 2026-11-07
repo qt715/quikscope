@@ -119,6 +119,8 @@ pub enum Request {
     Capture(Mode, CaptureOptions),
     OpenLast,
     Open(PathBuf),
+    /// Open or focus the settings window.
+    Settings,
     /// Turn capture notifications on/off (persisted to the config file).
     Notifications(Switch),
     Ping,
@@ -183,6 +185,7 @@ impl Request {
                 return Ok(Request::Capture(mode, o));
             }
             "open-last" => Request::OpenLast,
+            "settings" => Request::Settings,
             "open" => {
                 // Paths may contain spaces: take the rest of the line verbatim.
                 let path = line.trim_start()["open".len()..].trim();
@@ -245,6 +248,7 @@ impl fmt::Display for Request {
             }
             Request::OpenLast => write!(f, "open-last"),
             Request::Open(p) => write!(f, "open {}", p.display()),
+            Request::Settings => write!(f, "settings"),
             Request::Notifications(s) => write!(f, "notifications {}", s.as_str()),
             Request::Ping => write!(f, "ping"),
             Request::Quit => write!(f, "quit"),
@@ -477,6 +481,7 @@ mod tests {
             ),
             Request::OpenLast,
             Request::Open(PathBuf::from("/tmp/with space/shot.png")),
+            Request::Settings,
             Request::Notifications(Switch::On),
             Request::Notifications(Switch::Off),
             Request::Notifications(Switch::Toggle),
@@ -534,6 +539,7 @@ mod tests {
             "notifications maybe",
             "notifications on off",
             "ping extra",
+            "settings extra",
             "open",
             "launch",
         ] {

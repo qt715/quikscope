@@ -45,6 +45,7 @@ pub struct Field {
     focus: FocusHandle,
     width: Pixels,
     placeholder: SharedString,
+    submit_on_blur: bool,
 }
 
 impl EventEmitter<FieldEvent> for Field {}
@@ -105,7 +106,7 @@ impl Field {
         let focus = cx.focus_handle();
         cx.on_blur(&focus, window, |this: &mut Field, _, cx| {
             this.selected = false;
-            if this.kind != FieldKind::Text {
+            if this.kind != FieldKind::Text || this.submit_on_blur {
                 cx.emit(FieldEvent::Submit(this.text.clone()));
             }
             cx.notify();
@@ -119,7 +120,14 @@ impl Field {
             focus,
             width: px(width),
             placeholder: SharedString::default(),
+            submit_on_blur: false,
         }
+    }
+
+    /// Opt text inputs into committing on blur without changing search fields.
+    pub fn submit_on_blur(mut self) -> Self {
+        self.submit_on_blur = true;
+        self
     }
 
     pub fn placeholder(mut self, text: &'static str) -> Self {
@@ -146,6 +154,14 @@ impl Field {
             self.marked = None;
             cx.notify();
         }
+    }
+
+    /// Discard an edit even while focused, selecting the restored value.
+    pub fn restore_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.text = text;
+        self.marked = None;
+        self.selected = true;
+        cx.notify();
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {

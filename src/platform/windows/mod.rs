@@ -5,6 +5,8 @@ mod capture;
 mod desktop;
 mod shell;
 
+pub use shell::Shell;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -56,8 +58,11 @@ pub(super) fn connect(events: EventSink) -> Platform {
         .map(|c| Arc::new(c) as Arc<dyn Capture>)
         .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
         .ok();
-    let shell = crate::config::Config::load()
-        .and_then(|config| shell::spawn(events, &config.hotkeys))
+    let config = crate::config::Config::load().unwrap_or_else(|error| {
+        log::error!("loading configuration for Windows shell: {error:#}; using defaults");
+        crate::config::Config::default()
+    });
+    let shell = shell::spawn(events, &config.hotkeys)
         .map_err(|e| log::warn!("Windows shell services unavailable: {e:#}"))
         .ok();
     Platform {
@@ -65,7 +70,8 @@ pub(super) fn connect(events: EventSink) -> Platform {
         capture,
         desktop: Arc::new(desktop::WindowsDesktop) as Arc<dyn Desktop>,
         clipboard: shell.as_ref().map(|s| s.clone() as Arc<dyn Clipboard>),
-        notifier: shell.map(|s| s as Arc<dyn Notifier>),
+        notifier: shell.as_ref().map(|s| s.clone() as Arc<dyn Notifier>),
+        shell,
         surfaces: Surfaces::Windows,
         capture_may_prompt: false,
     }
