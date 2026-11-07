@@ -658,11 +658,19 @@ mod tests {
                 .all(|g| g.face == line.glyphs[1].face)
         );
         assert_ne!(l.families()[line.glyphs[1].face as usize], "Inter");
-        // Full-width ideographs advance about one em each.
+        // Proportional kana are valid: enforce useful em-scaled advances,
+        // not the full-em metrics of a particular Linux fallback family.
+        for carets in line.carets[1..].windows(2) {
+            let advance = carets[1] - carets[0];
+            assert!((0.5 * 28.0..=1.1 * 28.0).contains(&advance), "{l:?}");
+        }
         let w = line.carets[5] - line.carets[1];
-        assert!((w - 4.0 * 28.0).abs() < 4.0, "{w}");
+        assert!((0.5 * 4.0 * 28.0..=1.1 * 4.0 * 28.0).contains(&w), "{l:?}");
         let path = ink(&l, Pt::new(0.0, 0.0)).path.unwrap();
-        assert!(path.bounds().width() > 4.0 * 28.0);
+        let bounds = path.bounds();
+        assert!(bounds.width() > 0.5 * line.width, "{l:?}");
+        assert!(bounds.left() >= -0.1 * 28.0, "{l:?}");
+        assert!(bounds.right() <= line.width + 0.1 * 28.0, "{l:?}");
     }
 
     #[test]

@@ -177,6 +177,16 @@ static DB: LazyLock<fontdb::Database> = LazyLock::new(|| {
     let started = std::time::Instant::now();
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
+    // Dot-prefixed families are private implementation faces. Apple's
+    // .LastResort claims every code point with placeholder glyphs, hiding real fallbacks.
+    let private_faces: Vec<_> = db
+        .faces()
+        .filter(|face| face.families.iter().any(|(name, _)| name.starts_with('.')))
+        .map(|face| face.id)
+        .collect();
+    for id in private_faces {
+        db.remove_face(id);
+    }
     log::debug!(
         "indexed {} system font faces in {:.0}ms",
         db.len(),
@@ -603,6 +613,10 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), f.len());
         assert_eq!(family_weights(DEFAULT_FAMILY).len(), 9);
+        assert!(
+            DB.faces()
+                .all(|face| face.families.iter().all(|(name, _)| !name.starts_with('.')))
+        );
     }
 
     #[test]
