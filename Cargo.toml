@@ -108,6 +108,8 @@ embed-resource = "3"
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["test-support"] }
+# Same font database as GPUI's Linux text system, to check bundled font names.
+fontdb = "0.23"
 tempfile = "3"
 
 [profile.dev.package."*"]

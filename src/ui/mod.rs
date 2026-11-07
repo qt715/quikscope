@@ -128,7 +128,20 @@ impl AssetSource for Assets {
     }
 }
 
-pub const UI_FONT: &str = "Inter";
+/// GPUI family of the bundled Inter. Inter 4's variable font names its family
+/// "Inter Variable"; GPUI matches family names exactly, so "Inter" would miss
+/// the bundled face and fall back to system fonts (or panic without any).
+pub const UI_FONT: &str = "Inter Variable";
+
+/// GPUI family that renders the annotation font `family`: the annotation
+/// renderer calls the bundled face "Inter", GPUI knows it as [`UI_FONT`].
+pub fn ui_family(family: &str) -> SharedString {
+    if family == crate::fonts::DEFAULT_FAMILY {
+        UI_FONT.into()
+    } else {
+        SharedString::from(family.to_owned())
+    }
+}
 
 /// Registers the embedded font for UI labels.
 pub fn init(cx: &mut App) {
@@ -403,5 +416,20 @@ mod tests {
             );
         }
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
+    }
+
+    /// GPUI selects faces by exact family name from this database; a name
+    /// that misses the bundled font silently renders the UI in a system font
+    /// and panics where none is installed.
+    #[test]
+    fn ui_font_names_a_family_of_the_bundled_font() {
+        let mut db = fontdb::Database::new();
+        db.load_font_data(crate::fonts::INTER.to_vec());
+        let families: Vec<String> = db
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+            .collect();
+        assert!(families.iter().any(|f| f == UI_FONT), "{families:?}");
+        assert_eq!(ui_family(crate::fonts::DEFAULT_FAMILY), UI_FONT);
     }
 }

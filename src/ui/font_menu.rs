@@ -283,7 +283,7 @@ impl FontMenu {
                     .items_center()
                     .rounded_md()
                     .text_sm()
-                    .font_family(name.clone())
+                    .font_family(super::ui_family(&family))
                     .text_color(if active {
                         theme::accent()
                     } else {
@@ -325,7 +325,7 @@ fn icon(name: &'static str) -> impl IntoElement {
 impl Render for FontMenu {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let spec = self.spec.clone();
-        let family = SharedString::from(spec.family.to_string());
+        let family = super::ui_family(&spec.family);
         let italic = spec.italic;
 
         let row =
@@ -474,7 +474,7 @@ impl Render for FontMenu {
                                 .items_center()
                                 .rounded_md()
                                 .text_sm()
-                                .font_family(SharedString::from(spec.family.to_string()))
+                                .font_family(super::ui_family(&spec.family))
                                 .font_weight(FontWeight(w as f32))
                                 .when(italic, |d| d.italic())
                                 .text_color(if active {
