@@ -37,6 +37,10 @@ First release.
   shortcuts, notifications and per-user autostart. Frozen and live region
   selection were verified on one Windows 11 monitor at 96 DPI. Windows 10,
   mixed DPI, multiple monitors, window snapping and OCR remain unverified.
+- macOS 12.3+: ScreenCaptureKit Retina capture, CoreGraphics window snapping,
+  PNG/TIFF/text pasteboard, menu-bar actions, configurable global shortcuts,
+  bundled notifications and per-user LaunchAgent autostart. Apple Silicon
+  and Intel app builds share one bundle definition; interactive checks remain outstanding.
 - Application icon for Linux launchers and notifications, X11 editor and
   settings windows, and the Windows executable and tray.
 

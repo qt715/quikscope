@@ -3,8 +3,8 @@
 # quikscope
 
 A fast screenshot tool for Linux (wlroots compositors such as Hyprland and
-sway, X11, and experimental GNOME/KDE portal support) and Windows, with a
-built-in annotation editor written in [GPUI](https://gpui.rs).
+sway, X11, and experimental GNOME/KDE portal support), Windows and macOS 12.3+,
+with a built-in annotation editor written in [GPUI](https://gpui.rs).
 
 ![Region selection with a frozen-screen overlay](docs/images/region-selection.png)
 
@@ -23,11 +23,12 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
   encoding finishes ~22 ms later. The editor paints its first frame ~5 ms after creation
   (see [Performance](#performance)).
 - **Desktop-specific backends.** `wlr-screencopy` on wlroots compositors, the
-  experimental Screenshot portal on GNOME/KDE, MIT-SHM on X11, DXGI on Windows;
+  experimental Screenshot portal on GNOME/KDE, MIT-SHM on X11, DXGI on Windows,
+  and ScreenCaptureKit on macOS;
   the backend is picked at start-up ([details](#desktops)).
 - **Frozen or live region selection** (frozen by default), spanning outputs where
-  the backend permits, with window snapping on Hyprland, X11 and Windows (Windows snapping
-  is not yet verified natively). Live selection dims outside the rectangle and
+  the backend permits, with window snapping on Hyprland, X11, Windows and macOS
+  (Windows and macOS snapping are not yet verified natively). Live selection dims outside the rectangle and
   leaves a transparent hole; pixels are captured after selection closes.
 - **Excalidraw-style editor**: rectangle, ellipse, arrow, line, pen,
   highlighter, text, numbered steps, pixelate (redaction) and crop, with
@@ -43,7 +44,8 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
 ## Install
 
 Build with Rust ≥ 1.95. On Linux, see [Desktops](#desktops) for what each
-desktop needs; on Windows, see [Windows 10/11](#windows-1011).
+desktop needs; on Windows, see [Windows 10/11](#windows-1011);
+on macOS, see [macOS](#macos).
 
 ```sh
 cargo install --locked --path .
@@ -89,6 +91,7 @@ The daemon picks a backend at start-up and logs it (`platform backend: …`);
 | GNOME (experimental) | Screenshot portal | one fullscreen window, one output | no |
 | X11 | MIT-SHM (GetImage remotely) | override-redirect popups | EWMH window managers |
 | Windows 10/11 | DXGI duplication (GDI fallback) | topmost popups | implemented, unverified |
+| macOS 12.3+ | ScreenCaptureKit | borderless popup panels, all displays | implemented, unverified |
 
 ### wlroots compositors
 
@@ -188,6 +191,24 @@ For diagnostics, `QUIKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
 the single-output fullscreen path, even on a layer-shell compositor.
 Portal PNGs are not deleted: the API does not transfer ownership, and
 GNOME/KDE may save into Pictures rather than create disposable files.
+
+### macOS
+
+macOS 12.3 and later has a native ScreenCaptureKit backend on Apple Silicon
+and Intel, with Retina-resolution capture, window snapping, a menu-bar menu
+and configurable global shortcuts. Use the `.app` bundle for notifications.
+The first capture requests **Screen Recording** permission; allow quikscope
+in System Settings → Privacy & Security, and restart it if macOS asks.
+
+Defaults are **Cmd+Shift+2** (region), **Cmd+Shift+8** (screen),
+**Cmd+Shift+7** (window), and **Cmd+Shift+E** (open last). They deliberately
+leave macOS's Cmd+Shift+3/4/5 and Touch Bar Cmd+Shift+6 alone. Configuration lives in
+`~/Library/Application Support/quikscope/config.toml`; cache and the per-user
+Unix IPC socket live in `~/Library/Caches/quikscope`. Screenshots default to
+`~/Pictures/Screenshots`. `quikscope autostart on|off|status` manages a
+per-user LaunchAgent for subsequent logins.
+
+See [macOS build, bundle and verification notes](docs/macos.md).
 
 ### X11
 
@@ -409,7 +430,8 @@ test described in [docs/testing.md](docs/testing.md).
 - X11 capture supports 24/32-bit TrueColor; monitors have no independent scale.
 - Windows frozen and live region selection were verified on one Windows 11
   monitor; Windows 10, mixed DPI, multiple monitors and window snapping remain unverified.
-- macOS is not supported.
+- macOS overlay interaction, global shortcuts and notification clicks require
+  an interactive desktop; see [macOS verification](docs/macos.md).
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.
 

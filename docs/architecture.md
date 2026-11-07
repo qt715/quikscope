@@ -60,6 +60,7 @@ socket.
 | `x11` | MIT-SHM GetImage, core GetImage fallback | CLIPBOARD selection, PNG/text, INCR | override-redirect PopUp | EWMH |
 | `windows` | resident DXGI Desktop Duplication, reusable GDI fallback | delayed PNG + DIBV5/DIB/Unicode | borderless topmost GPUI popup | DWM foreground bounds and filtered top-level Z order |
 | `portal` | Screenshot portal → PNG | data-control, Xwayland CLIPBOARD fallback | layer-shell when offered; otherwise one fullscreen xdg-toplevel | none |
+| `macos` | ScreenCaptureKit display streams (12.3+) | promised PNG and TIFF through NSPasteboard | nonactivating GPUI popup panels, level 101 | CoreGraphics on-screen layer-0 front-to-back window list |
 
 X11 keeps separate persistent connections for capture, EWMH queries and
 clipboard ownership. The capture thread reuses a SysV shared-memory segment;
@@ -70,6 +71,33 @@ the same encoded bytes; large transfers advance only when the requestor deletes
 the previous INCR property. Popups bypass the window manager, so region selection
 sets native keyboard focus after they map and restores the prior focus on exit.
 There is no X11 GPU prewarm window because it could flash on the desktop.
+
+### macOS
+
+The native shell is created inside GPUI's main-thread application callback.
+Cocoa status-item/delegate objects stay in thread-local storage; Send/Sync
+service handles marshal notifications and cleanup onto the main queue.
+Carbon global hotkeys and menu actions feed the same `Event::Request` channel
+as IPC, and UserNotifications activation feeds `Event::OpenShot`.
+Unbundled invocations disable notifications rather than calling
+`UNUserNotificationCenter` without a valid bundle identity.
+
+Capture uses ScreenCaptureKit streams rather than its macOS-14-only
+still-image API. Every requested display produces BGRA with `showsCursor`
+set from the request. Native dimensions apply the display mode's Retina
+factor to its oriented desktop bounds, so a rotated display does not inherit
+the unrotated mode's aspect ratio. Logical geometry uses CoreGraphics'
+top-left desktop points, preserving Retina scale and negative display origins.
+Permission checks request Screen Recording access
+and report a Settings remedy instead of returning a wallpaper-only image.
+Stream startup/frame waits are bounded and streams stop after the frame.
+
+Selection uses GPUI's `PopUp` panels, whose macOS implementation sets level
+101 and `CanJoinAllSpaces | FullScreenAuxiliary`. A numeric display ID selects
+the matching NSScreen; GPUI expects display-relative popup origins. Native
+panels are ordered out before deferred GPUI destruction and the next live
+capture stream starts. Interactive multi-display/Space behavior still needs
+native manual verification.
 
 ### Screenshot portal
 

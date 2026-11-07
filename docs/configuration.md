@@ -57,7 +57,7 @@ font_italic = false
 languages = []
 
 [hotkeys]
-# Windows-only global shortcuts; accepted/validated but unused on Linux.
+# Windows defaults (unused on Linux); see macOS defaults below.
 # Empty string disables a shortcut. Modifiers: Ctrl, Alt, Shift, Win.
 # Keys: PrintScreen, F1–F24, A–Z, 0–9. Duplicate bindings are rejected.
 region = "PrintScreen"
@@ -65,6 +65,18 @@ screen = "Ctrl+PrintScreen"
 window = "Alt+PrintScreen"
 open_last = "Shift+PrintScreen"
 ```
+
+On macOS the same `[hotkeys]` section defaults to `Cmd+Shift+2` (region),
+`Cmd+Shift+8` (screen), `Cmd+Shift+7` (window), `Cmd+Shift+E` (open last).
+Modifiers are Cmd/Command, Ctrl/Control, Alt/Option and Shift; keys are
+A–Z, 0–9, F1–F20 and common navigation keys. Carbon binds physical US key
+positions, so shortcut labels on other keyboard layouts may differ.
+Empty strings disable bindings; duplicate bindings are rejected.
+macOS's Cmd+Shift+3/4/5 and Touch Bar Cmd+Shift+6 capture shortcuts are not overridden.
+
+macOS config: `~/Library/Application Support/quikscope/config.toml`;
+cache/IPC: `~/Library/Caches/quikscope`; default saves:
+`~/Pictures/Screenshots`. See [macOS](macos.md) for permissions and the bundle.
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,
 `--cursor`, `--freeze` / `--no-freeze`) override these defaults for one request.
