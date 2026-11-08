@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement by contacting the [repository maintainer](https://github.com/qt715): open an issue requesting a private reporting channel without including incident details. For abuse on GitHub, you may also use GitHub's private “Report abuse” action. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at [qt715@proton.me](mailto:qt715@proton.me). For abuse on GitHub, you may also use GitHub's private “Report abuse” action. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

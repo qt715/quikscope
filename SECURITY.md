@@ -6,8 +6,8 @@ Do not disclose vulnerabilities in public issues or pull requests. Use GitHub's
 [private vulnerability reporting](https://github.com/qt715/quikscope/security/advisories/new)
 to send a draft security advisory to the maintainers. Include affected versions,
 OS/backend, impact and a minimal reproduction without private screenshots or
-credentials. If private reporting is unavailable, request a private reporting
-channel from the maintainer without publishing exploit details.
+credentials. If private reporting is unavailable, email
+[qt715@proton.me](mailto:qt715@proton.me) instead.
 
 The latest release and the main development branch are in scope. Fixes for older
 versions are not guaranteed; upgrade to the latest release when available.
