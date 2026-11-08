@@ -1157,29 +1157,46 @@ fn input_method_composes_and_commits_into_editor_text() {
         Some("active"),
         "the text tool did not enable the input method"
     );
-    s.type_text("A");
-
     let grim = s.has("grim");
     let shot = |name: &str| {
         let path = s.root().join(name);
         assert!(s.command("grim").arg(&path).status().unwrap().success());
         decode_png(&path)
     };
-    let before = grim.then(|| shot("before.png"));
+    let changed = |a: &Image, b: &Image| {
+        a.data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.data.as_chunks::<4>().0)
+            .filter(|(a, b)| a != b)
+            .count()
+    };
+    // Typing and composing repaint asynchronously, so a screenshot taken
+    // straight after the input may predate the frame showing it. Retake one
+    // until it differs from `base` by more than `min` pixels, or give up.
+    let shot_after = |name: &str, base: &Image, min: usize| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let img = shot(name);
+            let n = changed(base, &img);
+            if n > min || Instant::now() > deadline {
+                return (img, n);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let typed_over = grim.then(|| shot("caret.png"));
+    s.type_text("A");
+    // The "A" alone changes about 250 pixels; wait until it is on screen so
+    // the pre-edit comparison below starts from it.
+    let before = typed_over.map(|caret| shot_after("before.png", &caret, 100).0);
     // Compose "nihongo": the pre-edit is drawn in place...
     ime.step("pre=にほ");
     ime.step("pre=にほんご");
     if let Some(before) = before {
-        let during = shot("during.png");
-        let changed = before
-            .data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(during.data.as_chunks::<4>().0)
-            .filter(|(a, b)| a != b)
-            .count();
-        assert!(changed > 300, "pre-edit drawn: {changed} pixels changed");
+        let (_, n) = shot_after("during.png", &before, 300);
+        assert!(n > 300, "pre-edit drawn: {n} pixels changed");
     }
     // ...and converting commits "日本語" in its place. The ASCII "!"
     // takes GPUI's key-event path for single-byte commits.
