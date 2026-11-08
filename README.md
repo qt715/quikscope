@@ -58,8 +58,9 @@ The packages install the desktop launcher, hicolor icons and a systemd user unit
 systemctl --user enable --now quikscope.service # optional login startup
 ```
 
-Arch users can download the release `PKGBUILD` and `.SRCINFO`, inspect them,
-then run `makepkg -si`. This recipe is AUR-ready, not a claim of an AUR listing.
+Arch users can download the release `PKGBUILD` (and `SRCINFO`, which is the
+recipe's `.SRCINFO`), inspect them, then run `makepkg -si`. This recipe is
+AUR-ready, not a claim of an AUR listing.
 See [Desktops](#desktops) for compositor requirements. OCR and a portal backend
 are optional; a working Vulkan driver is needed for the editor.
 

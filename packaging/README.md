@@ -58,9 +58,11 @@ smoke matrix; adding an unchecked cross build would not be a cheap equivalent.
 
 The release source archive includes the generated licence report. The workflow
 sets PKGBUILD's SHA-256 to that archive's checksum and generates .SRCINFO with
-makepkg, so the distributed Arch recipe is checksum-pinned. The checked-in
-recipe is the release-generation input; do not submit its temporary SKIP checksum
-to AUR. `prepare()` fetches the locked crates, `build()` uses `--frozen`, and
+makepkg, so the distributed Arch recipe is checksum-pinned. The release lists
+it as `SRCINFO`: GitHub renames release assets whose names start with a dot.
+The checked-in recipe is the release-generation input; do not submit its
+temporary SKIP checksum to AUR. `prepare()` fetches the locked crates,
+`build()` uses `--frozen`, and
 `check()` runs display-independent library unit tests with `--release`, reusing
 the production dependency tree rather than compiling a second debug tree.
 Release CI also removes the already-packaged Ubuntu build tree before Arch.
