@@ -83,13 +83,16 @@ Developer ID signed or notarized: right-click it in Finder and choose
 **Open**, or remove quarantine from the trusted installed app with
 `xattr -d com.apple.quarantine /Applications/quikscope.app`.
 
-### Build from source
+### Cargo
 
-Build with Rust ≥ 1.95 and the platform development dependencies described below:
+Install from crates.io with Rust ≥ 1.95 and the platform development
+dependencies described below:
 
 ```sh
-cargo install --locked --path .
+cargo install --locked quikscope
 ```
+
+From a source checkout, use `cargo install --locked --path .` instead.
 
 The packaged service uses `/usr/bin/quikscope`. For a Cargo installation, copy
 it to `~/.config/systemd/user/quikscope.service` and change `ExecStart` to the
@@ -278,7 +281,7 @@ multiple monitors, mixed DPI, window snapping and active-window capture are
 implemented but unverified. Frozen and live region selection were both verified.
 
 ```powershell
-cargo install --locked --path .
+cargo install --locked quikscope
 quikscope autostart on
 quikscope capture screen --save
 ```
