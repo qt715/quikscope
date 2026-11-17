@@ -17,6 +17,8 @@ ignore = [
   "RUSTSEC-2026-0370",
   # zvariant_derive: unmaintained, no vulnerability; follows the same zbus 5 stack.
   "RUSTSEC-2026-0372",
+  # chrono: unmaintained, no vulnerability; GPUI and its scheduler require it.
+  "RUSTSEC-2026-0543",
 ]
 
 [licenses]

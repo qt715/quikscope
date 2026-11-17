@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-11-17
+
+### Capture
+
+- `quikscope pick` (and **Pick color** in the Windows tray and macOS menu):
+  freezes the screen with a magnifier at the pointer, prints the clicked
+  pixel's hex color and opens a window that copies it as HEX, RGB, CMYK,
+  HSV or HSL.
+
+### Editor
+
+- Eyedropper in the color picker (or `I`): picks a color from anywhere on
+  the desktop, the editor included, into the drawing color. The picker also
+  copies the current color as HEX, RGB, CMYK, HSV or HSL.
+
 ## 0.1.0 — 2026-11-07
 
 First release.
