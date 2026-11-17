@@ -15,6 +15,12 @@
   the desktop, the editor included, into the drawing color. The picker also
   copies the current color as HEX, RGB, CMYK, HSV or HSL.
 
+### Fixed
+
+- Windows: commands such as `quikscope capture` and `quikscope pick` now
+  start the daemon on a fresh user profile instead of failing with
+  "A socket operation encountered a dead network".
+
 ## 0.1.0 — 2026-11-07
 
 First release.

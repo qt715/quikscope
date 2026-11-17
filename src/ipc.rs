@@ -400,6 +400,13 @@ pub fn send(socket: &Path, req: &Request, timeout: Option<Duration>) -> Result<R
 
 /// Like [`send`], but starts the daemon first when nothing is listening.
 pub fn send_or_spawn(socket: &Path, req: &Request, timeout: Option<Duration>) -> Result<Response> {
+    // No directory, no daemon (it creates the directory when it binds).
+    // Checked first because Windows AF_UNIX reports a missing directory as
+    // WSAENETDOWN, not NotFound, which would fail every command on a fresh
+    // profile instead of starting the daemon.
+    if socket.parent().is_some_and(|dir| !dir.exists()) {
+        return exchange(spawn_daemon(socket)?, req, timeout);
+    }
     let stream = match UnixStream::connect(socket) {
         Ok(s) => s,
         Err(e)
