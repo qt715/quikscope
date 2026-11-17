@@ -146,6 +146,7 @@ sway. Bind keys as shown for [Hyprland](#hyprland); on sway:
 bindsym Print exec quikscope capture region
 bindsym Shift+Print exec quikscope capture screen
 bindsym $mod+Shift+e exec quikscope open-last
+bindsym $mod+Shift+c exec quikscope pick
 for_window [app_id="quikscope"] floating enable
 ```
 
@@ -159,6 +160,7 @@ hl.bind(mainMod .. " + SHIFT + CTRL + S", hl.dsp.exec_cmd("quikscope capture out
 hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quikscope capture region --edit"), { description = "Annotate region" })
 hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quikscope open-last"), { description = "Edit last screenshot" })
 hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quikscope capture region --text"), { description = "Copy text from region" })
+hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("quikscope pick"), { description = "Pick a color" })
 
 hl.window_rule({ match = { class = "^(quikscope)$" }, float = true, center = true })
 hl.layer_rule({ match = { namespace = "^(quikscope-selection)$" }, no_anim = true })
@@ -172,6 +174,7 @@ bind = $mainMod SHIFT CTRL, S, exec, quikscope capture output
 bind = $mainMod SHIFT ALT, S, exec, quikscope capture region --edit
 bind = $mainMod SHIFT, E, exec, quikscope open-last
 bind = $mainMod SHIFT, X, exec, quikscope capture region --text
+bind = $mainMod SHIFT, C, exec, quikscope pick
 windowrule = float on, match:class ^(quikscope)$
 windowrule = center on, match:class ^(quikscope)$
 layerrule = no_anim on, match:namespace ^(quikscope-selection)$
@@ -330,6 +333,7 @@ or `tessdata` beside the executable. Windows OCR is not yet verified natively.
 ```text
 quikscope capture <region|output|window|screen> [options]
 quikscope open-last          open the latest capture in the editor, with the tool you used last
+quikscope pick               pick a color anywhere on screen; prints its hex
 quikscope open <FILE>        annotate any PNG/JPEG/WebP
 quikscope settings          open or focus capture/editor preferences
 quikscope notifications <on|off|toggle|status>
@@ -358,6 +362,18 @@ quikscope ping | quit
 
 Exit status is 0 on success, 1 when the selection was cancelled or an error
 occurred. Defaults come from the [configuration](docs/configuration.md).
+
+### Picking colors
+
+`quikscope pick` freezes the screen (without the pointer) and shows a
+magnifier of the pixels at the pointer with the hex value of the middle one.
+Click, or press `Enter`, to pick that pixel; on a scaled output it is the
+physical pixel under the pointer. Right click, `Esc` or `q` cancels.
+The command prints the color (`#0067ed`) and opens a small window that copies
+it as HEX, RGB, CMYK, HSV or HSL with one click (`Ctrl+C` copies HEX, **Pick
+again** picks another). The Windows tray and macOS menu-bar menus have
+**Pick color**. In the editor, `I` or the color picker's eyedropper picks
+into the drawing color instead.
 
 ### Notifications on/off
 
@@ -400,6 +416,7 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quikscope notifications togg
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
 | Fill shapes | `F` |
 | Stroke / text size | `[` `]` or the toolbar dots |
+| Pick a color anywhere on screen (eyedropper) | `I` or **Pick from screen** in the color picker |
 | Duplicate selection | `Ctrl+D` — new copies offset by 10 logical pixels, selected together; `Ctrl+C` still copies the image |
 | Bring selection to front / send to back | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
 | Shortcut help | `?` / `F1` or the toolbar `?`; `Esc` dismisses help without closing the editor. Fits small windows with scrolling and a single-column layout; `F1` also works while editing text |
@@ -424,6 +441,14 @@ picker: a hue/saturation wheel, value and alpha sliders, a hex field
 Shift+Up/Down by 10). Dragging recolors the selected shapes live and counts as
 a single undo step. While the current color is not one of the swatches, the
 palette button shows it.
+
+Beside the wheel, **Pick from screen** (or `I` anywhere in the editor) is the
+eyedropper: it freezes the whole desktop, this window and its annotations
+included, with a magnifier at the pointer, and the pixel clicked becomes the
+drawing color (and the selected shapes' color, as one undo step). Below it
+the current color is shown as HEX, RGB, CMYK, HSV and HSL (for example
+`#0067ed`, `0, 103, 237`, `100%, 57%, 0%, 7%`, `214°, 100%, 93%`,
+`214°, 100%, 46%`); click a field to copy that text.
 
 **Fonts.** While text is being edited or a text shape is selected, a font bar
 appears above it: family (every installed font plus the bundled Inter,

@@ -13,6 +13,7 @@ quikscope — screenshot daemon and annotation editor
 USAGE:
     quikscope capture <region|output|window|screen> [OPTIONS]
     quikscope open-last
+    quikscope pick
     quikscope open <FILE>
     quikscope settings
     quikscope notifications <on|off|toggle|status>
@@ -29,6 +30,9 @@ CAPTURE OPTIONS:
     --text                       Extract the text in the capture: copy it and print it
     -o, --output <NAME>          Output for `output` mode (default: focused output)
     -g, --geometry <\"X,Y WxH\">   Capture this logical rectangle (slurp format), no selection
+
+`pick` freezes the screen and magnifies the pointer: click any pixel to print
+its hex color and open a window that copies it as HEX, RGB, CMYK, HSV or HSL.
 
 Commands talk to the daemon over a per-user local socket (override with
 QUIKSCOPE_SOCKET) and start it on demand. Windows/macOS: autostart <on|off|status>.
@@ -108,6 +112,10 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             no_extra(&rest)?;
             Request::OpenLast
         }
+        "pick" => {
+            no_extra(&rest)?;
+            Request::Pick
+        }
         "settings" => parse_settings(&rest)?,
         "open" => match rest.as_slice() {
             [path] => {
@@ -139,6 +147,7 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
     // Interactive selection waits on the user; everything else is quick.
     let timeout = match &request {
         Request::Capture(Mode::Region, o) if o.geometry.is_none() => None,
+        Request::Pick => None,
         _ => Some(Duration::from_secs(30)),
     };
     report(ipc::send_or_spawn(&socket, &request, timeout))
@@ -172,6 +181,10 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
         }
         Response::Notifications(on) => {
             println!("notifications {}", if on { "on" } else { "off" });
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::Color(c) => {
+            println!("{}", quikscope::color::to_hex(c));
             Ok(ExitCode::SUCCESS)
         }
         Response::Cancelled => {

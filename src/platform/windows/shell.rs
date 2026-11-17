@@ -397,6 +397,7 @@ impl State {
             5 => Request::Notifications(Switch::Toggle),
             6 => Request::Quit,
             7 => Request::Settings,
+            8 => Request::Pick,
             _ => return,
         };
         (self.events)(Event::Request(request));
@@ -418,6 +419,7 @@ impl State {
             (2, "Capture screen"),
             (3, "Capture window"),
             (4, "Open last"),
+            (8, "Pick color"),
             (5, "Toggle notifications"),
             (7, "Settings…"),
             (6, "Quit"),

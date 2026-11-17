@@ -241,8 +241,11 @@ fn main() {
             let (ext_w, ext_h) = layout_extent(&state);
             let t0 = Instant::now();
             let ms = || t0.elapsed().as_millis() as u32;
+            // Absolute motion is integral in extent units; a finer extent
+            // reaches quarter logical pixels, i.e. physical pixels at scale 2.
             let goto = |x: f64, y: f64| {
-                ptr.motion_absolute(ms(), x as u32, y as u32, ext_w, ext_h);
+                let (x, y) = ((x * 4.0).round() as u32, (y * 4.0).round() as u32);
+                ptr.motion_absolute(ms(), x, y, ext_w * 4, ext_h * 4);
                 ptr.frame();
             };
             let button = |b: u32, pressed: bool| {

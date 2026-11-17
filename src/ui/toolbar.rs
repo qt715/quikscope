@@ -366,6 +366,7 @@ pub fn shortcut_help(
                                         "Ctrl+Z: undo · Ctrl+Shift+Z / Ctrl+Y: redo",
                                         "Ctrl+Shift+] / [: bring to front / send to back",
                                         "[ / ]: stroke size · F: toggle fill",
+                                        "I: pick a color anywhere on screen",
                                         "Esc: cancel / clear selection / close editor",
                                     ],
                                 ))

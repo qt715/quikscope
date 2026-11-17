@@ -58,6 +58,7 @@ fn request(id: u32) -> Option<Request> {
         5 => Request::Settings,
         6 => Request::Notifications(Switch::Toggle),
         7 => Request::Quit,
+        8 => Request::Pick,
         _ => return None,
     })
 }
@@ -85,6 +86,7 @@ impl Shell {
             (2, "Capture screen"),
             (3, "Capture window"),
             (4, "Open last capture"),
+            (8, "Pick color"),
             (5, "Settings…"),
             (6, "Toggle notifications"),
             (7, "Quit"),

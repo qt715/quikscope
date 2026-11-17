@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -28,11 +29,16 @@ use crate::geom::{IRect, Pt, RectF};
 use crate::raster::Compression;
 use crate::text::TextLayout;
 
+/// Starts a color pick from anywhere on the desktop (frozen overlays on every
+/// output); resolves to `None` when the user cancels.
+pub type PickColor = Rc<dyn Fn(&mut App) -> gpui::Task<anyhow::Result<Option<Rgba>>>>;
+
 /// Services the editor needs from the daemon.
 #[derive(Clone)]
 pub struct EditorServices {
     pub config: Arc<Config>,
     pub clipboard: Option<Arc<dyn crate::platform::Clipboard>>,
+    pub pick_color: Option<PickColor>,
 }
 
 impl Global for EditorServices {}
@@ -449,6 +455,56 @@ impl Editor {
         cx.notify();
     }
 
+    /// `I` or the color picker's eyedropper: freezes the whole desktop (this
+    /// window and its annotations included), and the pixel clicked becomes
+    /// the drawing color, shown in the color picker.
+    pub fn pick_from_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pick) = cx
+            .try_global::<EditorServices>()
+            .and_then(|s| s.pick_color.clone())
+        else {
+            self.show_toast("Picking from the screen is unavailable".into(), true, cx);
+            return;
+        };
+        let task = pick(cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |e, window, cx| match result {
+                Ok(Some(c)) => {
+                    e.set_color(c, cx);
+                    // Show it with its copyable formats; from the keyboard
+                    // there is no button to hang the picker from.
+                    if e.picker_at.is_none() {
+                        e.picker_at = Some(window.viewport_size().width / 2.0);
+                    }
+                    cx.notify();
+                }
+                Ok(None) => {}
+                Err(err) => e.show_toast(format!("{err:#}"), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Copies `color` as text in `format`.
+    pub fn copy_color(
+        &mut self,
+        format: crate::color::Format,
+        color: Rgba,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(clipboard) = cx
+            .try_global::<EditorServices>()
+            .and_then(|s| s.clipboard.clone())
+        else {
+            self.show_toast("Clipboard is unavailable".into(), true, cx);
+            return;
+        };
+        let text = format.format(color);
+        clipboard.set_text(&text);
+        self.show_toast(format!("Copied {text}"), false, cx);
+    }
+
     /// The item a select-tool press at `p` picks up: the topmost item under
     /// the pointer, otherwise the selected item anywhere inside its box, so
     /// once selected, hollow shapes and thin strokes drag from inside while
@@ -495,18 +551,26 @@ impl Editor {
         &mut self,
         _: &Entity<ColorPicker>,
         ev: &PickerEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let PickerEvent::Changed { color, live } = *ev;
-        self.apply_style(
-            Style {
-                color,
-                ..self.style
-            },
-            live,
-            cx,
-        );
+        match *ev {
+            PickerEvent::Changed { color, live } => self.apply_style(
+                Style {
+                    color,
+                    ..self.style
+                },
+                live,
+                cx,
+            ),
+            PickerEvent::Copy { format, color } => self.copy_color(format, color, cx),
+            PickerEvent::PickFromScreen => self.pick_from_screen(window, cx),
+        }
+    }
+
+    /// Scrolls the color picker when the window is too short for it.
+    pub fn picker_scroll(&self, cx: &App) -> gpui::ScrollHandle {
+        self.color_picker.read(cx).scroll.clone()
     }
 
     pub fn picker_open(&self) -> bool {
@@ -902,6 +966,7 @@ impl Editor {
                     self.begin_text(Pt::default(), id, cx);
                 }
             }
+            "i" if !m.shift => self.pick_from_screen(window, cx),
             k if !m.shift => match Tool::from_key(k) {
                 Some(tool) => self.set_tool(tool, cx),
                 None => return,
@@ -1804,8 +1869,11 @@ impl Render for Editor {
 
         // Popovers mirror the current values (palette clicks, selection changes).
         let color = self.style.color;
-        self.color_picker
-            .update(cx, |p, cx| p.set_color(color, window, cx));
+        self.color_picker.update(cx, |p, cx| {
+            p.set_color(color, window, cx);
+            // Room below where it hangs, so short windows scroll it.
+            p.set_max_height(px((vh - (TOOLBAR_SPACE - 4.0) - 8.0).max(80.0)), cx);
+        });
         let picker = self.picker_at.map(|at| {
             let w = super::color_picker::PANEL_WIDTH;
             let x = (f32::from(at) - w / 2.0).clamp(8.0, (vw - w - 8.0).max(8.0));

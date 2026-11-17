@@ -1,8 +1,10 @@
 //! GPUI front end: the region selection overlay and the annotation editor.
 
 pub mod color_picker;
+pub mod color_window;
 pub mod edit_buffer;
 pub mod editor;
+pub mod eyedropper;
 pub mod field;
 pub mod font_menu;
 pub mod motion;
@@ -119,6 +121,7 @@ impl AssetSource for Assets {
             "italic",
             "chevron-down",
             "plus",
+            "pipette",
         );
         Ok(bytes.map(Cow::Borrowed))
     }

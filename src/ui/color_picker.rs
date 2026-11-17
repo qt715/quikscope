@@ -1,24 +1,34 @@
-//! Color picker popover: hue/saturation wheel, value and alpha sliders, and
-//! hex / RGBA fields.
+//! Color picker popover: hue/saturation wheel, value and alpha sliders and
+//! hex / RGBA fields beside an eyedropper that picks from anywhere on screen
+//! and the color in every copyable text format.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
     AppContext as _, Bounds, Context, DispatchPhase, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, RenderImage, Styled as _, Window, canvas, div, fill, linear_color_stop,
-    linear_gradient, point, px, size,
+    Pixels, Point, Render, RenderImage, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    Window, canvas, div, fill, linear_color_stop, linear_gradient, point,
+    prelude::FluentBuilder as _, px, size,
 };
 
+use super::eyedropper::{self, OnCopy, OnPick};
 use super::field::{Field, FieldEvent, FieldKind};
 use super::{hsla, render_image, theme};
-use crate::color::{Hsv, parse_hex, to_hex};
+use crate::color::{Format, Hsv, parse_hex, to_hex};
 use crate::document::Rgba;
 use crate::raster::Image;
 
 /// Wheel diameter in logical pixels.
 pub const WHEEL: f32 = 176.0;
-pub const PANEL_WIDTH: f32 = 216.0;
+/// Width of the wheel, slider and field column.
+pub const LEFT_COLUMN: f32 = 192.0;
+/// Width of the eyedropper and formats column: one format field per row.
+const RIGHT_COLUMN: f32 = eyedropper::FIELD_MIN_WIDTH + 24.0;
+const COLUMN_GAP: f32 = 16.0;
+/// Border, padding and both columns.
+pub const PANEL_WIDTH: f32 = 2.0 + 24.0 + LEFT_COLUMN + COLUMN_GAP + RIGHT_COLUMN;
 const SLIDER_H: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,6 +36,10 @@ pub enum PickerEvent {
     /// `live` while a wheel or slider drag is in progress; the final
     /// `live: false` event ends one undoable change.
     Changed { color: Rgba, live: bool },
+    /// Copy `color` as text in `format`.
+    Copy { format: Format, color: Rgba },
+    /// Pick a color from anywhere on screen with the eyedropper.
+    PickFromScreen,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,6 +57,9 @@ pub struct ColorPicker {
     wheel: Option<(f32, Arc<RenderImage>)>,
     drag: Option<Part>,
     bounds: [Bounds<Pixels>; 3],
+    /// The tallest the panel may be where it hangs; taller content scrolls.
+    max_height: Option<Pixels>,
+    pub scroll: ScrollHandle,
 }
 
 impl EventEmitter<PickerEvent> for ColorPicker {}
@@ -137,6 +154,8 @@ impl ColorPicker {
             wheel: None,
             drag: None,
             bounds: [Bounds::default(); 3],
+            max_height: None,
+            scroll: ScrollHandle::new(),
         };
         picker.load(color);
         picker.sync_fields(window, cx);
@@ -171,6 +190,14 @@ impl ColorPicker {
         self.load(color);
         self.sync_fields(window, cx);
         cx.notify();
+    }
+
+    /// Limits the panel to `height`, the room below where it hangs.
+    pub fn set_max_height(&mut self, height: Pixels, cx: &mut Context<Self>) {
+        if self.max_height != Some(height) {
+            self.max_height = Some(height);
+            cx.notify();
+        }
     }
 
     fn apply(&mut self, color: Rgba, live: bool, window: &Window, cx: &mut Context<Self>) {
@@ -312,7 +339,7 @@ impl Render for ColorPicker {
             px(WHEEL / 2.0 * (1.0 + self.hsv.s * rad.cos())),
             px(WHEEL / 2.0 * (1.0 - self.hsv.s * rad.sin())),
         );
-        let slider_w = PANEL_WIDTH - 24.0;
+        let slider_w = LEFT_COLUMN;
 
         let this = cx.entity();
         let drag_listener = canvas(
@@ -344,22 +371,12 @@ impl Render for ColorPicker {
 
         let label = |t: &'static str| div().text_xs().text_color(theme::muted()).child(t);
 
-        div()
-            .id("color-picker")
-            .occlude()
-            .w(px(PANEL_WIDTH))
-            .p(px(12.))
+        let left = div()
+            .w(px(LEFT_COLUMN))
+            .flex_shrink_0()
             .flex()
             .flex_col()
             .gap(px(10.))
-            .rounded_lg()
-            .bg(theme::panel())
-            .border_1()
-            .border_color(theme::panel_border())
-            .shadow_lg()
-            .font_family(super::UI_FONT)
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(drag_listener)
             .child(
                 div()
                     .relative()
@@ -490,6 +507,59 @@ impl Render for ColorPicker {
                                 .child(label(name))
                         }),
                 ),
+            );
+
+        let this = cx.entity().downgrade();
+        let on_copy: OnCopy = Rc::new(move |format, _, cx| {
+            let _ = this.update(cx, |p, cx| {
+                cx.emit(PickerEvent::Copy {
+                    format,
+                    color: p.color(),
+                })
+            });
+        });
+        let this = cx.entity().downgrade();
+        let on_pick: OnPick = Rc::new(move |_, cx| {
+            let _ = this.update(cx, |_, cx| cx.emit(PickerEvent::PickFromScreen));
+        });
+        let right = div()
+            .w(px(RIGHT_COLUMN))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(18.))
+            .child(eyedropper::pick_button("Pick from screen (I)", on_pick).h(px(28.)))
+            .child(eyedropper::formats(color, &on_copy));
+
+        div()
+            .id("color-picker")
+            .occlude()
+            .w(px(PANEL_WIDTH))
+            .when_some(self.max_height, |d, h| d.max_h(h))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .rounded_lg()
+            .bg(theme::panel())
+            .border_1()
+            .border_color(theme::panel_border())
+            .shadow_lg()
+            .font_family(super::UI_FONT)
+            .text_color(theme::text())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(drag_listener)
+            // Keeps its full height so short panels scroll instead of
+            // squeezing the columns.
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_start()
+                    .gap(px(COLUMN_GAP))
+                    .child(left)
+                    .child(right),
             )
     }
 }

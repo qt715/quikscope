@@ -1,5 +1,6 @@
 //! Region selection: live transparent overlays or the snapshot just taken;
-//! the user drags a rectangle or clicks a window.
+//! the user drags a rectangle or clicks a window. The same overlays pick a
+//! single pixel's color from a snapshot, with a magnifier at the pointer.
 //!
 //! All overlays share one [`Selection`] entity in global logical
 //! coordinates. Wayland keeps delivering pointer motion to the surface that
@@ -12,27 +13,53 @@ use futures::channel::oneshot;
 use gpui::{
     App, Bounds, Context, CursorStyle, DispatchPhase, DisplayId, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, Styled as _, Window, canvas, div,
-    fill, outline, point, px, size,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
+    Styled as _, Window, canvas, div, fill, outline, point, px, size,
 };
 
-use super::{Tile, ViewTransform, paint_tiles, theme};
-use crate::geom::IRect;
+use super::{Tile, ViewTransform, eyedropper, paint_tiles, theme};
+use crate::document::Rgba;
+use crate::geom::{IRect, Pt};
 use crate::platform::{WindowRect, window_at};
+use crate::raster::Image;
 
 /// Below this drag distance (logical px) a press counts as a click.
 const CLICK_SLOP: i32 = 4;
+
+/// What the user chose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Selected {
+    /// A rectangle in global logical coordinates.
+    Region(IRect),
+    /// The color of the snapshot pixel that was clicked.
+    Color(Rgba),
+}
 
 pub struct Selection {
     windows: Vec<WindowRect>,
     start: Option<(i32, i32)>,
     current: Option<IRect>,
     hover: Option<IRect>,
-    done: Option<oneshot::Sender<Option<IRect>>>,
+    /// Picking a color rather than selecting a region.
+    pick: bool,
+    done: Option<oneshot::Sender<Option<Selected>>>,
 }
 
 impl Selection {
-    pub fn new(windows: Vec<WindowRect>) -> (Selection, oneshot::Receiver<Option<IRect>>) {
+    pub fn new(windows: Vec<WindowRect>) -> (Selection, oneshot::Receiver<Option<Selected>>) {
+        Self::with_mode(windows, false)
+    }
+
+    /// A color pick: no rectangles or window snapping, the first click on
+    /// a frozen frame decides.
+    pub fn picker() -> (Selection, oneshot::Receiver<Option<Selected>>) {
+        Self::with_mode(Vec::new(), true)
+    }
+
+    pub fn with_mode(
+        windows: Vec<WindowRect>,
+        pick: bool,
+    ) -> (Selection, oneshot::Receiver<Option<Selected>>) {
         let (tx, rx) = oneshot::channel();
         (
             Selection {
@@ -40,10 +67,15 @@ impl Selection {
                 start: None,
                 current: None,
                 hover: None,
+                pick,
                 done: Some(tx),
             },
             rx,
         )
+    }
+
+    pub fn picking(&self) -> bool {
+        self.pick
     }
 
     /// Windows to snap to; for overlays opened before the window list was
@@ -52,7 +84,7 @@ impl Selection {
         self.windows = windows;
     }
 
-    pub fn finish(&mut self, result: Option<IRect>) {
+    pub fn finish(&mut self, result: Option<Selected>) {
         if let Some(tx) = self.done.take() {
             let _ = tx.send(result);
         }
@@ -81,7 +113,7 @@ impl Selection {
         } else {
             IRect::from_corners(sx, sy, x, y)
         };
-        self.finish(Some(rect));
+        self.finish(Some(Selected::Region(rect)));
     }
 
     /// The rectangle to show as selected right now.
@@ -101,6 +133,8 @@ pub struct FullscreenFrame {
     pub logical: IRect,
     pub image_width: u32,
     pub tiles: Arc<[Tile]>,
+    /// The frozen pixels, for color picks.
+    pub image: Option<Arc<Image>>,
 }
 
 pub struct Overlay {
@@ -110,7 +144,11 @@ pub struct Overlay {
     /// Physical pixels per logical pixel of this output.
     scale: f32,
     tiles: Arc<[Tile]>,
+    /// The frozen pixels the tiles show, for color picks; `None` when live.
+    image: Option<Arc<Image>>,
     image_width: u32,
+    /// While picking: the pointer on this surface, for the magnifier.
+    pointer: Option<Point<Pixels>>,
     focus: FocusHandle,
     /// Set until the first frame, for latency logging.
     opened: Option<std::time::Instant>,
@@ -130,6 +168,7 @@ impl Overlay {
         output: IRect,
         image_width: u32,
         tiles: Arc<[Tile]>,
+        image: Option<Arc<Image>>,
         window: &mut Window,
         cx: &mut Context<Overlay>,
     ) -> Overlay {
@@ -141,7 +180,9 @@ impl Overlay {
             scale: image_width as f32 / output.w.max(1) as f32,
             output,
             tiles,
+            image,
             image_width,
+            pointer: None,
             focus,
             opened: Some(std::time::Instant::now()),
             pointer_seen: false,
@@ -158,7 +199,15 @@ impl Overlay {
         window: &mut Window,
         cx: &mut Context<Overlay>,
     ) -> Overlay {
-        let mut overlay = Self::new(selection, IRect::default(), 1, Arc::from([]), window, cx);
+        let mut overlay = Self::new(
+            selection,
+            IRect::default(),
+            1,
+            Arc::from([]),
+            None,
+            window,
+            cx,
+        );
         overlay.active = false;
         overlay
     }
@@ -173,23 +222,25 @@ impl Overlay {
         cx: &mut Context<Overlay>,
     ) -> Overlay {
         let mut overlay = Self::pending(selection, window, cx);
-        overlay.set_frame(output, image_width, Arc::from([]), cx);
+        overlay.set_frame(output, image_width, Arc::from([]), None, cx);
         overlay
     }
 
     /// Activates this output using global logical geometry and frozen tiles
-    /// (or an empty tile list for live selection).
+    /// and pixels (or nothing frozen, for live selection).
     pub fn set_frame(
         &mut self,
         output: IRect,
         image_width: u32,
         tiles: Arc<[Tile]>,
+        image: Option<Arc<Image>>,
         cx: &mut Context<Self>,
     ) {
         self.output = output;
         self.image_width = image_width;
         self.scale = image_width as f32 / output.w.max(1) as f32;
         self.tiles = tiles;
+        self.image = image;
         self.active = true;
         cx.notify();
     }
@@ -206,6 +257,7 @@ impl Overlay {
             first.logical,
             first.image_width,
             first.tiles.clone(),
+            first.image.clone(),
             window,
             cx,
         );
@@ -237,6 +289,8 @@ impl Overlay {
         self.image_width = frame.image_width;
         self.scale = frame.image_width as f32 / frame.logical.w.max(1) as f32;
         self.tiles = frame.tiles.clone();
+        self.image = frame.image.clone();
+        self.pointer = None;
         log::debug!(
             "fullscreen selection mapped to {} image-width={} viewport={} ({})",
             frame.name,
@@ -265,8 +319,27 @@ impl Overlay {
         self.active && (self.fullscreen.is_none() || self.display.is_some())
     }
 
+    /// The frozen pixel under window point `p` of this surface.
+    fn pixel_at(&self, p: Point<Pixels>, window: &Window) -> Option<Rgba> {
+        let image = self.image.as_ref()?;
+        eyedropper::sample(image, image_point(image, p, window))
+    }
+
+    /// Ends a color pick with the frozen pixel at `p`; outside the frame
+    /// (a press beyond a Wayland surface's edge) nothing happens.
+    fn pick(&mut self, p: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        if let Some(color) = self.pixel_at(p, window) {
+            self.selection
+                .update(cx, |s, _| s.finish(Some(Selected::Color(color))));
+        }
+    }
+
     fn mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.ready() {
+            return;
+        }
+        if self.selection.read(cx).picking() {
+            self.pick(ev.position, window, cx);
             return;
         }
         let (x, y) = self.global(ev.position, window);
@@ -280,17 +353,32 @@ impl Overlay {
         self.selection.update(cx, |s, _| s.finish(None));
     }
 
-    fn key_down(&mut self, ev: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let picking = self.selection.read(cx).picking();
         match ev.keystroke.key.as_str() {
             "escape" | "q" => self.cancel(cx),
+            // Enter picks the pixel under the pointer.
+            "enter" if picking && self.ready() => {
+                if let Some(p) = self.pointer {
+                    self.pick(p, window, cx);
+                }
+            }
             // Enter takes the whole output under the keyboard focus.
             "enter" if self.ready() => {
                 let out = self.output;
-                self.selection.update(cx, |s, _| s.finish(Some(out)));
+                self.selection
+                    .update(cx, |s, _| s.finish(Some(Selected::Region(out))));
             }
             _ => {}
         }
     }
+}
+
+/// Window point `p` of a surface showing `image` edge to edge, in image
+/// pixels (the surface may be scaled).
+fn image_point(image: &Image, p: Point<Pixels>, window: &Window) -> Pt {
+    let per_px = image.width as f32 / f32::from(window.viewport_size().width).max(1.0);
+    Pt::new(f32::from(p.x) * per_px, f32::from(p.y) * per_px)
 }
 
 impl Focusable for Overlay {
@@ -314,7 +402,18 @@ impl Render for Overlay {
         let ready = self.ready();
         let active = self.active;
         let scale = self.scale;
+        let picking = self.selection.read(cx).picking();
         let highlight = self.selection.read(cx).highlight();
+        // Picking shows the frozen frame undimmed, so the colors are true,
+        // and magnifies the pixels at the pointer.
+        let loupe = self
+            .pointer
+            .filter(|_| picking && ready)
+            .zip(self.image.clone())
+            .and_then(|(p, image)| {
+                let at = image_point(&image, p, window);
+                eyedropper::loupe(&image, at, p, window.viewport_size())
+            });
         if let Some(opened) = self.opened.take() {
             log::debug!(
                 "overlay first frame {:.1}ms after creation",
@@ -378,7 +477,7 @@ impl Render for Overlay {
                         }
                         // Pending capture overlays paint nothing; activated live
                         // overlays dim without covering the desktop with tiles.
-                        if active {
+                        if active && !picking {
                             paint_dim(window, bounds, highlight.map(|h| local(h, output, factor)));
                         }
 
@@ -388,12 +487,22 @@ impl Render for Overlay {
                             if phase != DispatchPhase::Bubble {
                                 return;
                             }
-                            let Some((x, y)) = overlay.update(cx, |o, _| {
+                            let Some((x, y)) = overlay.update(cx, |o, cx| {
                                 if !o.ready() {
                                     return None;
                                 }
                                 if !std::mem::replace(&mut o.pointer_seen, true) {
                                     log::debug!("overlay has the pointer");
+                                }
+                                if picking {
+                                    // Wayland reports motion past the edge while a
+                                    // button is held; no magnifier out there.
+                                    let inside =
+                                        Bounds::new(point(px(0.), px(0.)), window.viewport_size())
+                                            .contains(&ev.position);
+                                    o.pointer = inside.then_some(ev.position);
+                                    cx.notify();
+                                    return None;
                                 }
                                 Some(o.global(ev.position, window))
                             }) else {
@@ -403,6 +512,16 @@ impl Render for Overlay {
                                 s.motion(x, y);
                                 cx.notify();
                             });
+                        });
+                        let overlay = this.clone();
+                        window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                overlay.update(cx, |o, cx| {
+                                    if o.pointer.take().is_some() {
+                                        cx.notify();
+                                    }
+                                });
+                            }
                         });
                         let sel = selection.clone();
                         let overlay = this.clone();
@@ -424,7 +543,8 @@ impl Render for Overlay {
                 )
                 .size_full(),
             )
-            .children(label)
+            .children(label.filter(|_| !picking))
+            .children(loupe)
     }
 }
 
@@ -502,7 +622,7 @@ mod tests {
         s.release(40, 160, IRect::new(0, 0, 1920, 1080));
         assert_eq!(
             rx.try_recv().unwrap(),
-            Some(Some(IRect::new(40, 100, 60, 60)))
+            Some(Some(Selected::Region(IRect::new(40, 100, 60, 60))))
         );
     }
 
@@ -516,20 +636,20 @@ mod tests {
         s.release(52, 51, output);
         assert_eq!(
             rx.try_recv().unwrap(),
-            Some(Some(IRect::new(10, 10, 300, 200)))
+            Some(Some(Selected::Region(IRect::new(10, 10, 300, 200))))
         );
 
         let (mut s, mut rx) = Selection::new(vec![win(10, 10, 300, 200)]);
         s.press(900, 900);
         s.release(900, 900, output);
-        assert_eq!(rx.try_recv().unwrap(), Some(Some(output)));
+        assert_eq!(rx.try_recv().unwrap(), Some(Some(Selected::Region(output))));
     }
 
     #[test]
     fn selection_resolves_only_once() {
         let (mut s, mut rx) = Selection::new(vec![]);
         s.finish(None);
-        s.finish(Some(IRect::new(0, 0, 5, 5)));
+        s.finish(Some(Selected::Region(IRect::new(0, 0, 5, 5))));
         assert_eq!(rx.try_recv().unwrap(), Some(None));
     }
 

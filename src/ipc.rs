@@ -6,6 +6,7 @@
 //! ```text
 //! capture region edit geometry=10,20,300x200   ->  ok 3 300x200
 //! open-last                                    ->  ok 3 300x200
+//! pick                                         ->  ok color #0067ed
 //! ping                                         ->  ok pong
 //! ```
 
@@ -20,6 +21,7 @@ use uds_windows::UnixStream;
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::document::Rgba;
 use crate::geom::IRect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +125,9 @@ pub enum Request {
     Settings,
     /// Turn capture notifications on/off (persisted to the config file).
     Notifications(Switch),
+    /// Pick a color from anywhere on the desktop and show it in the color
+    /// window.
+    Pick,
     Ping,
     Quit,
 }
@@ -145,6 +150,8 @@ pub enum Response {
     Pong,
     /// Capture notifications are now on (`true`) or off.
     Notifications(bool),
+    /// The color picked with [`Request::Pick`].
+    Color(Rgba),
     Cancelled,
     Error(String),
 }
@@ -189,6 +196,7 @@ impl Request {
                 return Ok(Request::Capture(mode, o));
             }
             "open-last" => Request::OpenLast,
+            "pick" => Request::Pick,
             "settings" => Request::Settings,
             "open" => {
                 // Paths may contain spaces: take the rest of the line verbatim.
@@ -256,6 +264,7 @@ impl fmt::Display for Request {
             Request::Open(p) => write!(f, "open {}", p.display()),
             Request::Settings => write!(f, "settings"),
             Request::Notifications(s) => write!(f, "notifications {}", s.as_str()),
+            Request::Pick => write!(f, "pick"),
             Request::Ping => write!(f, "ping"),
             Request::Quit => write!(f, "quit"),
         }
@@ -277,6 +286,11 @@ impl Response {
                 "off" => Ok(Response::Notifications(false)),
                 _ => Err(format!("malformed response {line:?}")),
             };
+        }
+        if let Some(hex) = line.strip_prefix("ok color ") {
+            return crate::color::parse_hex(hex)
+                .map(Response::Color)
+                .ok_or_else(|| format!("malformed color in {line:?}"));
         }
         if let Some(rest) = line.strip_prefix("ok text ") {
             let (id, text) = rest.split_once(' ').unwrap_or((rest, ""));
@@ -367,6 +381,7 @@ impl fmt::Display for Response {
             Response::Notifications(on) => {
                 write!(f, "ok notifications {}", if *on { "on" } else { "off" })
             }
+            Response::Color(c) => write!(f, "ok color {}", crate::color::to_hex(*c)),
             Response::Cancelled => write!(f, "cancelled"),
             // Newlines would split the reply into several protocol lines.
             Response::Error(msg) => write!(f, "err {}", msg.replace('\n', " ")),
@@ -522,6 +537,7 @@ mod tests {
             Request::Notifications(Switch::Toggle),
             Request::Notifications(Switch::Status),
             Request::Ping,
+            Request::Pick,
             Request::Quit,
         ];
         for req in cases {
@@ -602,6 +618,18 @@ mod tests {
             Response::Error("no outputs".into()),
             Response::Notifications(true),
             Response::Notifications(false),
+            Response::Color(Rgba {
+                r: 0,
+                g: 0x67,
+                b: 0xed,
+                a: 255,
+            }),
+            Response::Color(Rgba {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 0x80,
+            }),
             Response::Text {
                 id: 7,
                 text: "日本語\nline two\\n not a break\r\n".into(),

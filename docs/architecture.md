@@ -231,6 +231,12 @@ never get early overlays, even on layer-shell (KDE): the desktop may show a
 permission dialog first, and an overlay's exclusive keyboard would keep the
 user from answering it.
 
+`quikscope pick` (and the editor color picker's eyedropper) reuses this frozen
+path with a pick-mode `Selection`: the capture leaves out the pointer, the
+overlays show the frames undimmed with a magnifier, and each overlay keeps
+its output's `Arc<Image>` so a click maps the surface position to the
+physical pixel and returns its color instead of a rectangle.
+
 With `freeze = false` (CLI `--no-freeze`, IPC `no-freeze`), overlays use output
 geometry without taking an initial screenshot. They paint translucent dimming
 outside the selected rectangle and leave a transparent hole inside. Selection

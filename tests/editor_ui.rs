@@ -17,7 +17,7 @@ use gpui::{
 use quikscope::document::{Document, PALETTE, ShapeKind, Style};
 use quikscope::geom::Pt;
 use quikscope::raster::Image;
-use quikscope::ui::color_picker::WHEEL;
+use quikscope::ui::color_picker::{LEFT_COLUMN, PANEL_WIDTH, WHEEL};
 use quikscope::ui::editor::Editor;
 use quikscope::ui::{Assets, Shot};
 
@@ -290,8 +290,10 @@ pub(super) fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     });
     ui.frame();
 
-    // The panel hangs centred under x = 500, below the toolbar.
-    let centre = point(px(500.), px(60.0 + 1.0 + 12.0 + WHEEL / 2.0));
+    // The panel hangs centred under x = 500, below the toolbar; the wheel
+    // is centred in its left column.
+    let x = 500.0 - PANEL_WIDTH / 2.0 + 1.0 + 12.0 + LEFT_COLUMN / 2.0;
+    let centre = point(px(x), px(60.0 + 1.0 + 12.0 + WHEEL / 2.0));
     ui.mouse("down", centre + point(px(WHEEL / 2.0 - 4.0), px(0.)));
     ui.mouse("move", centre + point(px(0.), px(-(WHEEL / 2.0 - 4.0))));
     ui.mouse("move", centre + point(px(-(WHEEL / 2.0 - 4.0)), px(0.)));
@@ -322,6 +324,300 @@ pub(super) fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     assert!(ui.editor(|e, _| e.picker_open()));
     ui.key("escape", None, Modifiers::default());
     assert!(!ui.editor(|e, _| e.picker_open()));
+}
+
+/// Records clipboard text instead of reaching a desktop.
+#[derive(Default)]
+struct TextClipboard(std::sync::Mutex<Vec<String>>);
+
+impl quikscope::platform::Clipboard for TextClipboard {
+    fn set_image(&self, image: Arc<Image>) -> Arc<quikscope::clipboard::PendingPng> {
+        quikscope::clipboard::PendingPng::encode(image)
+    }
+
+    fn set_text(&self, text: &str) {
+        self.0.lock().unwrap().push(text.into());
+    }
+}
+
+/// The standalone color window on a 640×360 screen (a 1280×720 display at
+/// scale 2): the four format fields wrap into two rows, and every one of
+/// them, plus the copy status, must stay reachable.
+pub(super) fn color_window_fits_narrow_screens_and_scrolls_when_short() {
+    use quikscope::color::Format;
+    use quikscope::document::Rgba;
+    use quikscope::ui::color_window::{self, ColorWindow};
+    use quikscope::ui::editor::EditorServices;
+
+    let color = Rgba {
+        r: 0,
+        g: 103,
+        b: 237,
+        a: 255,
+    };
+    let clipboard = Arc::new(TextClipboard::default());
+    let open = |w: f32, h: f32| {
+        let text = gpui_platform::current_platform(true).text_system();
+        let mut cx = HeadlessAppContext::with_platform(
+            text,
+            Arc::new(Assets),
+            gpui_platform::current_headless_renderer,
+        );
+        cx.update(quikscope::ui::init);
+        let services = EditorServices {
+            config: Arc::new(quikscope::config::Config::default()),
+            clipboard: Some(clipboard.clone()),
+            pick_color: None,
+        };
+        cx.update(|cx| cx.set_global(services));
+        let window: AnyWindowHandle = cx
+            .open_window(size(px(w), px(h)), |window, cx| {
+                cx.new(|cx| ColorWindow::new(color, window, cx))
+            })
+            .unwrap()
+            .into();
+        (cx, window)
+    };
+    let frame = |cx: &mut HeadlessAppContext, window: AnyWindowHandle| {
+        cx.update_window(window, |_, w, _| w.refresh()).unwrap();
+        cx.run_until_parked();
+        cx.capture_screenshot(window).unwrap();
+    };
+    let view = |cx: &mut HeadlessAppContext, window: AnyWindowHandle| {
+        cx.update_window(window, |v, _, cx| {
+            let v = v.downcast::<ColorWindow>().unwrap();
+            let v = v.read(cx);
+            (v.scroll.clone(), v.status.clone())
+        })
+        .unwrap()
+    };
+    let input = |cx: &mut HeadlessAppContext, window: AnyWindowHandle, event: PlatformInput| {
+        cx.update_window(window, |_, w, cx| {
+            w.dispatch_event(event, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    // Clicks the HSL field, the last of the two wrapped rows, expects its
+    // value on the clipboard, and returns the status line's on-screen bounds.
+    // Child bounds are layout positions; the scroll offset moves them.
+    let copy_hsl = |cx: &mut HeadlessAppContext, window: AnyWindowHandle| {
+        clipboard.0.lock().unwrap().clear();
+        let (scroll, _) = view(cx, window);
+        let mut panel = scroll.bounds_for_item(0).unwrap();
+        panel.origin += scroll.offset();
+        let inner = panel.size.width - px(26.);
+        let cell = (inner - px(12.)) / 2.0;
+        let at = point(
+            panel.left() + px(13.) + cell + px(12.) + cell / 2.0,
+            panel.bottom() - px(13. + 20.),
+        );
+        for (down, event) in [(true, at), (false, at)] {
+            let event = if down {
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: event,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                })
+            } else {
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: event,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                })
+            };
+            input(cx, window, event);
+        }
+        frame(cx, window);
+        let hsl = Format::Hsl.format(color);
+        assert_eq!(*clipboard.0.lock().unwrap(), [hsl.as_str()]);
+        let (scroll, status) = view(cx, window);
+        assert_eq!(status, Some((format!("Copied {hsl}"), false)));
+        let mut line = scroll.bounds_for_item(1).unwrap();
+        line.origin += scroll.offset();
+        line
+    };
+
+    // Opened for the narrow screen, the window is tall enough for both
+    // rows: nothing to scroll, the status line inside the window.
+    let (w, h) = color_window::size_for(640.0, 360.0);
+    assert_eq!((w, h), (608.0, 236.0 + 58.0));
+    let (mut cx, window) = open(w, h);
+    frame(&mut cx, window);
+    assert_eq!(view(&mut cx, window).0.max_offset().y, px(0.));
+    let status = copy_hsl(&mut cx, window);
+    assert!(status.bottom() <= px(h), "{status:?}");
+
+    // Resized shorter than its content, the window scrolls to the last
+    // row and the status.
+    let (mut cx, window) = open(w, 200.0);
+    frame(&mut cx, window);
+    let max = view(&mut cx, window).0.max_offset().y;
+    assert!(max > px(0.), "content taller than 200 px scrolls");
+    // Scrolling targets the hovered element.
+    input(
+        &mut cx,
+        window,
+        PlatformInput::MouseMove(MouseMoveEvent {
+            position: point(px(w / 2.0), px(100.)),
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        }),
+    );
+    input(
+        &mut cx,
+        window,
+        PlatformInput::Scroll(gpui::ScrollEvent {
+            position: point(px(w / 2.0), px(100.)),
+            // Wheel notches; pixel deltas are touchpad input.
+            delta: gpui::ScrollDelta::Lines(point(0., -20.)),
+            ..Default::default()
+        }),
+    );
+    frame(&mut cx, window);
+    assert_eq!(view(&mut cx, window).0.offset().y, -max);
+    let status = copy_hsl(&mut cx, window);
+    assert!(status.bottom() <= px(200.), "{status:?}");
+}
+
+/// The smallest editor window (480×320): the picker is limited to the room
+/// below the toolbar and scrolls, so HSL, its last field, can still be copied.
+pub(super) fn color_picker_scrolls_in_short_windows() {
+    let mut ui = Ui::with_size(blank(), size(px(480.), px(320.)));
+    let clipboard = Arc::new(TextClipboard::default());
+    let services = quikscope::ui::editor::EditorServices {
+        config: Arc::new(quikscope::config::Config::default()),
+        clipboard: Some(clipboard.clone()),
+        pick_color: None,
+    };
+    ui.cx.update(|cx| cx.set_global(services));
+    ui.editor(|e, cx| e.toggle_picker(px(240.), cx));
+    ui.frame();
+
+    let scroll = ui.editor(|e, cx| e.picker_scroll(cx));
+    let panel = scroll.bounds();
+    assert!(
+        panel.top() >= px(0.) && panel.bottom() <= px(320. - 8.),
+        "{panel:?}"
+    );
+    let max = scroll.max_offset().y;
+    assert!(max > px(0.), "the picker is taller than the room for it");
+
+    // A wheel over the picker scrolls it, not the canvas behind it.
+    let over = panel.center();
+    ui.input(PlatformInput::MouseMove(MouseMoveEvent {
+        position: over,
+        pressed_button: None,
+        modifiers: Modifiers::default(),
+    }));
+    let view_before = ui.editor(|e, _| e.transform());
+    ui.input(PlatformInput::Scroll(gpui::ScrollEvent {
+        position: over,
+        delta: gpui::ScrollDelta::Lines(point(0., -20.)),
+        ..Default::default()
+    }));
+    ui.frame();
+    assert_eq!(scroll.offset().y, -max);
+    assert_eq!(ui.editor(|e, _| e.transform()), view_before);
+
+    // HSL is the last field of the right column, now on screen.
+    let mut row = scroll.bounds_for_item(1).unwrap();
+    row.origin += scroll.offset();
+    let hsl = point(
+        row.left() + px(LEFT_COLUMN + 16.0 + 100.0),
+        row.top() + px(28.0 + 18.0 + 48.0 + 18.0 + 3.0 * 58.0 + 20.0),
+    );
+    assert!(hsl.y < panel.bottom(), "{hsl:?} in {panel:?}");
+    ui.click(hsl);
+    assert_eq!(
+        *clipboard.0.lock().unwrap(),
+        [quikscope::color::Format::Hsl.format(PALETTE[0])]
+    );
+}
+
+pub(super) fn picker_eyedropper_picks_from_screen_and_copies_each_format() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use quikscope::document::Rgba;
+    use quikscope::ui::editor::{EditorServices, Tool};
+
+    let mut doc = blank();
+    let rect = doc.make_shape(
+        ShapeKind::Rect {
+            a: Pt::new(50.0, 50.0),
+            b: Pt::new(200.0, 150.0),
+        },
+        Style::default(),
+    );
+    let id = doc.add(rect);
+    let mut ui = Ui::new(doc);
+    let blue = Rgba {
+        r: 0,
+        g: 103,
+        b: 237,
+        a: 255,
+    };
+    // Stands in for the daemon's frozen-desktop pick.
+    let picks = Rc::new(Cell::new(0));
+    let clipboard = Arc::new(TextClipboard::default());
+    let services = EditorServices {
+        config: Arc::new(quikscope::config::Config::default()),
+        clipboard: Some(clipboard.clone()),
+        pick_color: Some(Rc::new({
+            let picks = picks.clone();
+            move |_: &mut gpui::App| {
+                picks.set(picks.get() + 1);
+                gpui::Task::ready(Ok(Some(blue)))
+            }
+        })),
+    };
+    ui.cx.update(|cx| cx.set_global(services));
+    ui.editor(|e, cx| {
+        e.set_tool(Tool::Select, cx);
+        e.selected = BTreeSet::from([id]);
+    });
+
+    // `I` picks from the screen: the selection and the drawing color take
+    // the color, and the picker opens (centred under the toolbar) to show it.
+    ui.typ("i");
+    assert_eq!(picks.get(), 1);
+    assert_eq!(ui.doc(|d| d.shape(id).unwrap().style.color), blue);
+    assert_eq!(ui.editor(|e, _| e.style.color), blue);
+    assert!(ui.editor(|e, _| e.picker_open()));
+
+    // The picker's right column: the eyedropper button, then HEX and one
+    // field per row for RGB, CMYK, HSV and HSL.
+    let left = 500.0 - PANEL_WIDTH / 2.0;
+    let column = left + 1.0 + 12.0 + LEFT_COLUMN + 16.0 + 100.0;
+    let top = 60.0 + 1.0 + 12.0;
+    ui.click(point(px(column), px(top + 14.0)));
+    assert_eq!(picks.get(), 2, "the eyedropper button picks again");
+    ui.click(point(px(column), px(top + 28.0 + 18.0 + 24.0)));
+    for row in 0..4 {
+        let y = top + 28.0 + 18.0 + 48.0 + 18.0 + 20.0 + row as f32 * 58.0;
+        ui.click(point(px(column), px(y)));
+    }
+    assert_eq!(
+        *clipboard.0.lock().unwrap(),
+        [
+            "#0067ed",
+            "0, 103, 237",
+            "100%, 57%, 0%, 7%",
+            "214°, 100%, 93%",
+            "214°, 100%, 46%",
+        ]
+    );
+
+    // Esc closes the picker; one undo restores the color from before both
+    // picks.
+    ui.key("escape", None, Modifiers::default());
+    assert!(!ui.editor(|e, _| e.picker_open()));
+    ui.ctrl("z", false);
+    assert_eq!(ui.doc(|d| d.shape(id).unwrap().style.color), PALETTE[0]);
 }
 
 /// Regression: a key the input method lets through while it is composing

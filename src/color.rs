@@ -1,4 +1,5 @@
-//! Color-space helpers for the color picker: HSV ⇄ RGB and hex strings.
+//! Color-space helpers for the color picker and eyedropper: HSV ⇄ RGB, hex
+//! strings and the text formats colors are copied in.
 
 use crate::document::Rgba;
 
@@ -101,6 +102,87 @@ pub fn parse_hex(s: &str) -> Option<Rgba> {
     }
 }
 
+/// A text format the eyedropper copies colors in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Hex,
+    Rgb,
+    Cmyk,
+    Hsv,
+    Hsl,
+}
+
+impl Format {
+    pub const ALL: [Format; 5] = [
+        Format::Hex,
+        Format::Rgb,
+        Format::Cmyk,
+        Format::Hsv,
+        Format::Hsl,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Hex => "HEX",
+            Format::Rgb => "RGB",
+            Format::Cmyk => "CMYK",
+            Format::Hsv => "HSV",
+            Format::Hsl => "HSL",
+        }
+    }
+
+    /// `c` as text, rounded to whole units: `#0067ed`, `0, 103, 237`,
+    /// `100%, 57%, 0%, 7%`, `214°, 100%, 93%`, `214°, 100%, 46%`. Only hex
+    /// carries alpha; the other formats describe the color channels alone.
+    pub fn format(self, c: Rgba) -> String {
+        let pct = |x: f32| (x * 100.0).round() as u32;
+        // 359.6° rounds to 360°, which is 0°.
+        let deg = |h: f32| h.round() as u32 % 360;
+        let [r, g, b] = [c.r, c.g, c.b].map(|v| v as f32 / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let hue = || {
+            Hsv::from_rgb(
+                [c.r, c.g, c.b],
+                Hsv {
+                    h: 0.0,
+                    s: 0.0,
+                    v: 0.0,
+                },
+            )
+            .h
+        };
+        match self {
+            Format::Hex => to_hex(c),
+            Format::Rgb => format!("{}, {}, {}", c.r, c.g, c.b),
+            Format::Cmyk => {
+                let k = 1.0 - max;
+                let ink = |ch: f32| if k >= 1.0 { 0.0 } else { (max - ch) / max };
+                format!(
+                    "{}%, {}%, {}%, {}%",
+                    pct(ink(r)),
+                    pct(ink(g)),
+                    pct(ink(b)),
+                    pct(k)
+                )
+            }
+            Format::Hsv => {
+                let s = if max > 0.0 { (max - min) / max } else { 0.0 };
+                format!("{}°, {}%, {}%", deg(hue()), pct(s), pct(max))
+            }
+            Format::Hsl => {
+                let l = (max + min) / 2.0;
+                let d = max - min;
+                let s = if d > 0.0 {
+                    d / (1.0 - (2.0 * l - 1.0).abs())
+                } else {
+                    0.0
+                };
+                format!("{}°, {}%, {}%", deg(hue()), pct(s), pct(l))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +249,41 @@ mod tests {
         for bad in ["", "#12345", "#ggg", "#1234567", "red", "#ab cd e"] {
             assert_eq!(parse_hex(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn text_formats_match_common_converters() {
+        let rgb = |r, g, b| Rgba { r, g, b, a: 255 };
+        let all = |c| Format::ALL.map(|f| f.format(c));
+        assert_eq!(
+            all(rgb(0, 103, 237)),
+            [
+                "#0067ed",
+                "0, 103, 237",
+                "100%, 57%, 0%, 7%",
+                "214°, 100%, 93%",
+                "214°, 100%, 46%",
+            ]
+        );
+        // Black has no ink but K, and no hue or saturation.
+        assert_eq!(
+            all(rgb(0, 0, 0))[2..],
+            ["0%, 0%, 0%, 100%", "0°, 0%, 0%", "0°, 0%, 0%"]
+        );
+        assert_eq!(
+            all(rgb(255, 255, 255))[2..],
+            ["0%, 0%, 0%, 0%", "0°, 0%, 100%", "0°, 0%, 100%"]
+        );
+        // A hue just under 360° rounds to 0°, not 360°.
+        assert_eq!(Format::Hsl.format(rgb(255, 0, 1)), "0°, 100%, 50%");
+        assert_eq!(Format::Hsl.format(rgb(255, 128, 0)), "30°, 100%, 50%");
+        // Translucent pixels (images opened from files) keep alpha in hex.
+        assert_eq!(
+            Format::Hex.format(Rgba {
+                a: 0x80,
+                ..rgb(1, 2, 3)
+            }),
+            "#01020380"
+        );
     }
 }

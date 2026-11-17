@@ -26,6 +26,7 @@ echo 'capture screen no-notify' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/quikscop
 ```text
 capture <mode> [flag]... [output=NAME] [geometry=X,Y,WxH]
 open-last
+pick                # pick a pixel's color anywhere on the desktop
 open <path>          # rest of the line, spaces allowed
 settings            # open or focus the settings window; replies `ok pong`
 notifications <on|off|toggle|status>   # alias: notify
@@ -57,14 +58,20 @@ ok <shot-id> <width>x<height> <path>   # … and `save` wrote <path>
 ok pong                                # ping, quit, settings
 ok text <shot-id> <text>               # capture … text: the text read (empty: none)
 ok notifications <on|off>             # notifications: the setting now in effect
+ok color <#rrggbb>                    # pick: the color clicked
 cancelled                              # the user cancelled the selection
 err <message>                          # single line
 ```
 
-`capture region` without `geometry=` answers only after the user finishes
-selecting; clients should not apply a read timeout to it. A second
-interactive selection while one is open is refused with
+`capture region` without `geometry=` and `pick` answer only after the user
+finishes selecting; clients should not apply a read timeout to them. A second
+interactive selection (either kind) while one is open is refused with
 `err a selection is already in progress`.
+
+`pick` freezes every output like a frozen region selection, without the
+pointer, and magnifies the pixels at the pointer; a click or Enter picks the
+physical pixel under it, Esc or a right click cancels. The color also opens
+in the color window, reused if one is open.
 
 In `ok text` replies `\`, line feeds and carriage returns in the text are
 escaped as `\\`, `\n` and `\r`, so the reply stays on one line.

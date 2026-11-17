@@ -762,6 +762,134 @@ fn concurrent_region_selection_is_refused() {
     );
 }
 
+/// The hex `quikscope pick` prints for a BGRA pixel.
+fn hex(bgra: [u8; 4]) -> String {
+    format!("#{:02x}{:02x}{:02x}", bgra[2], bgra[1], bgra[0])
+}
+
+#[test]
+fn pick_prints_the_clicked_pixel_and_reuses_one_color_window() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+
+    let child = s.spawn_quikscope(&["pick"]);
+    s.wait_overlay(1);
+    s.helper(&["click", "300", "200"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    assert!(out.status.success(), "{out:?}");
+    let first = hex(pattern_pixel(300, 200));
+    assert_eq!(stdout(&out), first, "the frozen pixel, undimmed");
+
+    // The color window opens focused; Ctrl+C copies the hex.
+    s.wait_for_window("quikscope");
+    s.keys(&["ctrl+c"]);
+    let pasted = s.helper(&["paste", "text/plain;charset=utf-8"]).stdout;
+    assert_eq!(String::from_utf8(pasted).unwrap(), first);
+
+    // A second pick updates the same window instead of opening another.
+    let child = s.spawn_quikscope(&["pick"]);
+    s.wait_overlay(2);
+    s.helper(&["click", "20", "30"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    assert_eq!(stdout(&out), hex(pattern_pixel(20, 30)));
+    s.wait_for_window("quikscope");
+    let windows = s.toplevels();
+    assert_eq!(
+        windows
+            .iter()
+            .filter(|l| l.starts_with("quikscope\t"))
+            .count(),
+        1,
+        "{windows:?}"
+    );
+
+    // Escape cancels without a color.
+    let child = s.spawn_quikscope(&["pick"]);
+    s.wait_overlay(3);
+    s.keys(&["escape"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cancelled"));
+}
+
+#[test]
+fn pick_reads_physical_pixels_on_a_scaled_output() {
+    let reconfigure = |s: &Session| {
+        s.helper(&["output", "HEADLESS-1", "0", "2"]);
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let Some(mut s) = Session::start_with(1, reconfigure) else {
+        return;
+    };
+    s.start_daemon();
+    // 640x360 logical at scale 2: logical (100.25, 200.75) is physical
+    // pixel (200, 401) of what is on screen.
+    let out = s.quikscope(&["capture", "screen", "--save", "--no-notify"]);
+    let screen = decode_png(&saved_path(&out));
+    let child = s.spawn_quikscope(&["pick"]);
+    s.wait_overlay(1);
+    s.helper(&["click", "100.25", "200.75"]);
+    let out = s.finish(child, Duration::from_secs(15));
+    assert_eq!(stdout(&out), hex(screen.pixel(200, 401)));
+    assert_ne!(
+        screen.pixel(200, 401),
+        screen.pixel(200, 400),
+        "the test pixel differs from its neighbour above"
+    );
+}
+
+#[test]
+fn editor_i_picks_from_the_desktop_into_the_drawing_color() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+    let out = s.quikscope(&["capture", "screen", "--edit", "--no-notify"]);
+    assert!(out.status.success());
+    s.wait_for_window("quikscope");
+    s.wait_log("editor window opened", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Pick a desktop pixel outside the (centred) editor window.
+    s.keys(&["i"]);
+    s.wait_overlay(1);
+    s.helper(&["click", "20", "30"]);
+    s.wait_log("picked #", Duration::from_secs(10));
+    s.wait_for_window("quikscope");
+    std::thread::sleep(Duration::from_millis(300));
+
+    // It is now the drawing color: a rectangle drawn with it adds pixels
+    // of exactly that color to the saved image.
+    let color = pattern_pixel(20, 30);
+    let count = |img: &Image| {
+        img.data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| **p == color)
+            .count()
+    };
+    // The pick opened the color picker over the canvas; Esc closes it.
+    s.keys(&["escape", "r"]);
+    s.helper(&["drag", "520", "300", "760", "460"]);
+    s.keys(&["ctrl+s"]);
+    s.wait_log("saved ", Duration::from_secs(10));
+    let saved = std::fs::read_dir(s.shots_dir())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let shot = Image::read_raw(&s.cache_file()).unwrap().0;
+    let (before, after) = (count(&shot), count(&decode_png(&saved)));
+    assert!(
+        after > before + 400,
+        "{before} -> {after} pixels of {color:?}"
+    );
+}
+
 #[test]
 fn editor_draws_copies_saves_and_undo_reaches_disk() {
     let Some(mut s) = Session::start() else {
