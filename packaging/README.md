@@ -31,7 +31,7 @@ Every package ships this report plus the original asset and application
 licences. Review changes to the dependency allowlist rather than accepting new
 licences automatically. `cargo-deny 0.20.2` checks licences, security advisories,
 registry sources and wildcard dependencies. Duplicate transitive versions warn;
-six reviewed unmaintained-only advisories have individually documented exceptions
+seven reviewed unmaintained-only advisories have individually documented exceptions
 in deny.toml. New maintenance or vulnerability advisories fail CI.
 
 ## Linux
