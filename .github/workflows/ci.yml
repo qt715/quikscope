@@ -216,6 +216,9 @@ jobs:
     # against; Ubuntu's labwc lags several releases behind.
     container:
       image: archlinux:latest
+      # Arch's labwc carries the cap_sys_nice file capability; without it in
+      # the container's bounding set, exec fails with EPERM.
+      options: --cap-add=SYS_NICE
     steps:
       - name: System dependencies
         run: |
