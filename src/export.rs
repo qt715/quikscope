@@ -16,7 +16,16 @@ use crate::render::Prim;
 /// needed in either direction.
 pub fn render(job: &RenderJob) -> Image {
     let started = Instant::now();
-    let base = &*job.base;
+    render_on(job, &job.base, started, false)
+}
+
+/// Uses the PNG renderer for each animation frame, including the document crop.
+/// Pixelation must be rebuilt against this frame, not its cached first-frame pixels.
+pub fn composite(job: &RenderJob, image: &mut Image) {
+    *image = render_on(job, image, Instant::now(), true);
+}
+
+fn render_on(job: &RenderJob, base: &Image, started: Instant, animated: bool) -> Image {
     let area = job.area();
 
     if job.shapes.is_empty() {
@@ -47,6 +56,14 @@ pub fn render(job: &RenderJob) -> Image {
             PixmapMut::from_bytes(&mut out.data, w, h).expect("image size matches buffer");
         let tf = Transform::from_translate(-area.x as f32, -area.y as f32);
         for shape in &job.shapes {
+            let fresh;
+            let shape =
+                if animated && matches!(shape.kind, crate::document::ShapeKind::Pixelate { .. }) {
+                    fresh = (**shape).clone();
+                    &fresh
+                } else {
+                    shape.as_ref()
+                };
             for prim in shape.prims(base).iter() {
                 match prim {
                     Prim::Fill { path, color } => {

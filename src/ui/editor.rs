@@ -1,18 +1,20 @@
 //! The annotation editor window.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, Global, HitboxBehavior, InteractiveElement as _,
     IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollEvent, Size, Styled as _,
-    UTF16Selection, Window, anchored, canvas, div, fill, outline, point, px,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollEvent, Size,
+    StatefulInteractiveElement as _, Styled as _, UTF16Selection, Window, anchored, canvas, div,
+    fill, outline, point, px,
 };
 
 use super::color_picker::{ColorPicker, PickerEvent};
@@ -25,8 +27,111 @@ use crate::config::Config;
 use crate::document::{Document, PALETTE, Rgba, Shape, ShapeId, ShapeKind, Style};
 use crate::fonts::FontSpec;
 use crate::geom::{IRect, Pt, RectF};
+use crate::media::{OutputFormat, decode::Decoder, export::ExportOptions};
 use crate::raster::Compression;
+use crate::raster::Image;
 use crate::text::TextLayout;
+
+struct AnimationFrame {
+    image: Arc<Image>,
+    tiles: Arc<[super::Tile]>,
+    pts: Duration,
+    duration: Duration,
+}
+
+struct Playback {
+    format: OutputFormat,
+    playing: bool,
+    position: Duration,
+    anchor: Instant,
+    frame: Option<AnimationFrame>,
+    ahead: VecDeque<AnimationFrame>,
+    loading: bool,
+    generation: u64,
+    tick_pending: bool,
+    failed: bool,
+    requests: std::sync::mpsc::Sender<(u64, Duration)>,
+    decoded: std::sync::mpsc::Receiver<(u64, anyhow::Result<VecDeque<AnimationFrame>>)>,
+}
+
+impl Playback {
+    fn new(animation: &super::Animation, width: u32, height: u32) -> Self {
+        let (requests, pending) = std::sync::mpsc::channel::<(u64, Duration)>();
+        let (ready, decoded) = std::sync::mpsc::sync_channel(1);
+        let path = animation.path.clone();
+        // Decoder contexts stay on one thread: rebuilding/seeking from the first
+        // frame for every cache refill would make long animations quadratic.
+        std::thread::spawn(move || {
+            let mut decoder = None;
+            let mut next_at = Duration::ZERO;
+            while let Ok((generation, to)) = pending.recv() {
+                let result = (|| -> anyhow::Result<_> {
+                    if decoder.is_none() {
+                        let mut opened = Decoder::open(&path)?;
+                        opened.set_output_size(width, height);
+                        decoder = Some(opened);
+                        next_at = Duration::ZERO;
+                    }
+                    let decoder = decoder.as_mut().expect("opened decoder");
+                    if to != next_at {
+                        decoder.seek(to)?;
+                    }
+                    // CPU pixels and GPU tiles both count towards the cache budget.
+                    let bytes = (width as usize * height as usize * 8).max(1);
+                    let limit = (64 * 1024 * 1024 / bytes).clamp(1, 60);
+                    let mut frames = VecDeque::new();
+                    while frames.len() < limit {
+                        let Some(frame) = decoder.next_frame()? else {
+                            break;
+                        };
+                        next_at = frame.pts + frame.duration;
+                        frames.push_back(AnimationFrame {
+                            tiles: super::make_tiles(&frame.image),
+                            image: Arc::new(frame.image),
+                            pts: frame.pts,
+                            duration: frame.duration.max(Duration::from_millis(1)),
+                        });
+                        if next_at >= to + Duration::from_secs(1) {
+                            break;
+                        }
+                    }
+                    Ok(frames)
+                })();
+                if result.is_err() {
+                    decoder = None;
+                }
+                if ready.send((generation, result)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            format: animation.format,
+            playing: false,
+            position: Duration::ZERO,
+            anchor: Instant::now(),
+            frame: None,
+            ahead: VecDeque::new(),
+            loading: false,
+            generation: 0,
+            tick_pending: false,
+            failed: false,
+            requests,
+            decoded,
+        }
+    }
+}
+
+struct AnimationExport {
+    cancel: Arc<AtomicBool>,
+    progress: Arc<AtomicU32>,
+}
+
+impl Drop for AnimationExport {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
 
 /// Starts a color pick from anywhere on the desktop (frozen overlays on every
 /// output); resolves to `None` when the user cancels.
@@ -237,6 +342,7 @@ pub struct Editor {
     /// cursor and a faint outline).
     hover: Option<ShapeId>,
     patches: PatchCache,
+    animation_shapes: std::collections::BTreeMap<ShapeId, Shape>,
     toast: Option<Toast>,
     toast_generation: u64,
     /// Where the last Ctrl+S wrote, so repeated saves update one file.
@@ -254,6 +360,8 @@ pub struct Editor {
     /// Shape whose color a picker drag is changing: the drag's first change
     /// records undo, the rest replace it in place.
     color_session: Option<BTreeSet<ShapeId>>,
+    playback: Option<Playback>,
+    animation_export: Option<AnimationExport>,
 }
 
 const MIN_ZOOM: f32 = 0.02;
@@ -278,7 +386,11 @@ impl Editor {
     ) -> Editor {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        cx.observe(&doc, |_, _, cx| cx.notify()).detach();
+        cx.observe(&doc, |e, _, cx| {
+            e.animation_shapes.clear();
+            cx.notify();
+        })
+        .detach();
         let (style, font) = cx
             .try_global::<EditorServices>()
             .map(|s| {
@@ -297,6 +409,10 @@ impl Editor {
             .detach();
         cx.subscribe_in(&color_picker, window, Self::on_picker)
             .detach();
+        let playback = shot
+            .animation
+            .as_ref()
+            .map(|animation| Playback::new(animation, shot.image.width, shot.image.height));
         Editor {
             shot,
             doc,
@@ -324,6 +440,7 @@ impl Editor {
             space_held: false,
             hover: None,
             patches: PatchCache::default(),
+            animation_shapes: Default::default(),
             toast: None,
             toast_generation: 0,
             saved: None,
@@ -334,6 +451,146 @@ impl Editor {
             picker_open: false,
             chrome: toolbar::Probes::default(),
             color_session: None,
+            playback,
+            animation_export: None,
+        }
+    }
+
+    pub fn animation_status(&self) -> Option<(bool, Duration, OutputFormat)> {
+        self.playback
+            .as_ref()
+            .map(|p| (p.playing, p.position, p.format))
+    }
+
+    pub fn current_image(&self) -> &Arc<Image> {
+        self.playback
+            .as_ref()
+            .and_then(|p| p.frame.as_ref())
+            .map(|f| &f.image)
+            .unwrap_or(&self.shot.image)
+    }
+
+    pub fn toggle_playback(&mut self, cx: &mut Context<Self>) {
+        if let Some(p) = &mut self.playback {
+            p.playing = !p.playing;
+            p.anchor = Instant::now();
+            cx.notify();
+        }
+    }
+
+    pub fn scrub_animation(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        if let (Some(p), Some(animation)) = (&mut self.playback, &self.shot.animation) {
+            p.playing = false;
+            // The endpoint must show the last frame rather than seeking past EOF.
+            p.position = animation
+                .info
+                .duration
+                .saturating_sub(Duration::from_micros(1))
+                .mul_f32(fraction.clamp(0.0, 1.0));
+            p.generation += 1;
+            p.ahead.clear();
+            p.failed = false;
+            cx.notify();
+        }
+    }
+
+    pub fn cycle_animation_format(&mut self, cx: &mut Context<Self>) {
+        if let Some(p) = &mut self.playback {
+            if self.animation_export.is_some() {
+                return;
+            }
+            let formats = OutputFormat::ANIMATION;
+            let index = formats.iter().position(|f| *f == p.format).unwrap_or(0);
+            p.format = formats[(index + 1) % formats.len()];
+            self.saved = None;
+            cx.notify();
+        }
+    }
+
+    fn update_animation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(p), Some(animation)) = (&mut self.playback, &self.shot.animation) else {
+            return;
+        };
+        let mut error = None;
+        if let Ok((generation, result)) = p.decoded.try_recv() {
+            p.loading = false;
+            if generation == p.generation {
+                match result {
+                    Ok(frames) if !frames.is_empty() => p.ahead = frames,
+                    Ok(_) => p.failed = true,
+                    Err(err) => {
+                        p.playing = false;
+                        p.failed = true;
+                        error = Some(format!("Playback failed: {err:#}"));
+                    }
+                }
+            }
+        }
+        if p.playing {
+            let elapsed = p.anchor.elapsed();
+            p.anchor = Instant::now();
+            p.position += elapsed;
+            if p.position >= animation.info.duration && !animation.info.duration.is_zero() {
+                p.position = Duration::from_secs_f64(
+                    p.position.as_secs_f64() % animation.info.duration.as_secs_f64(),
+                );
+                p.ahead.clear();
+                p.generation += 1;
+                p.failed = false;
+            }
+        }
+        while p.ahead.front().is_some_and(|frame| frame.pts <= p.position) {
+            if let Some(old) = p.frame.take() {
+                for tile in old.tiles.iter() {
+                    let _ = window.drop_image(tile.image.clone());
+                }
+            }
+            p.frame = p.ahead.pop_front();
+            self.animation_shapes.clear();
+        }
+        let covered = p
+            .frame
+            .as_ref()
+            .is_some_and(|f| f.pts <= p.position && p.position < f.pts + f.duration);
+        let at_end = covered
+            && p.frame
+                .as_ref()
+                .is_some_and(|f| f.pts + f.duration >= animation.info.duration);
+        if !p.loading && !p.failed && (!covered || (p.ahead.is_empty() && !at_end)) {
+            p.loading = true;
+            let generation = p.generation;
+            let to = if covered {
+                p.frame
+                    .as_ref()
+                    .map(|f| f.pts + f.duration)
+                    .unwrap_or(p.position)
+            } else {
+                p.position
+            };
+            if p.requests.send((generation, to)).is_err() {
+                p.loading = false;
+                p.failed = true;
+                p.playing = false;
+                error = Some("Animation decoder stopped".into());
+            }
+        }
+        if (p.playing || p.loading || self.animation_export.is_some()) && !p.tick_pending {
+            p.tick_pending = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let _ = this.update(cx, |e, cx| {
+                    if let Some(p) = &mut e.playback {
+                        p.tick_pending = false;
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        if let Some(error) = error {
+            self.show_toast(error, true, cx);
         }
     }
 
@@ -985,6 +1242,11 @@ impl Editor {
                 }
             }
             "delete" | "backspace" => self.delete_selected(cx),
+            "space" if self.playback.is_some() => {
+                if !ev.is_held {
+                    self.toggle_playback(cx);
+                }
+            }
             "space" => self.space_held = true,
             "left" => self.nudge(-step, 0.0, cx),
             "right" => self.nudge(step, 0.0, cx),
@@ -1049,6 +1311,12 @@ impl Editor {
         }
         if ev.button != MouseButton::Left {
             return;
+        }
+        // Freeze drawing reference pixels, but let selection and panning keep playing.
+        if !matches!(self.tool, Tool::Select | Tool::Hand)
+            && let Some(p) = &mut self.playback
+        {
+            p.playing = false;
         }
         let p = self.transform().to_image(ev.position);
         let tolerance = 6.0 / self.zoom();
@@ -1321,12 +1589,129 @@ impl Editor {
         })
         .detach();
     }
+    fn export_animation(
+        &mut self,
+        new_file: bool,
+        copy: bool,
+        window: Option<gpui::AnyWindowHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.animation_export.is_some() {
+            return;
+        }
+        let Some(services) = cx.try_global::<EditorServices>().cloned() else {
+            self.show_toast("Export is unavailable".into(), true, cx);
+            return;
+        };
+        if copy && services.clipboard.is_none() {
+            self.show_toast("Clipboard is unavailable".into(), true, cx);
+            return;
+        }
+        let Some(animation) = self.shot.animation.clone() else {
+            return;
+        };
+        let Some(playback) = &self.playback else {
+            return;
+        };
+        let format = playback.format;
+        let path = if copy {
+            let stamp = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            crate::config::cache_dir().join(format!(
+                "animation-{}-{stamp}.{}",
+                self.shot.id,
+                format.extension()
+            ))
+        } else {
+            self.saved
+                .as_ref()
+                .filter(|_| !new_file)
+                .map(|(p, _)| p.clone())
+                .unwrap_or_else(|| {
+                    services
+                        .config
+                        .record
+                        .new_save_path(SystemTime::now(), format)
+                })
+        };
+        let doc = self.doc.read(cx);
+        let (job, revision) = (doc.snapshot(), doc.revision());
+        let options = ExportOptions {
+            format,
+            trim: None,
+            mute: true,
+            fps: None,
+            max_width: None,
+            encoder: crate::media::EncoderPreference::parse(&services.config.record.encoder)
+                .unwrap_or(crate::media::EncoderPreference::Auto),
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(AtomicU32::new(0));
+        self.animation_export = Some(AnimationExport {
+            cancel: cancel.clone(),
+            progress: progress.clone(),
+        });
+        self.toast = None;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            // The overlay returns the cropped PNG-renderer output before encoding.
+            // Scaling after composition would move annotation coordinates.
+            crate::media::export::export(
+                &animation.path,
+                &path,
+                &options,
+                Some(&|image| crate::export::composite(&job, image)),
+                &|value| progress.store((value * 100.0) as u32, Ordering::Relaxed),
+                &cancel,
+            )?;
+            Ok::<_, anyhow::Error>(path)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |e, cx| {
+                let cancelled = e
+                    .animation_export
+                    .take()
+                    .is_some_and(|job| job.cancel.load(Ordering::Relaxed));
+                match result {
+                    Ok(path) if copy => {
+                        if let Some(clipboard) = services.clipboard {
+                            clipboard.set_files(&[path]);
+                        }
+                        e.show_toast("Copied animation to clipboard".into(), false, cx);
+                    }
+                    Ok(path) => {
+                        e.show_toast(format!("Saved {}", tilde(&path)), false, cx);
+                        e.saved = Some((path, revision));
+                        if services.config.editor.close_on_save
+                            && let Some(window) = window
+                        {
+                            let _ = window.update(cx, |_, window, _| window.remove_window());
+                        }
+                    }
+                    Err(_) if cancelled => e.show_toast("Export cancelled".into(), false, cx),
+                    Err(err) => e.show_toast(format!("Export failed: {err:#}"), true, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
 
-    /// Ctrl+S: renders and writes a PNG into the screenshots directory.
+    /// Ctrl+S: saves a PNG or re-encodes all frames of an animated shot.
     /// Repeated saves overwrite the same file; Ctrl+Shift+S always makes a
     /// new one.
     pub fn save(&mut self, new_file: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_text(cx);
+        if self.playback.is_some() {
+            self.export_animation(new_file, false, Some(window.window_handle()), cx);
+            return;
+        }
         let Some(services) = cx.try_global::<EditorServices>().cloned() else {
             self.show_toast("Saving is unavailable".into(), true, cx);
             return;
@@ -1361,9 +1746,13 @@ impl Editor {
         .detach();
     }
 
-    /// Ctrl+C: puts the annotated image on the clipboard.
+    /// Ctrl+C: copies a still image or exports an animation as a clipboard file.
     pub fn copy(&mut self, cx: &mut Context<Self>) {
         self.commit_text(cx);
+        if self.playback.is_some() {
+            self.export_animation(false, true, None, cx);
+            return;
+        }
         let Some(clipboard) = cx
             .try_global::<EditorServices>()
             .and_then(|s| s.clipboard.clone())
@@ -1397,7 +1786,7 @@ impl Editor {
             .map(|s| s.config.ocr.languages.clone())
             .unwrap_or_default();
         let clipboard = services.and_then(|s| s.clipboard);
-        let image = self.shot.image.clone();
+        let image = self.current_image().clone();
         let region = self
             .doc
             .read(cx)
@@ -1506,6 +1895,12 @@ impl Editor {
         let xf = self.transform();
         let zoom = xf.zoom;
         let doc = self.doc.read(cx);
+        let base = self
+            .playback
+            .as_ref()
+            .and_then(|p| p.frame.as_ref())
+            .map(|f| f.image.as_ref())
+            .unwrap_or(&doc.base);
         // What gets exported: the image plus drawings past its edges, whose
         // margin is transparent in the saved PNG.
         let canvas_rect = RectF::new(area.x as f32, area.y as f32, area.w as f32, area.h as f32);
@@ -1515,29 +1910,32 @@ impl Editor {
             // the screenshot it is all that shows.
             let frame = xf.rect_to_screen(canvas_rect.inflate(1.0 / zoom));
             window.paint_quad(fill(frame, gpui::rgba(0xffffff18)));
-            paint_tiles(window, self.shot.tiles(), xf, bounds);
+            let tiles = self
+                .playback
+                .as_ref()
+                .and_then(|p| p.frame.as_ref())
+                .map(|f| &f.tiles)
+                .unwrap_or_else(|| self.shot.tiles());
+            paint_tiles(window, tiles, xf, bounds);
 
             let editing = self.text.as_ref().and_then(|t| t.id);
             for shape in doc.shapes() {
                 if Some(shape.id) == editing {
                     continue;
                 }
-                paint_prims(
-                    window,
-                    shape.prims(&doc.base),
-                    xf,
-                    bounds,
-                    &mut self.patches,
-                );
+                let shape = if self.playback.is_some()
+                    && matches!(shape.kind, ShapeKind::Pixelate { .. })
+                {
+                    self.animation_shapes
+                        .entry(shape.id)
+                        .or_insert_with(|| (**shape).clone())
+                } else {
+                    shape.as_ref()
+                };
+                paint_prims(window, shape.prims(base), xf, bounds, &mut self.patches);
             }
             if let Some(draft) = &self.draft {
-                paint_prims(
-                    window,
-                    draft.prims(&doc.base),
-                    xf,
-                    bounds,
-                    &mut self.patches,
-                );
+                paint_prims(window, draft.prims(base), xf, bounds, &mut self.patches);
             }
 
             if let Some(t) = &self.text {
@@ -1901,6 +2299,7 @@ impl EntityInputHandler for Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_animation(window, cx);
         let editor = cx.entity();
         // Device pixels per image pixel: 100% is actual pixels on any scale.
         let zoom_label = format!("{:.0}%", self.view.zoom * window.scale_factor() * 100.0);
@@ -1993,6 +2392,47 @@ impl Render for Editor {
                         .child(t.message.clone()),
                 )
         });
+        let progress = self.animation_export.as_ref().map(|job| {
+            let value = job.progress.load(Ordering::Relaxed).min(100);
+            div()
+                .absolute()
+                .bottom(px(toolbar::BAR_SPACE + 42.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("animation-export-progress")
+                        .occlude()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .p_2()
+                        .rounded_lg()
+                        .bg(theme::panel())
+                        .border_1()
+                        .border_color(theme::panel_border())
+                        .text_sm()
+                        .child(format!("Exporting animation… {value}%"))
+                        .child(
+                            div()
+                                .id("animation-export-cancel")
+                                .cursor_pointer()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .bg(theme::hover())
+                                .child("Cancel")
+                                .on_click(cx.listener(|e, _, _, cx| {
+                                    if let Some(job) = &e.animation_export {
+                                        job.cancel.store(true, Ordering::Relaxed);
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                )
+        });
 
         div()
             .id("editor")
@@ -2026,6 +2466,7 @@ impl Render for Editor {
             )
             .children(toolbar::chrome(self, zoom_label, viewport, cx))
             .children(toast)
+            .children(progress)
             .children(font_menu)
             .children(picker)
             .children(

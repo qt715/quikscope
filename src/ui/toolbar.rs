@@ -113,6 +113,8 @@ pub struct Probes {
     pub style: ScrollHandle,
     pub history: ScrollHandle,
     pub output: ScrollHandle,
+    pub playback: ScrollHandle,
+    pub scrubber: ScrollHandle,
 }
 
 fn icon(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
@@ -206,6 +208,9 @@ pub fn chrome(
     // way, so showing it never moves the image.
     if editor.style_panel_shown() {
         out.push(style_panel(editor, viewport, cx).into_any_element());
+    }
+    if editor.animation_status().is_some() {
+        out.push(playback(editor, viewport, cx).into_any_element());
     }
     out
 }
@@ -479,6 +484,93 @@ fn output(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
             )
             .on_click(cx.listener(|e, _, _, cx| e.toggle_help(cx)))
             .child("?"),
+        )
+}
+
+fn playback(editor: &Editor, viewport: Size<Pixels>, cx: &mut Context<Editor>) -> impl IntoElement {
+    let (playing, position, format) = editor.animation_status().expect("animation strip");
+    let info = &editor.shot.animation.as_ref().expect("animation shot").info;
+    let duration = info.duration.as_secs_f64().max(0.001);
+    let fraction = (position.as_secs_f64() / duration).clamp(0.0, 1.0);
+    let frame = (position.as_secs_f64() * info.fps.max(1.0)).floor() as u64 + 1;
+    let count = info
+        .frames
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "?".into());
+    let width = 380.0_f32.min((f32::from(viewport.width) - 2.0 * EDGE).max(1.0));
+    let fits = f32::from(viewport.width) >= HISTORY_W + OUTPUT_W + width + 4.0 * EDGE;
+    panel("animation-playback", &editor.chrome.playback)
+        .absolute()
+        .left(px((f32::from(viewport.width) - width) / 2.0))
+        .bottom(px(if fits { EDGE } else { EDGE + BAR + CLEARANCE }))
+        .w(px(width))
+        .p(px(PAD))
+        .gap_2()
+        .child(
+            button("animation-play", "Play / pause (Space)", playing, true)
+                .on_click(cx.listener(|e, _, _, cx| e.toggle_playback(cx)))
+                .child(if playing { "Ⅱ" } else { "▶" }),
+        )
+        .child(
+            div()
+                .id("animation-scrubber")
+                .track_scroll(&editor.chrome.scrubber)
+                .h(px(BUTTON))
+                .flex_1()
+                .min_w(px(30.))
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|e, ev: &gpui::MouseDownEvent, _, cx| {
+                        let bounds = e.chrome.scrubber.bounds();
+                        e.scrub_animation(
+                            f32::from(ev.position.x - bounds.left())
+                                / f32::from(bounds.size.width).max(1.0),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_move(cx.listener(|e, ev: &gpui::MouseMoveEvent, _, cx| {
+                    if ev.pressed_button == Some(gpui::MouseButton::Left) {
+                        let bounds = e.chrome.scrubber.bounds();
+                        e.scrub_animation(
+                            f32::from(ev.position.x - bounds.left())
+                                / f32::from(bounds.size.width).max(1.0),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    div()
+                        .h(px(4.))
+                        .w_full()
+                        .rounded_full()
+                        .bg(theme::hover())
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui::relative(fraction as f32))
+                                .rounded_full()
+                                .bg(theme::accent()),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child(format!("{frame}/{count}  {:.1}s", position.as_secs_f64())),
+        )
+        .child(
+            button("animation-format", "Change animation format", false, true)
+                .w(px(62.))
+                .text_xs()
+                .on_click(cx.listener(|e, _, _, cx| e.cycle_animation_format(cx)))
+                .child(format.label()),
         )
 }
 

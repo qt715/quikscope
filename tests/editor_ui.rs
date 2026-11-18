@@ -33,6 +33,14 @@ impl Ui {
     }
 
     fn with_size(doc: Document, viewport: gpui::Size<gpui::Pixels>) -> Ui {
+        Self::with_animation(doc, viewport, None)
+    }
+
+    fn with_animation(
+        doc: Document,
+        viewport: gpui::Size<gpui::Pixels>,
+        animation: Option<quikscope::ui::Animation>,
+    ) -> Ui {
         let text = gpui_platform::current_platform(true).text_system();
         let mut cx = HeadlessAppContext::with_platform(
             text,
@@ -42,7 +50,9 @@ impl Ui {
         cx.update(quikscope::ui::init);
         let (base, scale) = (doc.base.clone(), doc.scale);
         let doc = cx.update(|cx| cx.new(|_| doc));
-        let shot = Arc::new(Shot::new(1, base, scale, None));
+        let mut shot = Shot::new(1, base, scale, None);
+        shot.animation = animation.map(Arc::new);
+        let shot = Arc::new(shot);
         let d = doc.clone();
         let window = cx
             .open_window(viewport, |window, cx| {
@@ -172,6 +182,140 @@ impl Ui {
     fn doc<R>(&mut self, f: impl FnOnce(&Document) -> R) -> R {
         let doc = self.doc.clone();
         self.cx.update(|cx| f(doc.read(cx)))
+    }
+}
+
+pub(super) fn animation_scrubs_and_exports_annotations_on_every_frame() {
+    use quikscope::media::{OutputFormat, decode::Decoder};
+    use quikscope::ui::{Animation, editor::EditorServices};
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    for (index, color) in [[30, 50, 80, 255], [80, 160, 30, 255], [180, 60, 20, 255]]
+        .into_iter()
+        .enumerate()
+    {
+        Image::filled(160, 120, color)
+            .save_png(
+                &dir.path().join(format!("frame-{index}.png")),
+                quikscope::raster::Compression::Fast,
+            )
+            .unwrap();
+    }
+    let source = dir.path().join("source.gif");
+    let output = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-framerate", "2", "-i"])
+        .arg(dir.path().join("frame-%d.png"))
+        .args(["-loop", "0"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let info = quikscope::media::decode::probe(&source).unwrap();
+    let first = Decoder::open(&source)
+        .unwrap()
+        .next_frame()
+        .unwrap()
+        .unwrap()
+        .image;
+    let mut ui = Ui::with_animation(
+        Document::new(Arc::new(first), 1.0),
+        size(px(1000.), px(700.)),
+        Some(Animation {
+            path: source.clone(),
+            info,
+            format: OutputFormat::Gif,
+        }),
+    );
+    let mut config = quikscope::config::Config::default();
+    config.record.save_dir = dir.path().to_string_lossy().into_owned();
+    config.record.filename = "annotated".into();
+    ui.cx.update(|cx| {
+        cx.set_global(EditorServices {
+            config: Arc::new(config),
+            clipboard: None,
+            pick_color: None,
+        })
+    });
+    let strip = ui.editor(|e, _| e.chrome.playback.bounds());
+    let history = ui.editor(|e, _| e.chrome.history.bounds());
+    let outputs = ui.editor(|e, _| e.chrome.output.bounds());
+    assert!(strip.size.width > px(300.));
+    assert!(history.right() < strip.left() && strip.right() < outputs.left());
+
+    let original = ui.editor(|e, _| e.current_image().data[0..4].to_vec());
+    let scrub = ui.editor(|e, _| e.chrome.scrubber.bounds());
+    ui.click(point(scrub.right() - px(1.), scrub.center().y));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ui.editor(|e, _| e.current_image().data[0..4].to_vec()) == original {
+        assert!(
+            Instant::now() < deadline,
+            "scrub did not show another frame"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        ui.frame();
+    }
+    ui.key("space", None, Modifiers::default());
+    assert!(ui.editor(|e, _| e.animation_status().unwrap().0));
+    ui.key("space", None, Modifiers::default());
+    assert!(!ui.editor(|e, _| e.animation_status().unwrap().0));
+    ui.typ("r");
+    ui.editor(|e, _| {
+        e.style.color = quikscope::document::Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        e.style.fill = true;
+    });
+    let a = ui.screen(Pt::new(30., 30.));
+    let b = ui.screen(Pt::new(70., 70.));
+    ui.mouse("down", a);
+    ui.mouse("move", b);
+    ui.mouse("up", b);
+    ui.cx
+        .capture_screenshot(ui.any())
+        .unwrap()
+        .save("/tmp/quikscope-animation-mode.png")
+        .unwrap();
+    ui.typ("c");
+    let a = ui.screen(Pt::new(20., 20.));
+    let b = ui.screen(Pt::new(100., 100.));
+    ui.mouse("down", a);
+    ui.mouse("move", b);
+    ui.mouse("up", b);
+    ui.ctrl("s", false);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while ui.editor(|e, _| e.saved_path().is_none()) {
+        assert!(Instant::now() < deadline, "animation save did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+        ui.frame();
+    }
+    let saved = ui.editor(|e, _| e.saved_path().unwrap().clone());
+    assert_eq!(saved.extension().unwrap(), "gif");
+    let mut decoder = Decoder::open(&saved).unwrap();
+    let mut frames = Vec::new();
+    while let Some(frame) = decoder.next_frame().unwrap() {
+        frames.push(frame.image);
+    }
+    assert_eq!(frames.len(), 3);
+    for image in [frames.first().unwrap(), frames.last().unwrap()] {
+        assert_eq!(
+            (image.width, image.height),
+            (80, 80),
+            "crop applies to every frame"
+        );
+        let at = ((30 * image.width + 30) * 4) as usize;
+        let pixel = &image.data[at..at + 4];
+        assert!(
+            pixel[2] > 230 && pixel[0] < 30 && pixel[1] < 30,
+            "{pixel:?}"
+        );
     }
 }
 
