@@ -1,6 +1,6 @@
 # Maintainer: quikscope contributors <212748636+qt715@users.noreply.github.com>
 pkgname=quikscope
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Screenshot and screen recording daemon with GPUI annotation and video editors'
 arch=('x86_64')

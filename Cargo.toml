@@ -1,12 +1,12 @@
 [package]
 name = "quikscope"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
-description = "Fast cross-platform screenshot tool with a GPUI annotation editor"
+description = "Fast cross-platform screenshot and screen recording tool with GPUI annotation and video editors"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-keywords = ["screenshot", "wayland", "x11", "windows", "annotation"]
+keywords = ["screenshot", "screen-recorder", "wayland", "annotation", "gif"]
 categories = ["multimedia::images", "gui"]
 default-run = "quikscope"
 repository = "https://github.com/qt715/quikscope"
