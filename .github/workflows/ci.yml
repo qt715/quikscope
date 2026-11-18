@@ -224,7 +224,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed base-devel git rustup labwc grim dbus \
             mesa vulkan-swrast wayland libxkbcommon libxkbcommon-x11 fontconfig tesseract tesseract-data-eng \
-            clang ffmpeg
+            clang ffmpeg pipewire libpulse
           rustup default stable
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
