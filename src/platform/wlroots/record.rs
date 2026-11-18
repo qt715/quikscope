@@ -47,7 +47,7 @@ impl Recorder {
         fps: u32,
         cursor: bool,
     ) -> Result<Box<dyn VideoSource>> {
-        open_source(target, fps, cursor, true)
+        open_local(target, fps, cursor, true)
     }
 }
 struct Source {
@@ -77,14 +77,17 @@ impl Drop for Source {
     }
 }
 impl ScreenRecorder for Recorder {
+    /// Captures in a helper process (see `helper.rs` for the NVIDIA reason).
     fn open(&self, target: &RecordTarget, fps: u32, cursor: bool) -> Result<Box<dyn VideoSource>> {
-        open_source(target, fps, cursor, false)
+        super::helper::open(target, fps, cursor)
     }
     fn outline(&self, region: IRect) -> Result<Box<dyn Send>> {
         outline(region)
     }
 }
-fn open_source(
+/// Captures in this process. Only for processes without a GPUI renderer:
+/// the capture helper and diagnostics.
+pub(super) fn open_local(
     target: &RecordTarget,
     fps: u32,
     cursor: bool,

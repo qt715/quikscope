@@ -365,7 +365,7 @@ or hardware frames carrying their FFmpeg `hw_frames_ctx`:
 
 | Backend | Frames |
 | --- | --- |
-| `wlroots` | `capture_output_region` into GBM DMA-BUFs with a modifier both the compositor and Vulkan accept, mapped to Vulkan and downloaded to BGR0 (NVIDIA cannot render into LINEAR buffers); LINEAR DRM PRIME frames pass through where accepted. Never SHM: Hyprland reads SHM captures back synchronously on its main thread. |
+| `wlroots` | A `quikscope __record-helper` child process captures `capture_output_region` into GBM DMA-BUFs with a modifier both the compositor and Vulkan accept, maps them to Vulkan and downloads BGR0 (NVIDIA cannot render into LINEAR buffers; linear DRM buffers are read directly) into a shared-memory ring the daemon wraps as frames without copying. The child exists because NVIDIA's driver imported some buffer sizes as all-zero images once GPUI's Vulkan renderer lived in the same process. Never SHM: Hyprland reads SHM captures back synchronously on its main thread. |
 | `x11` | MIT-SHM GetImage at the frame rate. |
 | `portal` | ScreenCast portal + PipeWire, cropped on the CPU; the restore token is kept in `$XDG_STATE_HOME/quikscope`. |
 | `windows` | libavfilter `ddagrab` on the monitor's DXGI adapter (D3D11 frames). |

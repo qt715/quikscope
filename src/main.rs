@@ -10,6 +10,9 @@ use quikscope::ipc::{
 };
 use quikscope::media::{Kind, OutputFormat};
 
+/// Hidden verb of the Wayland recording capture helper (Linux).
+const RECORD_HELPER: &str = "__record-helper";
+
 const USAGE: &str = "\
 quikscope — screenshot and screen recording daemon with annotation editors
 
@@ -71,7 +74,8 @@ fn main() -> ExitCode {
             );
         }
     }
-    let level = if args.first().map(String::as_str) == Some("daemon") {
+    let first = args.first().map(String::as_str);
+    let level = if first == Some("daemon") || first == Some(RECORD_HELPER) {
         "quikscope=info,warn"
     } else {
         "warn"
@@ -79,6 +83,19 @@ fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::new().filter_or("QUIKSCOPE_LOG", level))
         .format_timestamp_millis()
         .init();
+
+    // The daemon's Wayland recordings capture in this child (stderr goes to
+    // the daemon log); never documented as a user command.
+    #[cfg(target_os = "linux")]
+    if first == Some(RECORD_HELPER) {
+        return match quikscope::platform::wlroots::helper::helper_main(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                log::error!("Wayland capture helper: {e:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     match run(args) {
         Ok(code) => code,
