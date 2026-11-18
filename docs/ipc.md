@@ -28,6 +28,10 @@ capture <mode> [flag]... [output=NAME] [geometry=X,Y,WxH]
 open-last
 pick                # pick a pixel's color anywhere on the desktop
 open <path>          # rest of the line, spaces allowed
+record <video|animation> [mode] [flag]... [fps=N] [format=F] [audio=ID,ID|no-audio]
+       [output=NAME] [geometry=X,Y,WxH]
+record <stop|pause|resume|toggle-pause|cancel|status>
+audio-devices        # recordable audio devices
 settings            # open or focus the settings window; replies `ok pong`
 notifications <on|off|toggle|status>   # alias: notify
 ping
@@ -47,6 +51,20 @@ affect interactive region selection only, not fixed geometry or other modes.
 `text` extracts the capture's text instead of copying the image (see
 [text extraction](text-extraction.md)).
 
+`open` probes the file: videos (MP4, MKV, MOV, WebM…) open in the video
+editor, animated GIF/WebP/AVIF/JPEG XL/APNG in the annotator's animation
+mode, still images in the annotator.
+
+`record video|animation` starts a recording, or, while one is running (of
+either kind), stops and saves it, so one key binding toggles. Its mode
+defaults to `region` (selection over the live desktop); `output`/`screen`
+record a whole output, `window` the active window's rectangle at start.
+A recording covers one output: a selection spanning outputs is clipped to
+the output holding most of it. Flags: `edit`, `notify`, `clipboard`,
+`cursor` (each with `no-`), `fps=1…240`, `format=` (`mp4`/`mkv`/`mov` for
+video, `gif`/`webp`/`avif`/`jxl` for animation), `audio=` comma-separated
+device ids or `no-audio`. Animations never record audio.
+
 Requests are rejected with an `err` response when malformed: unknown
 commands, modes or flags, extra arguments, or invalid geometry.
 
@@ -59,9 +77,20 @@ ok pong                                # ping, quit, settings
 ok text <shot-id> <text>               # capture … text: the text read (empty: none)
 ok notifications <on|off>             # notifications: the setting now in effect
 ok color <#rrggbb>                    # pick: the color clicked
+ok recording <kind> <width>x<height>  # record: started (frame size in pixels)
+ok recorded <id> <width>x<height> <duration-ms> <path>   # record/record stop: saved
+ok record idle                        # record status/cancel: nothing recording
+ok record <kind> <elapsed-ms> <running|paused>           # record status/pause/resume
+ok audio <json>                       # audio-devices: [{"id","name","output"}]
 cancelled                              # the user cancelled the selection
 err <message>                          # single line
 ```
+
+A `record` request that starts answers once recording has begun (after the
+selection); one that stops answers after the file is finalized, which for a
+long GIF can take a while: clients should not apply a read timeout to either.
+`<id>` is what a notification click opens (`ok recorded` ids share the shot
+numbering). `<path>` is the rest of the line.
 
 `capture region` without `geometry=` and `pick` answer only after the user
 finishes selecting; clients should not apply a read timeout to them. A second

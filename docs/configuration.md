@@ -56,6 +56,38 @@ font_italic = false
 # English first, then every installed model.
 languages = []
 
+[record]
+# Where recordings are written (Windows: Videos\Screencasts, macOS:
+# ~/Movies/Screencasts). The file name is strftime-style without extension.
+save_dir = "~/Videos/Screencasts"
+filename = "recording_%Y%m%d_%H%M%S"
+# "mp4", "mkv" or "mov" (H.264; AAC audio, Opus in MKV).
+video_format = "mp4"
+# "gif", "webp", "avif" or "jxl" (macOS builds: gif only, see README).
+animation_format = "gif"
+# Frames per second: 1–240 for video, 1–60 for animations.
+video_fps = 60
+animation_fps = 30
+# Audio recorded into videos: "default-output" (what you hear),
+# "default-input" (the default microphone) or ids from
+# `quikscope audio-devices`. Several devices are mixed. [] records none.
+audio = ["default-output"]
+# Include the pointer.
+cursor = true
+# Thin outline just outside the recorded area; never part of the recording.
+outline = true
+# Put the finished file on the clipboard (paste it into a chat or file manager).
+copy_to_clipboard = true
+# Notification with a thumbnail when saved; clicking it opens the editor.
+notify = true
+# Open the video editor / annotator as soon as a recording stops.
+open_editor = false
+# "auto" uses a GPU encoder when one works (NVENC, VAAPI, QSV, AMF, Media
+# Foundation, VideoToolbox); "software" never does.
+encoder = "auto"
+# Linux: status-notifier tray icon with recording controls.
+tray = true
+
 [hotkeys]
 # Windows defaults (unused on Linux); see macOS defaults below.
 # Empty string disables a shortcut. Modifiers: Ctrl, Alt, Shift, Win.
@@ -64,10 +96,15 @@ region = "PrintScreen"
 screen = "Ctrl+PrintScreen"
 window = "Alt+PrintScreen"
 open_last = "Shift+PrintScreen"
+# Press again to stop. Win+Shift+R (Snipping Tool) and Win+Alt+R (Game Bar)
+# belong to Windows' own recorders.
+record_video = "Ctrl+Shift+PrintScreen"
+record_animation = "Alt+Shift+PrintScreen"
 ```
 
 On macOS the same `[hotkeys]` section defaults to `Cmd+Shift+2` (region),
-`Cmd+Shift+8` (screen), `Cmd+Shift+7` (window), `Cmd+Shift+E` (open last).
+`Cmd+Shift+8` (screen), `Cmd+Shift+7` (window), `Cmd+Shift+E` (open last),
+`Cmd+Shift+9` (record video) and `Cmd+Shift+0` (record animation).
 Modifiers are Cmd/Command, Ctrl/Control, Alt/Option and Shift; keys are
 A–Z, 0–9, F1–F20 and common navigation keys. Carbon binds physical US key
 positions, so shortcut labels on other keyboard layouts may differ.
@@ -91,7 +128,7 @@ monitor at 96 DPI; mixed-DPI and multi-monitor behavior remains unverified.
 
 ## Settings and first run
 
-Open preferences with `quikscope settings`, the editor toolbar's gear button
+Open preferences with `quikscope settings`, the editor's gear button (bottom right)
 or **Settings…** in the Windows tray. A second request focuses the same window.
 Capture toggles apply as soon as clicked; text values apply when submitted
 with Enter, Tab or leaving the field. Invalid values show an inline error and
@@ -101,7 +138,8 @@ field edit; fix or discard invalid edits before closing.
 
 Settings include frozen/live selection, clipboard, notifications, automatic
 editor opening, cursor inclusion, save folder/name, editor colour/stroke/font
-defaults and OCR languages. OCR controls appear only when Tesseract is found;
+defaults, OCR languages and recording (formats, frame rates, audio devices,
+save folder, outline). OCR controls appear only when Tesseract is found;
 otherwise the window explains that installation is needed. Windows displays
 the configured global shortcuts with enable/disable controls.
 

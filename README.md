@@ -2,9 +2,10 @@
 
 # quikscope
 
-A fast screenshot tool for Linux (wlroots compositors such as Hyprland and
-sway, X11, and experimental GNOME/KDE portal support), Windows and macOS 12.3+,
-with a built-in annotation editor written in [GPUI](https://gpui.rs).
+A fast screenshot and screen recording tool for Linux (wlroots compositors
+such as Hyprland and sway, X11, and experimental GNOME/KDE portal support),
+Windows and macOS 12.3+, with built-in annotation and video editors written in
+[GPUI](https://gpui.rs).
 
 ![Region selection with a frozen-screen overlay](docs/images/region-selection.png)
 
@@ -38,6 +39,12 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
   English and other European languages, Chinese, Japanese, Korean,
   Vietnamese, Thai and Arabic, each line read in its own language
   ([details](docs/text-extraction.md)).
+- **Recording**: videos (MP4/MKV/MOV with desktop and microphone audio) and
+  animations (GIF/WebP/AVIF/JPEG XL) of a region, output or window. The same
+  key starts and stops; the file lands on the clipboard
+  ([details](#recording)).
+- **Opens your files**: images and animations in the annotator, videos in a
+  small trim/convert editor, from the command line or your file manager.
 - **Plain IPC**: one text line over a local socket; usable from keybinds,
   scripts or `socat`.
 
@@ -94,6 +101,24 @@ cargo install --locked quikscope
 ```
 
 From a source checkout, use `cargo install --locked --path .` instead.
+
+quikscope links FFmpeg (6.1 or newer) for recording and video, and on Linux
+also libgbm, PipeWire and PulseAudio (served by PipeWire on current
+desktops). Building needs their development files and clang:
+
+```sh
+# Arch
+sudo pacman -S --needed clang ffmpeg mesa libpipewire libpulse
+# Debian/Ubuntu
+sudo apt install clang libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
+  libavutil-dev libswscale-dev libswresample-dev libgbm-dev libpipewire-0.3-dev libpulse-dev
+```
+
+On Windows set `FFMPEG_DIR` to an unpacked FFmpeg shared build
+(`packaging/ffmpeg.sh win64` fetches the LGPL one the installer uses) and put
+its `bin` on `PATH`; on macOS `brew install ffmpeg` is enough for a local build.
+Distribution FFmpeg builds without an H.264 encoder (Fedora's `ffmpeg-free`)
+can still record animations and use GPU H.264 encoders only.
 
 The packaged service uses `/usr/bin/quikscope`. For a Cargo installation, copy
 it to `~/.config/systemd/user/quikscope.service` and change `ExecStart` to the
@@ -161,9 +186,11 @@ hl.bind(mainMod .. " + SHIFT + ALT + S", hl.dsp.exec_cmd("quikscope capture regi
 hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("quikscope open-last"), { description = "Edit last screenshot" })
 hl.bind(mainMod .. " + SHIFT + X", hl.dsp.exec_cmd("quikscope capture region --text"), { description = "Copy text from region" })
 hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("quikscope pick"), { description = "Pick a color" })
+hl.bind(mainMod .. " + SHIFT + R", hl.dsp.exec_cmd("quikscope record video"), { description = "Record video (again: stop)" })
+hl.bind(mainMod .. " + SHIFT + G", hl.dsp.exec_cmd("quikscope record animation"), { description = "Record GIF (again: stop)" })
 
 hl.window_rule({ match = { class = "^(quikscope)$" }, float = true, center = true })
-hl.layer_rule({ match = { namespace = "^(quikscope-selection)$" }, no_anim = true })
+hl.layer_rule({ match = { namespace = "^(quikscope-selection|quikscope-outline)$" }, no_anim = true })
 ```
 
 `hyprland.conf`:
@@ -175,13 +202,16 @@ bind = $mainMod SHIFT ALT, S, exec, quikscope capture region --edit
 bind = $mainMod SHIFT, E, exec, quikscope open-last
 bind = $mainMod SHIFT, X, exec, quikscope capture region --text
 bind = $mainMod SHIFT, C, exec, quikscope pick
+bind = $mainMod SHIFT, R, exec, quikscope record video
+bind = $mainMod SHIFT, G, exec, quikscope record animation
 windowrule = float on, match:class ^(quikscope)$
 windowrule = center on, match:class ^(quikscope)$
-layerrule = no_anim on, match:namespace ^(quikscope-selection)$
+layerrule = no_anim on, match:namespace ^(quikscope-selection|quikscope-outline)$
 ```
 
 `no_anim` on the selection layer makes the frozen overlay appear instantly
-instead of fading in.
+instead of fading in; on the outline layer it keeps the recording frame from
+fading in after recording has started.
 
 ### GNOME / KDE Plasma (portal)
 
@@ -332,10 +362,13 @@ or `tessdata` beside the executable. Windows OCR is not yet verified natively.
 
 ```text
 quikscope capture <region|output|window|screen> [options]
+quikscope record <video|animation> [region|output|window] [options]   run again to stop
+quikscope record <stop|pause|resume|toggle-pause|cancel|status>
+quikscope audio-devices      list devices recordings can include
 quikscope open-last          open the latest capture in the editor, with the tool you used last
 quikscope pick               pick a color anywhere on screen; prints its hex
-quikscope open <FILE>        annotate any PNG/JPEG/WebP
-quikscope settings          open or focus capture/editor preferences
+quikscope open [FILE]...     open images, animations and videos (no file: the latest capture)
+quikscope settings          open or focus capture/editor/recording preferences
 quikscope notifications <on|off|toggle|status>
 quikscope daemon             run the daemon in the foreground
 quikscope ping | quit
@@ -389,9 +422,102 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quikscope notifications togg
 
 `--notify` / `--no-notify` still override the setting for a single capture.
 
+## Recording
+
+```text
+Super+Shift+R ─▶ quikscope record video ─▶ select over the live desktop ─▶ recording (outline + tray timer)
+Super+Shift+R ─▶ quikscope record video ─▶ ~/Videos/Screencasts/recording_*.mp4 ─▶ clipboard + notification
+```
+
+`quikscope record video` and `quikscope record animation` start a recording;
+running either again (or `quikscope record stop`, or the tray's **Stop and
+save**) stops it, saves the file, puts it on the clipboard **as a file** (paste
+it into Discord, a browser upload or a file manager) and shows a notification
+with a thumbnail; clicking it opens the video editor or, for animations, the
+annotator. Nothing counts down: recording starts when the selection is made.
+
+| | Video | Animation |
+| --- | --- | --- |
+| Formats | MP4 (default), MKV, MOV — H.264 | GIF (default), WebP, AVIF, JPEG XL |
+| Frame rate | 60 fps (1–240) | 30 fps (1–60) |
+| Audio | desktop audio by default; any inputs and outputs, mixed | none |
+
+The region is selected over the live desktop like `capture region
+--no-freeze` (`Enter` or a click on empty space takes the whole output;
+Hyprland/X11 window snapping applies). `output` records the focused output,
+`window` the active window's current rectangle. A recording covers one
+output; a selection spanning several is clipped to the one holding most of it.
+While recording, a thin outline (the accent color) sits just outside the area.
+It is never in the recording and lets clicks through. Whole-output recordings
+have none.
+
+| Option | Effect |
+| --- | --- |
+| `--fps N` | Frames per second for this recording. |
+| `--format F` | `mp4`, `mkv`, `mov`; `gif`, `webp`, `avif`, `jxl`. |
+| `--audio ID` | Record this device (repeat for several); `--no-audio` records none. Ids come from `quikscope audio-devices`; `default-output` is what you hear, `default-input` the default microphone. |
+| `--cursor`, `--edit`, `--notify`, `--clipboard` (and `--no-…`), `-o`, `-g` | As for `capture`. |
+
+`record pause` / `resume` / `toggle-pause` leave the paused time out of the
+file; `record cancel` discards it; `record status` prints the kind, elapsed
+time and state. Defaults (folder, formats, frame rates, audio, outline,
+encoder) live in `[record]` in the [configuration](docs/configuration.md) and
+the Settings window.
+
+**Tray.** On Linux a status-notifier tray icon (Waybar, Noctalia, KDE,
+GNOME with the AppIndicator extension…) offers Record video/animation, the
+audio devices and frame rates; while recording it shows the elapsed time with
+Pause/Resume, Stop and save and Discard, and a click on the icon stops.
+`record.tray = false` hides it. The Windows tray and macOS menu-bar menus have
+the same items.
+
+**Encoding.** Videos use the first GPU encoder that works (NVENC, VAAPI,
+Quick Sync, AMF, Media Foundation on Windows, VideoToolbox on macOS), else a
+software H.264 encoder; `record.encoder = "software"` skips the GPU.
+Animations are recorded losslessly to the cache first and encoded when you
+stop (GIF with a palette computed over the whole clip), so annotating them
+later loses nothing. macOS builds bundle an FFmpeg without WebP, AVIF and
+JPEG XL encoders: animations there are GIF.
+
+**Capture.** On wlroots compositors frames are copied by the compositor into
+GPU buffers (DMA-BUF) and converted on quikscope's side; shared-memory
+capture is never used for recordings because Hyprland reads it back
+synchronously on its main thread, which makes games stutter. On Hyprland with
+an NVIDIA RTX 5090 this sustained 56 fps at 1280×720 and 52 fps at 2560×1440
+with about 2 ms of CPU per frame. X11 uses MIT-SHM, Windows Desktop
+Duplication (`ddagrab`), macOS ScreenCaptureKit (with system audio on macOS
+13+), and GNOME/KDE the ScreenCast portal (experimental; the first recording
+asks for permission, later ones reuse the stored grant).
+
+## Opening files
+
+`quikscope open FILE...` opens PNG, JPEG, WebP, AVIF, JPEG XL and GIF images
+in the annotator. Animated GIF, WebP, AVIF, JPEG XL and APNG files open in the
+annotator's animation mode; MP4, MKV, MOV, WebM and other videos open in the
+video editor. Without a file it opens the latest capture.
+
+The packages' desktop entry declares these types, so file managers list
+quikscope under **Open with** (`xdg-mime default quikscope.desktop video/mp4`
+makes it the default). The Windows installer adds it to Explorer's **Open
+with** menu, and the macOS app accepts files dropped on it or opened from
+Finder.
+
+## Video editor
+
+A small editor for recordings and other videos: play/pause (`Space`), scrub
+the timeline, drag the in/out handles (or `I`/`O` at the playhead) to trim,
+mute (`M`), then **Save** (`Ctrl+S`, into the recordings folder) or **Copy**
+(`Ctrl+C`, as a file) in MP4, MKV, MOV, GIF, WebP, AVIF or JPEG XL. The
+original file is never modified.
+
 ## Editor
 
 ![The editor with rectangle, arrow and text annotations](docs/images/editor.png)
+
+Tools sit in the bar at the top. While a drawing tool is active or shapes are
+selected, the side panel on the left holds the colors, the color picker, fill
+and stroke size. Undo, redo and the zoom level (click to fit) are bottom left;
+copy text, copy, **Save**, settings and shortcut help bottom right.
 
 | Tool | Keys |
 | --- | --- |
@@ -415,11 +541,11 @@ hl.bind(mainMod .. " + SHIFT + N", hl.dsp.exec_cmd("quikscope notifications togg
 | Copy text (from the crop, else the whole screenshot; annotations are not read) | `Ctrl+Shift+C` or the scan button; the lines read light up briefly |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
 | Fill shapes | `F` |
-| Stroke / text size | `[` `]` or the toolbar dots |
+| Stroke / text size | `[` `]` or the stroke samples in the side panel |
 | Pick a color anywhere on screen (eyedropper) | `I` or **Pick from screen** in the color picker |
 | Duplicate selection | `Ctrl+D` — new copies offset by 10 logical pixels, selected together; `Ctrl+C` still copies the image |
 | Bring selection to front / send to back | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
-| Shortcut help | `?` / `F1` or the toolbar `?`; `Esc` dismisses help without closing the editor. Fits small windows with scrolling and a single-column layout; `F1` also works while editing text |
+| Shortcut help | `?` / `F1` or the `?` button (bottom right); `Esc` dismisses help without closing the editor. Fits small windows with scrolling and a single-column layout; `F1` also works while editing text |
 | Text format (while typing or with text selected) | `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+Shift+.` / `Ctrl+Shift+,` bigger / smaller |
 | Zoom | `Ctrl`+scroll (one level per wheel notch), `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels. Levels are 10% steps up to 100% and 25% steps above (100% = actual pixels); zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
 | Close | `Esc` (when nothing is selected), `Ctrl+W` |

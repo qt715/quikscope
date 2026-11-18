@@ -339,6 +339,51 @@ own stroker or text system is involved, so the saved PNG matches the editor
 straight into the BGRA buffer by giving tiny-skia colors with red and blue
 swapped, so there is no conversion pass in either direction.
 
+## Recording
+
+```mermaid
+flowchart LR
+    req[record video] --> ctl[daemon/record.rs\none recording slot]
+    ctl -- live selection --> overlay[overlays]
+    ctl -- RecordTarget --> src[ScreenRecorder::open\nplatform VideoSource]
+    src -- Frame --> sess[media::record::Session]
+    aud[media::audio sources] -- AudioChunk --> sess
+    sess --> enc[libavfilter → encoder → muxer]
+    enc --> file[(mp4 / lossless master)]
+    ctl -- stop --> fin[clipboard files\nnotification\ntray]
+```
+
+`src/daemon/record.rs` holds a single recording slot (idle, starting,
+active, stopping), so the same request toggles and a second key press during
+selection or the final encode is refused rather than starting a parallel
+recording. A recording covers one output: the platform's `selection_outputs`
+picks the output holding most of the selection, and the region is clipped to
+it, because outputs of different scales have no common pixel size.
+
+Platform sources (`ScreenRecorder::open`) deliver `media::Frame`s, CPU BGRA
+or hardware frames carrying their FFmpeg `hw_frames_ctx`:
+
+| Backend | Frames |
+| --- | --- |
+| `wlroots` | `capture_output_region` into GBM DMA-BUFs with a modifier both the compositor and Vulkan accept, mapped to Vulkan and downloaded to BGR0 (NVIDIA cannot render into LINEAR buffers); LINEAR DRM PRIME frames pass through where accepted. Never SHM: Hyprland reads SHM captures back synchronously on its main thread. |
+| `x11` | MIT-SHM GetImage at the frame rate. |
+| `portal` | ScreenCast portal + PipeWire, cropped on the CPU; the restore token is kept in `$XDG_STATE_HOME/quikscope`. |
+| `windows` | libavfilter `ddagrab` on the monitor's DXGI adapter (D3D11 frames). |
+| `macos` | ScreenCaptureKit stream copied to BGRA, plus its system audio (13+). |
+
+`media::record::Session` timestamps frames and audio chunks against one
+clock (pauses excluded), repeats the last frame over long static gaps, and
+encodes on its own threads. The encoder tries GPU encoders that accept the
+frames (passing hardware frames through, `hwmap`-ing, or downloading) before
+software ones. Animations are written losslessly (FFV1) to the cache and
+encoded into GIF (two-pass palette), WebP, AVIF or JPEG XL on stop; the
+master stays so the annotator can re-export without generation loss.
+
+Outlines are drawn by the platform outside the region and excluded from
+capture: a click-through layer-shell surface on wlroots, override-redirect
+strips on X11, `WDA_EXCLUDEFROMCAPTURE` windows on Windows and
+`NSWindowSharingNone` panels on macOS.
+
 ## Persistence
 
 - The latest capture is written uncompressed to

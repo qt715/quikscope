@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.3.0 — unreleased
+
+### Recording
+
+- `quikscope record video` and `quikscope record animation` record a region
+  (selected over the live desktop), an output or the active window. Running the
+  same command again stops and saves; `record pause|resume|cancel|status`
+  control the running recording.
+- Videos: MP4, MKV or MOV (H.264 with AAC, or Opus in MKV), 60 fps by default,
+  with desktop audio and any number of microphones or other devices mixed in
+  (`quikscope audio-devices` lists them). GPU encoders (NVENC, VAAPI, Quick Sync,
+  AMF, Media Foundation, VideoToolbox) are used when they work.
+- Animations: GIF (two-pass palette), WebP, AVIF or JPEG XL, 30 fps by default,
+  recorded losslessly first so annotating and re-exporting loses nothing.
+- A thin outline marks the recorded area without being recorded. Finished files
+  go on the clipboard as files (paste into a chat or file manager) and show a
+  notification with a thumbnail; clicking it opens the editor.
+- Linux system tray icon (StatusNotifierItem) with elapsed time, pause/resume,
+  stop, discard, audio devices and frame rates; the same controls in the Windows
+  tray and macOS menu bar. New shortcuts on Windows (Ctrl+Shift+PrintScreen,
+  Alt+Shift+PrintScreen) and macOS (Cmd+Shift+9, Cmd+Shift+0).
+- On wlroots compositors frames are copied into GPU buffers (DMA-BUF), never
+  shared memory: Hyprland reads shared-memory captures back on its main thread,
+  which makes games stutter. Recording also works on X11, Windows (Desktop
+  Duplication), macOS (ScreenCaptureKit) and, experimentally, through the
+  ScreenCast portal on GNOME/KDE.
+
+### Editors
+
+- Videos open in a small video editor: play, scrub, trim, mute, and export as
+  MP4, MKV, MOV, GIF, WebP, AVIF or JPEG XL; copy the result as a file.
+- Animations open in the annotator: annotations apply to every frame and Save
+  or Copy re-encode the animation.
+- The top bar is split up: tools stay at the top, colors/stroke/fill move to a
+  side panel that appears while drawing, undo/redo and zoom sit bottom left and
+  copy/save/settings bottom right.
+
+### Opening files
+
+- `quikscope open` takes several files and opens the latest capture without
+  one. The desktop entry (`quikscope open %F`) registers PNG, JPEG, WebP, GIF,
+  AVIF, JPEG XL, MP4, MKV, MOV and WebM, so file managers can open them in
+  quikscope; the Windows installer adds quikscope to Explorer's Open with, and
+  the macOS app accepts files from Finder.
+
+### Packaging
+
+- quikscope now links FFmpeg. The .deb/.rpm, Windows installer and macOS app
+  bundle an LGPL FFmpeg build; Arch and `cargo install` use the system FFmpeg
+  (and need its development files, libgbm, PipeWire and PulseAudio libraries).
+
 ## 0.2.0 — 2026-11-17
 
 ### Capture
