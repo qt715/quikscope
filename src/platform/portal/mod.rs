@@ -1,5 +1,6 @@
 //! Screenshot portal fallback for compositors without wlr-screencopy.
 mod layout;
+pub mod screencast;
 
 pub(crate) use layout::{selection_outputs, supports_layer_shell};
 

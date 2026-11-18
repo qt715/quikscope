@@ -331,7 +331,14 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
             notifier,
             surfaces,
             capture_may_prompt: use_portal,
-            recorder: None,
+            recorder: if use_portal {
+                portal::screencast::ScreenCast::connect()
+                    .map(|r| Arc::new(r) as Arc<dyn ScreenRecorder>)
+                    .map_err(|e| log::warn!("ScreenCast portal unavailable: {e:#}"))
+                    .ok()
+            } else {
+                None
+            },
             tray,
         }
     }
