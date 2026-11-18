@@ -21,4 +21,6 @@ main_thread_tests![
     selection_stacking_preserves_relative_order_and_undo,
     shortcut_help_toggles_and_escape_keeps_editor_open,
     shortcut_help_fits_small_windows_and_scrolls,
+    style_panel_shows_for_drawing_tools_and_hides_for_pan_and_crop,
+    chrome_clusters_never_overlap_in_narrow_windows,
 ];

@@ -11,9 +11,8 @@ use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, Global, HitboxBehavior, InteractiveElement as _,
     IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollEvent, Size,
-    StatefulInteractiveElement as _, Styled as _, UTF16Selection, Window, canvas, div, fill,
-    outline, point, px,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollEvent, Size, Styled as _,
+    UTF16Selection, Window, anchored, canvas, div, fill, outline, point, px,
 };
 
 use super::color_picker::{ColorPicker, PickerEvent};
@@ -248,8 +247,10 @@ pub struct Editor {
     pub font: FontSpec,
     font_menu: Entity<FontMenu>,
     color_picker: Entity<ColorPicker>,
-    /// Window x of the toolbar button the picker hangs from, when open.
-    picker_at: Option<Pixels>,
+    /// The color picker shows beside the style panel.
+    picker_open: bool,
+    /// Where each chrome panel was laid out (tests check they never overlap).
+    pub chrome: toolbar::Probes,
     /// Shape whose color a picker drag is changing: the drag's first change
     /// records undo, the rest replace it in place.
     color_session: Option<BTreeSet<ShapeId>>,
@@ -257,7 +258,8 @@ pub struct Editor {
 
 const MIN_ZOOM: f32 = 0.02;
 const MAX_ZOOM: f32 = 32.0;
-const TOOLBAR_SPACE: f32 = 64.0;
+/// Bottom margin of a fitted image that is narrow enough to pass between
+/// the bottom clusters.
 const MARGIN: f32 = 24.0;
 /// Wheel/touchpad zoom steps arrive in bursts; each retargets a short
 /// transition so continuous zooming stays fluid.
@@ -329,7 +331,8 @@ impl Editor {
             font,
             font_menu,
             color_picker,
-            picker_at: None,
+            picker_open: false,
+            chrome: toolbar::Probes::default(),
             color_session: None,
         }
     }
@@ -379,19 +382,50 @@ impl Editor {
     /// largest zoom level that fits and never past actual pixels.
     fn fitted_view(&self, area: IRect, window: &Window) -> Option<View> {
         let (w, h) = (area.w as f32, area.h as f32);
-        let cw = f32::from(self.canvas.size.width) - 2.0 * MARGIN;
-        let ch = f32::from(self.canvas.size.height) - TOOLBAR_SPACE - MARGIN;
-        if cw <= 0.0 || ch <= 0.0 || w <= 0.0 || h <= 0.0 {
+        let (vw, vh) = (
+            f32::from(self.canvas.size.width),
+            f32::from(self.canvas.size.height),
+        );
+        if w <= 0.0 || h <= 0.0 {
             return None;
         }
+        // Two places the image can go without sliding under the chrome:
+        // between the bars and clear of the style panel, or narrower than the
+        // gap between the bottom clusters and reaching down past them, which
+        // gives tall images the bottom bar's height back. Each is (width,
+        // top, bottom).
+        let boxes = [
+            (
+                vw - 2.0 * toolbar::SIDE_SPACE,
+                toolbar::BAR_SPACE,
+                vh - toolbar::BAR_SPACE,
+            ),
+            (
+                vw - 2.0 * toolbar::CORNER_SPACE,
+                toolbar::BAR_SPACE,
+                vh - MARGIN,
+            ),
+        ];
+        let fit = |&(cw, top, bottom): &(f32, f32, f32)| (cw / w).min((bottom - top) / h);
+        let best = boxes
+            .iter()
+            .filter(|b| fit(b) > 0.0)
+            .reduce(|a, b| if fit(b) > fit(a) { b } else { a })?;
         let sf = window.scale_factor();
-        let device = ((cw / w).min(ch / h) * sf).min(1.0);
+        let device = (fit(best) * sf).min(1.0);
         let zoom = (zoom::snap_down(device) / sf).clamp(MIN_ZOOM, MAX_ZOOM);
+        // Snapping down may leave room in the first box; it centres the image
+        // in the window rather than above the bottom clusters.
+        let &(_, top, bottom) = boxes.iter().find(|b| fit(b) >= zoom).unwrap_or(best);
+        // Whole device pixels keep the image sharp at actual size.
+        let snap = |v: f32| (v * sf).round() / sf;
         Some(View {
             zoom,
             pan: point(
-                px((f32::from(self.canvas.size.width) - w * zoom) / 2.0 - area.x as f32 * zoom),
-                px(TOOLBAR_SPACE + (ch - h * zoom) / 2.0 - area.y as f32 * zoom),
+                px(snap((vw - w * zoom) / 2.0 - area.x as f32 * zoom)),
+                px(snap(
+                    top + (bottom - top - h * zoom) / 2.0 - area.y as f32 * zoom,
+                )),
             ),
         })
     }
@@ -469,14 +503,11 @@ impl Editor {
         let task = pick(cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
-            let _ = this.update_in(cx, |e, window, cx| match result {
+            let _ = this.update(cx, |e, cx| match result {
                 Ok(Some(c)) => {
                     e.set_color(c, cx);
-                    // Show it with its copyable formats; from the keyboard
-                    // there is no button to hang the picker from.
-                    if e.picker_at.is_none() {
-                        e.picker_at = Some(window.viewport_size().width / 2.0);
-                    }
+                    // Show it with its copyable formats.
+                    e.picker_open = true;
                     cx.notify();
                 }
                 Ok(None) => {}
@@ -574,17 +605,26 @@ impl Editor {
     }
 
     pub fn picker_open(&self) -> bool {
-        self.picker_at.is_some()
+        self.picker_open
     }
 
-    /// Opens the color picker under the toolbar button at window x `at`, or
-    /// closes it.
-    pub fn toggle_picker(&mut self, at: Pixels, cx: &mut Context<Self>) {
-        self.picker_at = match self.picker_at {
-            Some(_) => None,
-            None => Some(at),
-        };
+    /// Opens the color picker beside the style panel, or closes it.
+    pub fn toggle_picker(&mut self, cx: &mut Context<Self>) {
+        self.picker_open = !self.picker_open;
         cx.notify();
+    }
+
+    /// Whether the style panel shows: only while its controls change
+    /// something, or the color picker hangs from it.
+    pub fn style_panel_shown(&self) -> bool {
+        self.picker_open
+            || self.text.is_some()
+            || match self.tool {
+                Tool::Select => !self.selected.is_empty(),
+                // Pixelate ignores color, size and fill.
+                Tool::Hand | Tool::Crop | Tool::Pixelate => false,
+                _ => true,
+            }
     }
 
     /// The font and image-space bounds of the text being edited or the
@@ -854,8 +894,8 @@ impl Editor {
             cx.stop_propagation();
             return;
         }
-        if ev.keystroke.key == "escape" && self.picker_at.is_some() {
-            self.picker_at = None;
+        if ev.keystroke.key == "escape" && self.picker_open {
+            self.picker_open = false;
             cx.stop_propagation();
             cx.notify();
             return;
@@ -1001,7 +1041,7 @@ impl Editor {
         }
         window.focus(&self.focus, cx);
         // A click on the canvas dismisses the color picker.
-        self.picker_at = None;
+        self.picker_open = false;
         if ev.button == MouseButton::Middle || (self.space_held && ev.button == MouseButton::Left) {
             self.start_pan(ev.position);
             cx.notify();
@@ -1871,16 +1911,16 @@ impl Render for Editor {
         let color = self.style.color;
         self.color_picker.update(cx, |p, cx| {
             p.set_color(color, window, cx);
-            // Room below where it hangs, so short windows scroll it.
-            p.set_max_height(px((vh - (TOOLBAR_SPACE - 4.0) - 8.0).max(80.0)), cx);
+            // Short windows scroll it.
+            p.set_max_height(px((vh - 16.0).max(80.0)), cx);
         });
-        let picker = self.picker_at.map(|at| {
-            let w = super::color_picker::PANEL_WIDTH;
-            let x = (f32::from(at) - w / 2.0).clamp(8.0, (vw - w - 8.0).max(8.0));
-            div()
-                .absolute()
-                .left(px(x))
-                .top(px(TOOLBAR_SPACE - 4.0))
+        let side = toolbar::style_panel_bounds(viewport);
+        // Beside the style panel, level with its top; snapping keeps it on
+        // screen, over the panel in windows too narrow for both.
+        let picker = self.picker_open.then(|| {
+            anchored()
+                .position(point(side.right() + px(8.), side.top()))
+                .snap_to_window_with_margin(px(8.))
                 .child(self.color_picker.clone())
         });
 
@@ -1888,15 +1928,21 @@ impl Render for Editor {
             Some((font, rect)) => {
                 let r = self.transform().rect_to_screen(rect);
                 let (mw, mh) = (font_menu::MENU_WIDTH, font_menu::MENU_HEIGHT);
-                let x = f32::from(r.left()).clamp(8.0, (vw - mw - 8.0).max(8.0));
-                // Above the text when there is room under the toolbar, else below.
+                // Clear of the style panel (always shown with text) where the
+                // window is wide enough.
+                let right = (vw - mw - 8.0).max(8.0);
+                let x =
+                    f32::from(r.left()).clamp((f32::from(side.right()) + 8.0).min(right), right);
+                // Above the text when there is room under the toolbar, else
+                // below, never over the bars.
+                let (top, bottom) = (toolbar::BAR_SPACE, vh - toolbar::BAR_SPACE - mh);
                 let above = f32::from(r.top()) - mh - 10.0;
-                let y = if above >= TOOLBAR_SPACE {
+                let y = if above >= top {
                     above
                 } else {
                     f32::from(r.bottom()) + 10.0
                 }
-                .clamp(TOOLBAR_SPACE, (vh - mh - 8.0).max(TOOLBAR_SPACE));
+                .clamp(top, bottom.max(top));
                 let drop_up = y + mh + font_menu::DROPDOWN_HEIGHT > vh
                     && y - font_menu::DROPDOWN_HEIGHT > 0.0;
                 self.font_menu.update(cx, |m, cx| {
@@ -1919,7 +1965,7 @@ impl Render for Editor {
         let toast = self.toast.as_ref().map(|t| {
             div()
                 .absolute()
-                .bottom_4()
+                .bottom(px(toolbar::BAR_SPACE))
                 .left_0()
                 .right_0()
                 .flex()
@@ -1978,26 +2024,7 @@ impl Render for Editor {
                         .size_full(),
                     ),
             )
-            .child(toolbar::toolbar(self, cx))
-            .child(
-                div().absolute().bottom_4().left_4().child(
-                    div()
-                        .id("zoom")
-                        .occlude()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(theme::panel())
-                        .text_xs()
-                        .text_color(theme::muted())
-                        .hover(|s| s.bg(theme::hover()))
-                        .on_click(cx.listener(|e, _, window, cx| {
-                            e.fit(window, cx);
-                            cx.notify();
-                        }))
-                        .child(zoom_label),
-                ),
-            )
+            .children(toolbar::chrome(self, zoom_label, viewport, cx))
             .children(toast)
             .children(font_menu)
             .children(picker)

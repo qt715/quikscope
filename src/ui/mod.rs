@@ -56,6 +56,13 @@ pub mod theme {
     pub fn accent_bg() -> Rgba {
         rgba(0x8f8cf233)
     }
+    pub fn accent_hover() -> Rgba {
+        rgb(0xa3a0f5)
+    }
+    /// Text and icons on an [`accent`] fill.
+    pub fn on_accent() -> Rgba {
+        rgb(0x17162b)
+    }
     pub fn text() -> Rgba {
         rgb(0xe3e3e8)
     }

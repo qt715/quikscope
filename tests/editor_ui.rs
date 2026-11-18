@@ -186,6 +186,20 @@ fn text_font(doc: &Document) -> quikscope::fonts::FontSpec {
     }
 }
 
+/// Where the color picker was laid out, checking it hangs beside the style
+/// panel, level with its top, at its full width.
+fn picker_bounds(ui: &mut Ui) -> gpui::Bounds<gpui::Pixels> {
+    let panel = ui.editor(|e, cx| e.picker_scroll(cx)).bounds();
+    let side = ui.editor(|e, _| e.chrome.style.bounds());
+    assert_eq!(panel.size.width, px(PANEL_WIDTH));
+    assert_eq!(
+        panel.origin,
+        point(side.right() + px(8.), side.top()),
+        "{panel:?} beside {side:?}"
+    );
+    panel
+}
+
 pub(super) fn input_method_composition_commits_into_the_text() {
     let mut ui = Ui::new(blank());
     // Without text being edited the editor is no text input, so an input
@@ -286,14 +300,15 @@ pub(super) fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     ui.editor(|e, cx| {
         e.set_tool(quikscope::ui::editor::Tool::Select, cx);
         e.selected = BTreeSet::from([id, second]);
-        e.toggle_picker(px(500.), cx);
+        e.toggle_picker(cx);
     });
     ui.frame();
 
-    // The panel hangs centred under x = 500, below the toolbar; the wheel
+    // The panel hangs beside the style panel, level with its top; the wheel
     // is centred in its left column.
-    let x = 500.0 - PANEL_WIDTH / 2.0 + 1.0 + 12.0 + LEFT_COLUMN / 2.0;
-    let centre = point(px(x), px(60.0 + 1.0 + 12.0 + WHEEL / 2.0));
+    let panel = picker_bounds(&mut ui);
+    let x = f32::from(panel.left()) + 1.0 + 12.0 + LEFT_COLUMN / 2.0;
+    let centre = point(px(x), panel.top() + px(1.0 + 12.0 + WHEEL / 2.0));
     ui.mouse("down", centre + point(px(WHEEL / 2.0 - 4.0), px(0.)));
     ui.mouse("move", centre + point(px(0.), px(-(WHEEL / 2.0 - 4.0))));
     ui.mouse("move", centre + point(px(-(WHEEL / 2.0 - 4.0)), px(0.)));
@@ -500,7 +515,7 @@ pub(super) fn color_picker_scrolls_in_short_windows() {
         pick_color: None,
     };
     ui.cx.update(|cx| cx.set_global(services));
-    ui.editor(|e, cx| e.toggle_picker(px(240.), cx));
+    ui.editor(|e, cx| e.toggle_picker(cx));
     ui.frame();
 
     let scroll = ui.editor(|e, cx| e.picker_scroll(cx));
@@ -588,7 +603,7 @@ pub(super) fn picker_eyedropper_picks_from_screen_and_copies_each_format() {
     });
 
     // `I` picks from the screen: the selection and the drawing color take
-    // the color, and the picker opens (centred under the toolbar) to show it.
+    // the color, and the picker opens beside the style panel to show it.
     ui.typ("i");
     assert_eq!(picks.get(), 1);
     assert_eq!(ui.doc(|d| d.shape(id).unwrap().style.color), blue);
@@ -597,9 +612,10 @@ pub(super) fn picker_eyedropper_picks_from_screen_and_copies_each_format() {
 
     // The picker's right column: the eyedropper button, then HEX and one
     // field per row for RGB, CMYK, HSV and HSL.
-    let left = 500.0 - PANEL_WIDTH / 2.0;
+    let panel = picker_bounds(&mut ui);
+    let left = f32::from(panel.left());
     let column = left + 1.0 + 12.0 + LEFT_COLUMN + 16.0 + 100.0;
-    let top = 60.0 + 1.0 + 12.0;
+    let top = f32::from(panel.top()) + 1.0 + 12.0;
     ui.click(point(px(column), px(top + 14.0)));
     assert_eq!(picks.get(), 2, "the eyedropper button picks again");
     ui.click(point(px(column), px(top + 28.0 + 18.0 + 24.0)));
@@ -714,24 +730,25 @@ fn settled_zoom(ui: &mut Ui) -> f32 {
 
 pub(super) fn zoom_moves_in_tenths_below_actual_size_and_quarters_above() {
     // The headless window is 1000x700 logical at scale 2: 3000x2000 fits at
-    // 61% of actual pixels, which snaps to the 60% level.
+    // 55% of actual pixels between the style panel's margins, which snaps to
+    // the 50% level.
     let doc = Document::new(Arc::new(Image::filled(3000, 2000, [40, 40, 40, 255])), 1.0);
     assert_eq!(ui_scale(), 2.0);
     let mut ui = Ui::new(doc);
     let pct = |z: f32| (z * 100.0).round() as u32;
-    assert_eq!(pct(settled_zoom(&mut ui)), 60);
+    assert_eq!(pct(settled_zoom(&mut ui)), 50);
     let mut seen = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..6 {
         ui.ctrl("=", false);
         seen.push(pct(settled_zoom(&mut ui)));
     }
-    assert_eq!(seen, [70, 80, 90, 100, 125]);
+    assert_eq!(seen, [60, 70, 80, 90, 100, 125]);
     ui.ctrl("-", false);
     ui.ctrl("-", false);
     assert_eq!(pct(settled_zoom(&mut ui)), 90);
     // Fit snaps back down to a level.
     ui.ctrl("0", false);
-    assert_eq!(pct(settled_zoom(&mut ui)), 60);
+    assert_eq!(pct(settled_zoom(&mut ui)), 50);
 }
 
 pub(super) fn drawing_past_the_edge_refits_the_view_to_the_contents() {
@@ -754,11 +771,16 @@ pub(super) fn drawing_past_the_edge_refits_the_view_to_the_contents() {
         })
     });
     ui.frame();
-    // 2800+ px of content now fits at 60%, and all of it is on screen.
-    assert_eq!((settled_zoom(&mut ui) * 100.0).round() as u32, 60);
+    // 2800+ px of content now fits at 50%, all of it on screen and clear of
+    // the style panel at the left edge.
+    assert_eq!((settled_zoom(&mut ui) * 100.0).round() as u32, 50);
     let left = ui.screen(Pt::new(-1205.0, 100.0));
     let right = ui.screen(Pt::new(1600.0, 1000.0));
-    assert!(left.x > px(0.) && right.x < px(1000.), "{left:?} {right:?}");
+    let side = px(quikscope::ui::toolbar::SIDE_SPACE);
+    assert!(
+        left.x >= side && right.x <= px(1000.) - side,
+        "{left:?} {right:?}"
+    );
 }
 
 pub(super) fn select_tool_drags_text_and_hollow_shapes_from_inside_once_selected() {
@@ -1041,4 +1063,110 @@ pub(super) fn shortcut_help_fits_small_windows_and_scrolls() {
         "{bounds:?}"
     );
     assert!(ui.editor(|e, _| e.help_scroll.max_offset().y) > px(0.));
+}
+
+/// Window position of style-panel swatch `i` (two per row).
+fn swatch(panel: gpui::Bounds<gpui::Pixels>, i: usize) -> Point<gpui::Pixels> {
+    // Border and padding, then 28 px cells 2 px apart.
+    let at = |n: usize| px(1.0 + 6.0 + 14.0 + n as f32 * 30.0);
+    panel.origin + point(at(i % 2), at(i / 2))
+}
+
+pub(super) fn style_panel_shows_for_drawing_tools_and_hides_for_pan_and_crop() {
+    use quikscope::ui::editor::Tool;
+
+    let mut doc = blank();
+    let rect = doc.make_shape(
+        ShapeKind::Rect {
+            a: Pt::new(50.0, 50.0),
+            b: Pt::new(200.0, 150.0),
+        },
+        Style::default(),
+    );
+    let id = doc.add(rect);
+    let mut ui = Ui::new(doc);
+    let shown = |ui: &mut Ui| ui.editor(|e, _| e.style_panel_shown());
+    for tool in [
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::Arrow,
+        Tool::Line,
+        Tool::Pen,
+        Tool::Text,
+        Tool::Highlighter,
+        Tool::Step,
+    ] {
+        ui.editor(|e, cx| e.set_tool(tool, cx));
+        ui.frame();
+        assert!(shown(&mut ui), "{tool:?}");
+    }
+
+    // Its swatches work where it was laid out: left edge, centred.
+    let panel = ui.editor(|e, _| e.chrome.style.bounds());
+    assert_eq!(panel.left(), px(quikscope::ui::toolbar::EDGE));
+    assert!((panel.center().y - px(350.)).abs() <= px(1.), "{panel:?}");
+    ui.click(swatch(panel, 1));
+    assert_eq!(ui.editor(|e, _| e.style.color), PALETTE[1]);
+
+    // Hidden, the same spot no longer reaches a swatch.
+    for tool in [Tool::Hand, Tool::Crop, Tool::Pixelate] {
+        ui.editor(|e, cx| e.set_tool(tool, cx));
+        ui.frame();
+        assert!(!shown(&mut ui), "{tool:?}");
+        ui.click(swatch(panel, 2));
+        assert_eq!(ui.editor(|e, _| e.style.color), PALETTE[1], "{tool:?}");
+    }
+
+    // The select tool shows it only for a selection to restyle.
+    ui.editor(|e, cx| e.set_tool(Tool::Select, cx));
+    ui.frame();
+    assert!(!shown(&mut ui));
+    ui.editor(|e, _| e.selected = BTreeSet::from([id]));
+    ui.frame();
+    assert!(shown(&mut ui));
+    ui.click(swatch(panel, 2));
+    assert_eq!(ui.doc(|d| d.shape(id).unwrap().style.color), PALETTE[2]);
+}
+
+/// At the narrow end the clusters stay apart (and inside the window), and
+/// a fitted image stays clear of all of them.
+pub(super) fn chrome_clusters_never_overlap_in_narrow_windows() {
+    let image = || Document::new(Arc::new(Image::filled(1600, 900, [40, 40, 40, 255])), 1.0);
+    for (w, h) in [(520.0, 600.0), (480.0, 320.0)] {
+        let mut ui = Ui::with_size(image(), size(px(w), px(h)));
+        ui.editor(|e, cx| e.set_tool(quikscope::ui::editor::Tool::Rect, cx));
+        ui.frame();
+        let panels = ui.editor(|e, _| {
+            [
+                ("tools", e.chrome.tools.bounds()),
+                ("style", e.chrome.style.bounds()),
+                ("history", e.chrome.history.bounds()),
+                ("output", e.chrome.output.bounds()),
+            ]
+        });
+        let window = gpui::Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        for (i, (name, a)) in panels.iter().enumerate() {
+            assert!(a.size.width > px(0.), "{name} at {w}x{h} was not laid out");
+            let last = a.bottom_right() - point(px(1.), px(1.));
+            assert!(
+                window.contains(&a.origin) && window.contains(&last),
+                "{name} {a:?} outside {w}x{h}"
+            );
+            for (other, b) in &panels[i + 1..] {
+                assert!(
+                    !a.intersects(b),
+                    "{name} {a:?} overlaps {other} {b:?} at {w}x{h}"
+                );
+            }
+        }
+        if h == 600.0 {
+            let image = gpui::Bounds::from_corners(
+                ui.screen(Pt::new(0.0, 0.0)),
+                ui.screen(Pt::new(1600.0, 900.0)),
+            );
+            for (name, b) in &panels {
+                assert!(!image.intersects(b), "image {image:?} under {name} {b:?}");
+            }
+        }
+    }
 }
