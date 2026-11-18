@@ -11,6 +11,7 @@ pub mod motion;
 pub mod overlay;
 pub mod settings;
 pub mod toolbar;
+pub mod video_editor;
 pub mod zoom;
 
 use std::borrow::Cow;
@@ -208,13 +209,29 @@ pub fn render_image(w: u32, h: u32, bgra: Vec<u8>) -> Arc<RenderImage> {
 /// A capture held by the daemon.
 pub struct Shot {
     pub id: u64,
+    /// The image annotated; for an animation its first frame, which fixes
+    /// the annotation coordinate space for every frame.
     pub image: Arc<Image>,
     /// Physical pixels per logical pixel.
     pub scale: f32,
     pub taken: SystemTime,
     /// Set when the shot was opened from a file rather than captured.
     pub source: Option<PathBuf>,
+    /// Set for animations (opened GIF/WebP/AVIF/JXL files and animation
+    /// recordings): the annotator plays it and re-encodes every frame.
+    pub animation: Option<Arc<Animation>>,
     tiles: OnceLock<Arc<[Tile]>>,
+}
+
+/// The frames behind an animated shot.
+#[derive(Clone, Debug)]
+pub struct Animation {
+    /// What frames are decoded from: the recording's lossless master, or
+    /// the opened file itself.
+    pub path: PathBuf,
+    pub info: crate::media::MediaInfo,
+    /// Format saves and copies are written in.
+    pub format: crate::media::OutputFormat,
 }
 
 impl Shot {
@@ -225,8 +242,14 @@ impl Shot {
             scale,
             taken: SystemTime::now(),
             source,
+            animation: None,
             tiles: OnceLock::new(),
         }
+    }
+
+    pub fn with_animation(mut self, animation: Animation) -> Shot {
+        self.animation = Some(Arc::new(animation));
+        self
     }
 
     /// GPU tiles, built on first use. The daemon builds them on a background
