@@ -36,6 +36,8 @@ use crate::ui::overlay::{Overlay, Selected, Selection};
 use crate::ui::settings::{OpenSettings, Settings};
 use crate::ui::{self, Assets, Shot};
 
+mod record;
+
 /// Shots kept in memory (newest last). Older ones remain reachable through
 /// the on-disk cache only for the most recent capture.
 const KEEP_SHOTS: usize = 8;
@@ -114,10 +116,14 @@ pub fn run(socket: PathBuf) -> Result<()> {
     #[cfg(not(target_os = "macos"))]
     let services = std::thread::spawn({
         let tx = tx.clone();
+        let config = config.clone();
         move || {
-            platform::connect(Arc::new(move |event| {
-                let _ = tx.unbounded_send(Msg::Desktop(event));
-            }))
+            platform::connect(
+                Arc::new(move |event| {
+                    let _ = tx.unbounded_send(Msg::Desktop(event));
+                }),
+                &config,
+            )
         }
     });
 
@@ -133,9 +139,12 @@ pub fn run(socket: PathBuf) -> Result<()> {
             #[cfg(not(target_os = "macos"))]
             let platform = Arc::new(services.join().expect("platform start-up panicked"));
             #[cfg(target_os = "macos")]
-            let platform = Arc::new(platform::connect(Arc::new(move |event| {
-                let _ = tx.unbounded_send(Msg::Desktop(event));
-            })));
+            let platform = Arc::new(platform::connect(
+                Arc::new(move |event| {
+                    let _ = tx.unbounded_send(Msg::Desktop(event));
+                }),
+                &config,
+            ));
             #[cfg(target_os = "macos")]
             if let Some(shell) = &platform.shell
                 && let Err(error) = shell.set_hotkeys(&config.hotkeys)
@@ -219,6 +228,12 @@ pub fn run(socket: PathBuf) -> Result<()> {
                                 }
                             })
                             .detach();
+                        }
+                        Msg::Desktop(Event::SetAudio(id, enabled)) => {
+                            cx.update(|cx| record::set_audio(id, enabled, cx));
+                        }
+                        Msg::Desktop(Event::SetFps(kind, fps)) => {
+                            cx.update(|cx| record::set_fps(kind, fps, cx));
                         }
                     }
                 }
@@ -367,6 +382,9 @@ async fn handle(req: Request, cx: &mut AsyncApp) -> Response {
             .update(|cx| open_settings(false, cx))
             .map(|_| Some(Response::Pong)),
         Request::Pick => pick(cx).await,
+        Request::Record(options) => record::toggle(options, cx).await,
+        Request::RecordControl(action) => record::control(action, cx).await,
+        Request::AudioDevices => record::audio_devices(cx).await,
     };
     match result {
         Ok(Some(r)) => r,
@@ -1081,7 +1099,8 @@ async fn finish_capture(
                 };
                 let timeout = config.notification_timeout_ms;
                 cx.background_spawn(async move {
-                    if let Err(e) = n.shot_captured(id, &image, &body, timeout) {
+                    if let Err(e) = n.shot_captured(id, &image, "Screenshot captured", &body, timeout)
+                    {
                         log::warn!("notification failed: {e:#}");
                     }
                 })

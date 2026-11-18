@@ -29,8 +29,44 @@ pub struct Config {
     pub notification_timeout_ms: i32,
     pub editor: EditorConfig,
     pub ocr: OcrConfig,
+    /// Screen recording (video and animations).
+    pub record: RecordConfig,
     /// Native global shortcuts on Windows and macOS. Empty strings disable a binding.
     pub hotkeys: Hotkeys,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecordConfig {
+    /// Where finished recordings are written. `~` expands to the home directory.
+    pub save_dir: String,
+    /// strftime-style file name without extension; the format adds it.
+    pub filename: String,
+    /// Container for videos: "mp4", "mkv" or "mov".
+    pub video_format: String,
+    /// Format for animations: "gif", "webp", "avif" or "jxl".
+    pub animation_format: String,
+    /// Frames per second, 1–240 for video and 1–60 for animations.
+    pub video_fps: u32,
+    pub animation_fps: u32,
+    /// Audio devices recorded into videos (see `quikscope audio-devices`):
+    /// device ids, or "default-output" (what you hear) and "default-input"
+    /// (the default microphone). Empty records no audio.
+    pub audio: Vec<String>,
+    /// Include the pointer.
+    pub cursor: bool,
+    /// Draw a thin outline just outside the recorded area (never recorded).
+    pub outline: bool,
+    /// Put the finished file on the clipboard (paste it into a chat or file manager).
+    pub copy_to_clipboard: bool,
+    /// Show a notification when a recording is saved; clicking it opens the editor.
+    pub notify: bool,
+    /// Open the video editor / annotator as soon as a recording stops.
+    pub open_editor: bool,
+    /// "auto" uses a GPU encoder when one works, "software" never does.
+    pub encoder: String,
+    /// Linux: show a status-notifier (system tray) icon with recording controls.
+    pub tray: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -40,16 +76,22 @@ pub struct Hotkeys {
     pub screen: String,
     pub window: String,
     pub open_last: String,
+    pub record_video: String,
+    pub record_animation: String,
 }
 
 impl Default for Hotkeys {
     fn default() -> Self {
+        // Recording shortcuts avoid the systems' own recorders (macOS
+        // Cmd+Shift+5, Windows 11 Snipping Tool Win+Shift+R, Game Bar Win+Alt+R).
         #[cfg(target_os = "macos")]
         return Self {
             region: "Cmd+Shift+2".into(),
             screen: "Cmd+Shift+8".into(),
             window: "Cmd+Shift+7".into(),
             open_last: "Cmd+Shift+E".into(),
+            record_video: "Cmd+Shift+9".into(),
+            record_animation: "Cmd+Shift+0".into(),
         };
         #[cfg(not(target_os = "macos"))]
         Self {
@@ -57,6 +99,8 @@ impl Default for Hotkeys {
             screen: "Ctrl+PrintScreen".into(),
             window: "Alt+PrintScreen".into(),
             open_last: "Shift+PrintScreen".into(),
+            record_video: "Ctrl+Shift+PrintScreen".into(),
+            record_animation: "Alt+Shift+PrintScreen".into(),
         }
     }
 }
@@ -152,8 +196,54 @@ impl Default for Config {
             notification_timeout_ms: 8000,
             editor: EditorConfig::default(),
             ocr: OcrConfig::default(),
+            record: RecordConfig::default(),
             hotkeys: Hotkeys::default(),
         }
+    }
+}
+
+impl Default for RecordConfig {
+    fn default() -> Self {
+        RecordConfig {
+            save_dir: default_record_dir(),
+            filename: "recording_%Y%m%d_%H%M%S".into(),
+            video_format: "mp4".into(),
+            animation_format: "gif".into(),
+            video_fps: 60,
+            animation_fps: 30,
+            audio: vec![crate::media::DEFAULT_OUTPUT.into()],
+            cursor: true,
+            outline: true,
+            copy_to_clipboard: true,
+            notify: true,
+            open_editor: false,
+            encoder: "auto".into(),
+            tray: true,
+        }
+    }
+}
+
+impl RecordConfig {
+    pub fn save_dir(&self) -> PathBuf {
+        expand_home(&self.save_dir)
+    }
+
+    pub fn video_format(&self) -> crate::media::OutputFormat {
+        crate::media::OutputFormat::parse(&self.video_format)
+            .filter(|f| f.is_video())
+            .expect("validated by Config::parse")
+    }
+
+    pub fn animation_format(&self) -> crate::media::OutputFormat {
+        crate::media::OutputFormat::parse(&self.animation_format)
+            .filter(|f| !f.is_video())
+            .expect("validated by Config::parse")
+    }
+
+    /// Path for a new recording started at `time`, never an existing file.
+    pub fn new_save_path(&self, time: SystemTime, format: crate::media::OutputFormat) -> PathBuf {
+        let name = format!("{}.{}", format_time(&self.filename, time), format.extension());
+        unique_path(&self.save_dir(), &name)
     }
 }
 
@@ -219,12 +309,54 @@ impl Config {
                 "ocr.languages: {lang:?} is not a Tesseract model name like \"eng\" or \"chi_sim\""
             );
         }
+        let r = &config.record;
+        anyhow::ensure!(
+            !r.save_dir.trim().is_empty() && !r.save_dir.contains('\0'),
+            "record.save_dir must be a nonempty directory path without NUL characters"
+        );
+        anyhow::ensure!(
+            !r.filename.trim().is_empty() && !r.filename.contains(['\0', '/']),
+            "record.filename must be nonempty and contain no NUL or '/' characters"
+        );
+        anyhow::ensure!(
+            crate::media::OutputFormat::parse(&r.video_format).is_some_and(|f| f.is_video()),
+            "record.video_format {:?} is not mp4, mkv or mov",
+            r.video_format
+        );
+        anyhow::ensure!(
+            crate::media::OutputFormat::parse(&r.animation_format).is_some_and(|f| !f.is_video()),
+            "record.animation_format {:?} is not gif, webp, avif or jxl",
+            r.animation_format
+        );
+        anyhow::ensure!(
+            (1..=240).contains(&r.video_fps),
+            "record.video_fps {} is outside 1–240",
+            r.video_fps
+        );
+        anyhow::ensure!(
+            (1..=60).contains(&r.animation_fps),
+            "record.animation_fps {} is outside 1–60",
+            r.animation_fps
+        );
+        for device in &r.audio {
+            anyhow::ensure!(
+                !device.is_empty() && !device.contains([',', '\0', '\n']) && device.trim() == device,
+                "record.audio: {device:?} is not a device id"
+            );
+        }
+        anyhow::ensure!(
+            matches!(r.encoder.as_str(), "auto" | "software"),
+            "record.encoder {:?} is not \"auto\" or \"software\"",
+            r.encoder
+        );
         let mut seen = std::collections::HashSet::new();
         for (name, binding) in [
             ("region", &config.hotkeys.region),
             ("screen", &config.hotkeys.screen),
             ("window", &config.hotkeys.window),
             ("open_last", &config.hotkeys.open_last),
+            ("record_video", &config.hotkeys.record_video),
+            ("record_animation", &config.hotkeys.record_animation),
         ] {
             if let Some(key) = parse_hotkey(binding).with_context(|| format!("hotkeys.{name}"))? {
                 anyhow::ensure!(
@@ -243,21 +375,24 @@ impl Config {
     /// Path for a new screenshot taken at `time`. Never returns an existing
     /// file: a numeric suffix is added when two saves land in the same second.
     pub fn new_save_path(&self, time: SystemTime) -> PathBuf {
-        let dir = self.save_dir();
-        let name = format_time(&self.filename, time);
-        let candidate = dir.join(&name);
-        if !candidate.exists() {
-            return candidate;
-        }
-        let (stem, ext) = match name.rsplit_once('.') {
-            Some((s, e)) => (s.to_string(), format!(".{e}")),
-            None => (name.clone(), String::new()),
-        };
-        (1..)
-            .map(|n| dir.join(format!("{stem}-{n}{ext}")))
-            .find(|p| !p.exists())
-            .expect("unbounded suffix search")
+        unique_path(&self.save_dir(), &format_time(&self.filename, time))
     }
+}
+
+/// `dir/name`, or with a numeric suffix (`name-1.ext`) when that exists.
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.to_string(), String::new()),
+    };
+    (1..)
+        .map(|n| dir.join(format!("{stem}-{n}{ext}")))
+        .find(|p| !p.exists())
+        .expect("unbounded suffix search")
 }
 
 /// Updates typed config paths (for example `["editor", "stroke"]`) together.
@@ -335,6 +470,18 @@ fn default_save_dir() -> String {
     {
         "~/Pictures/Screenshots".into()
     }
+}
+
+fn default_record_dir() -> String {
+    #[cfg(windows)]
+    return crate::platform::windows::videos_dir()
+        .join("Screencasts")
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(target_os = "macos")]
+    return "~/Movies/Screencasts".into();
+    #[cfg(target_os = "linux")]
+    "~/Videos/Screencasts".into()
 }
 
 fn home() -> PathBuf {

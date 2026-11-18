@@ -161,16 +161,23 @@ impl Clipboard for Shell {
             log::error!("offering clipboard text: {error:#}");
         }
     }
+
+    fn set_files(&self, paths: &[std::path::PathBuf]) {
+        let _ = paths;
+        todo!("Windows agent: CF_HDROP")
+    }
 }
 
 impl Notifier for Shell {
-    fn shot_captured(&self, shot: u64, _image: &Image, body: &str, timeout_ms: i32) -> Result<()> {
-        self.notify(
-            Some(shot),
-            "Screenshot captured",
-            body,
-            timeout_ms.max(0) as u32,
-        )
+    fn shot_captured(
+        &self,
+        shot: u64,
+        _image: &Image,
+        summary: &str,
+        body: &str,
+        timeout_ms: i32,
+    ) -> Result<()> {
+        self.notify(Some(shot), summary, body, timeout_ms.max(0) as u32)
     }
 
     fn message(&self, summary: &str, body: &str) -> Result<()> {

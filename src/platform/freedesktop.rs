@@ -69,7 +69,14 @@ impl Notifications {
 }
 
 impl Notifier for Notifications {
-    fn shot_captured(&self, shot: u64, image: &Image, body: &str, timeout_ms: i32) -> Result<()> {
+    fn shot_captured(
+        &self,
+        shot: u64,
+        image: &Image,
+        summary: &str,
+        body: &str,
+        timeout_ms: i32,
+    ) -> Result<()> {
         let thumb = image.thumbnail(256);
         let image_data = StructureBuilder::new()
             .add_field(thumb.width as i32)
@@ -94,7 +101,7 @@ impl Notifier for Notifications {
                 "quikscope",
                 0u32,
                 "quikscope",
-                "Screenshot captured",
+                summary,
                 body,
                 &actions[..],
                 hints,

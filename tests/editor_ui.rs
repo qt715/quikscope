@@ -338,6 +338,12 @@ impl quikscope::platform::Clipboard for TextClipboard {
     fn set_text(&self, text: &str) {
         self.0.lock().unwrap().push(text.into());
     }
+
+    fn set_files(&self, paths: &[std::path::PathBuf]) {
+        for path in paths {
+            self.0.lock().unwrap().push(path.display().to_string());
+        }
+    }
 }
 
 /// The standalone color window on a 640×360 screen (a 1280×720 display at

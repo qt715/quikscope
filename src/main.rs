@@ -5,16 +5,22 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use quikscope::config;
-use quikscope::ipc::{self, CaptureOptions, Mode, Request, Response, Switch};
+use quikscope::ipc::{
+    self, CaptureOptions, Mode, RecordAction, RecordOptions, Request, Response, Switch,
+};
+use quikscope::media::{Kind, OutputFormat};
 
 const USAGE: &str = "\
-quikscope — screenshot daemon and annotation editor
+quikscope — screenshot and screen recording daemon with annotation editors
 
 USAGE:
     quikscope capture <region|output|window|screen> [OPTIONS]
+    quikscope record <video|animation> [region|output|window] [RECORD OPTIONS]
+    quikscope record <stop|pause|resume|toggle-pause|cancel|status>
+    quikscope audio-devices
     quikscope open-last
     quikscope pick
-    quikscope open <FILE>
+    quikscope open [FILE]...
     quikscope settings
     quikscope notifications <on|off|toggle|status>
     quikscope daemon
@@ -31,8 +37,18 @@ CAPTURE OPTIONS:
     -o, --output <NAME>          Output for `output` mode (default: focused output)
     -g, --geometry <\"X,Y WxH\">   Capture this logical rectangle (slurp format), no selection
 
-`pick` freezes the screen and magnifies the pointer: click any pixel to print
-its hex color and open a window that copies it as HEX, RGB, CMYK, HSV or HSL.
+RECORD OPTIONS:
+    --fps <N>                    Frames per second (default: record.video_fps / animation_fps)
+    --format <F>                 mp4, mkv, mov (video); gif, webp, avif, jxl (animation)
+    --audio <ID>                 Record this audio device (repeatable; see audio-devices)
+    --no-audio                   Record no audio
+    --edit, --notify, --clipboard, --cursor (and --no-…), -o, -g as for capture
+
+`record video` starts recording; running it again (or `record stop`) stops and
+saves. `pick` freezes the screen and magnifies the pointer: click any pixel to
+print its hex color and open a window that copies it as HEX, RGB, CMYK, HSV or HSL.
+`open` opens images and animations in the annotator and videos in the video
+editor; without a file it opens the latest capture.
 
 Commands talk to the daemon over a per-user local socket (override with
 QUIKSCOPE_SOCKET) and start it on demand. Windows/macOS: autostart <on|off|status>.
@@ -108,6 +124,11 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         "capture" => parse_capture(&rest)?,
+        "record" => parse_record(&rest)?,
+        "audio-devices" => {
+            no_extra(&rest)?;
+            Request::AudioDevices
+        }
         "open-last" | "last" => {
             no_extra(&rest)?;
             Request::OpenLast
@@ -117,12 +138,33 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             Request::Pick
         }
         "settings" => parse_settings(&rest)?,
-        "open" => match rest.as_slice() {
-            [path] => {
-                Request::Open(std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
+        "open" => {
+            // A desktop launcher passes the files it was asked to open
+            // (`%F`): none opens the latest capture.
+            if rest.is_empty() {
+                Request::OpenLast
+            } else {
+                let mut code = ExitCode::SUCCESS;
+                for path in &rest {
+                    let path =
+                        std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                    let result = ipc::send_or_spawn(
+                        &socket,
+                        &Request::Open(path),
+                        Some(Duration::from_secs(30)),
+                    );
+                    match report(result) {
+                        Ok(ExitCode::SUCCESS) => {}
+                        Ok(failed) => code = failed,
+                        Err(e) => {
+                            eprintln!("quikscope: {e:#}");
+                            code = ExitCode::FAILURE;
+                        }
+                    }
+                }
+                return Ok(code);
             }
-            _ => anyhow::bail!("usage: quikscope open <FILE>"),
-        },
+        }
         "notifications" | "notify" => match rest.as_slice() {
             [s] => Request::Notifications(Switch::parse(s).ok_or_else(|| {
                 anyhow::anyhow!("usage: quikscope notifications <on|off|toggle|status>")
@@ -148,6 +190,10 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
     let timeout = match &request {
         Request::Capture(Mode::Region, o) if o.geometry.is_none() => None,
         Request::Pick => None,
+        // Starting may wait on a selection; stopping on the final encode
+        // (a long GIF takes a while).
+        Request::Record(_) => None,
+        Request::RecordControl(RecordAction::Stop) => None,
         _ => Some(Duration::from_secs(30)),
     };
     report(ipc::send_or_spawn(&socket, &request, timeout))
@@ -187,6 +233,40 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             println!("{}", quikscope::color::to_hex(c));
             Ok(ExitCode::SUCCESS)
         }
+        Response::Recording {
+            kind,
+            width,
+            height,
+        } => {
+            println!("recording {} {width}x{height}", kind.as_str());
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::Recorded { path, .. } => {
+            println!("{}", path.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::RecordStatus(None) => {
+            println!("idle");
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::RecordStatus(Some(s)) => {
+            let secs = s.elapsed_ms / 1000;
+            println!(
+                "{} {}:{:02} {}",
+                s.kind.as_str(),
+                secs / 60,
+                secs % 60,
+                if s.paused { "paused" } else { "recording" }
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::AudioDevices(devices) => {
+            for d in devices {
+                let kind = if d.output { "output" } else { "input" };
+                println!("{}\t{kind}\t{}", d.id, d.name);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Response::Cancelled => {
             eprintln!("quikscope: cancelled");
             Ok(ExitCode::from(1))
@@ -205,6 +285,77 @@ fn no_extra(rest: &[String]) -> anyhow::Result<()> {
 fn parse_settings(args: &[String]) -> anyhow::Result<Request> {
     no_extra(args)?;
     Ok(Request::Settings)
+}
+
+fn parse_record(args: &[String]) -> anyhow::Result<Request> {
+    const USAGE: &str = "usage: quikscope record <video|animation> [region|output|window] [OPTIONS] \
+                         or quikscope record <stop|pause|resume|toggle-pause|cancel|status>";
+    let Some((first, rest)) = args.split_first() else {
+        anyhow::bail!(USAGE);
+    };
+    if let Some(action) = RecordAction::parse(first) {
+        no_extra(rest)?;
+        return Ok(Request::RecordControl(action));
+    }
+    let kind = Kind::parse(first).ok_or_else(|| anyhow::anyhow!(USAGE))?;
+    let mut o = RecordOptions::new(kind);
+    let mut audio: Option<Vec<String>> = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        let mut value = |name: &str| {
+            it.next()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("{name} needs a value"))
+        };
+        match a.as_str() {
+            "--edit" => o.edit = Some(true),
+            "--no-edit" => o.edit = Some(false),
+            "--notify" => o.notify = Some(true),
+            "--no-notify" => o.notify = Some(false),
+            "--clipboard" => o.clipboard = Some(true),
+            "--no-clipboard" => o.clipboard = Some(false),
+            "--cursor" => o.cursor = Some(true),
+            "--no-cursor" => o.cursor = Some(false),
+            "--no-audio" => audio = Some(Vec::new()),
+            "--audio" => {
+                let id = value(a)?;
+                anyhow::ensure!(
+                    !id.is_empty() && !id.contains([',', ' ', '\n']),
+                    "--audio {id:?} is not a device id (see `quikscope audio-devices`)"
+                );
+                audio.get_or_insert_with(Vec::new).push(id);
+            }
+            "--fps" => {
+                let fps = value(a)?;
+                o.fps = Some(
+                    fps.parse()
+                        .ok()
+                        .filter(|n| (1..=240).contains(n))
+                        .ok_or_else(|| anyhow::anyhow!("--fps {fps:?} is not 1–240"))?,
+                );
+            }
+            "--format" => {
+                let name = value(a)?;
+                let format = OutputFormat::parse(&name)
+                    .filter(|f| f.kind() == kind)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("--format {name:?} is not a {} format", kind.as_str())
+                    })?;
+                o.format = Some(format);
+            }
+            "-o" | "--output" => o.output = Some(value(a)?),
+            "-g" | "--geometry" => {
+                o.geometry = Some(value(a)?.parse().map_err(anyhow::Error::msg)?)
+            }
+            flag if flag.starts_with('-') => anyhow::bail!("unknown option {flag:?}"),
+            m => {
+                o.mode =
+                    Mode::parse(m).ok_or_else(|| anyhow::anyhow!("unknown record mode {m:?}"))?
+            }
+        }
+    }
+    o.audio = audio;
+    Ok(Request::Record(o))
 }
 
 fn parse_capture(args: &[String]) -> anyhow::Result<Request> {

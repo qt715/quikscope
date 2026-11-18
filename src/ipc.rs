@@ -7,6 +7,8 @@
 //! capture region edit geometry=10,20,300x200   ->  ok 3 300x200
 //! open-last                                    ->  ok 3 300x200
 //! pick                                         ->  ok color #0067ed
+//! record video region                          ->  ok recording video 1280x720
+//! record video                                 ->  ok recorded 4 1280x720 5120 /path/rec.mp4
 //! ping                                         ->  ok pong
 //! ```
 
@@ -23,6 +25,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::document::Rgba;
 use crate::geom::IRect;
+use crate::media::{AudioDevice, Kind, OutputFormat};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -116,10 +119,94 @@ impl Switch {
     }
 }
 
+/// A recording request; `None` fields use the `[record]` configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordOptions {
+    pub kind: Kind,
+    /// `Region` selects interactively unless `geometry` is given; `Output`
+    /// and `Screen` record a whole output; `Window` the active window's rectangle.
+    pub mode: Mode,
+    pub fps: Option<u32>,
+    pub format: Option<OutputFormat>,
+    /// Audio device ids; `Some(vec![])` records no audio.
+    pub audio: Option<Vec<String>>,
+    pub cursor: Option<bool>,
+    pub edit: Option<bool>,
+    pub notify: Option<bool>,
+    pub clipboard: Option<bool>,
+    pub output: Option<String>,
+    pub geometry: Option<IRect>,
+}
+
+impl RecordOptions {
+    pub fn new(kind: Kind) -> RecordOptions {
+        RecordOptions {
+            kind,
+            mode: Mode::Region,
+            fps: None,
+            format: None,
+            audio: None,
+            cursor: None,
+            edit: None,
+            notify: None,
+            clipboard: None,
+            output: None,
+            geometry: None,
+        }
+    }
+}
+
+/// Controls the running recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordAction {
+    Stop,
+    Pause,
+    Resume,
+    TogglePause,
+    /// Stop and delete what was recorded.
+    Cancel,
+    Status,
+}
+
+impl RecordAction {
+    pub fn parse(s: &str) -> Option<RecordAction> {
+        Some(match s {
+            "stop" => RecordAction::Stop,
+            "pause" => RecordAction::Pause,
+            "resume" => RecordAction::Resume,
+            "toggle-pause" => RecordAction::TogglePause,
+            "cancel" => RecordAction::Cancel,
+            "status" => RecordAction::Status,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RecordAction::Stop => "stop",
+            RecordAction::Pause => "pause",
+            RecordAction::Resume => "resume",
+            RecordAction::TogglePause => "toggle-pause",
+            RecordAction::Cancel => "cancel",
+            RecordAction::Status => "status",
+        }
+    }
+}
+
+/// The running recording, as reported by `record status`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordState {
+    pub kind: Kind,
+    pub elapsed_ms: u64,
+    pub paused: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Capture(Mode, CaptureOptions),
     OpenLast,
+    /// Open an image in the annotator, an animation in the annotator's
+    /// animation mode, or a video in the video editor.
     Open(PathBuf),
     /// Open or focus the settings window.
     Settings,
@@ -128,6 +215,11 @@ pub enum Request {
     /// Pick a color from anywhere on the desktop and show it in the color
     /// window.
     Pick,
+    /// Start a recording, or stop the running one (so one key toggles).
+    Record(RecordOptions),
+    RecordControl(RecordAction),
+    /// List recordable audio devices.
+    AudioDevices,
     Ping,
     Quit,
 }
@@ -152,6 +244,23 @@ pub enum Response {
     Notifications(bool),
     /// The color picked with [`Request::Pick`].
     Color(Rgba),
+    /// A recording started with this frame size.
+    Recording {
+        kind: Kind,
+        width: u32,
+        height: u32,
+    },
+    /// A recording finished and was saved to `path`.
+    Recorded {
+        id: u64,
+        width: u32,
+        height: u32,
+        duration_ms: u64,
+        path: PathBuf,
+    },
+    /// `record status` (and pause/resume): the running recording, if any.
+    RecordStatus(Option<RecordState>),
+    AudioDevices(Vec<AudioDevice>),
     Cancelled,
     Error(String),
 }
@@ -195,6 +304,71 @@ impl Request {
                 }
                 return Ok(Request::Capture(mode, o));
             }
+            "record" => {
+                let first = words.next().ok_or("record needs video, animation or an action")?;
+                if let Some(action) = RecordAction::parse(first) {
+                    Request::RecordControl(action)
+                } else {
+                    let kind = Kind::parse(first)
+                        .ok_or_else(|| format!("unknown recording kind {first:?}"))?;
+                    let mut o = RecordOptions::new(kind);
+                    for w in words.by_ref() {
+                        if let Some(mode) = Mode::parse(w) {
+                            o.mode = mode;
+                            continue;
+                        }
+                        match w.split_once('=') {
+                            Some(("output", v)) => o.output = Some(v.to_string()),
+                            Some(("geometry", v)) => o.geometry = Some(v.parse()?),
+                            Some(("fps", v)) => {
+                                o.fps = Some(
+                                    v.parse()
+                                        .ok()
+                                        .filter(|fps| (1..=240).contains(fps))
+                                        .ok_or_else(|| format!("fps {v:?} is not 1–240"))?,
+                                )
+                            }
+                            Some(("format", v)) => {
+                                let format = OutputFormat::parse(v)
+                                    .ok_or_else(|| format!("unknown format {v:?}"))?;
+                                if format.kind() != kind {
+                                    return Err(format!(
+                                        "{} is not a {} format",
+                                        format.label(),
+                                        kind.as_str()
+                                    ));
+                                }
+                                o.format = Some(format);
+                            }
+                            Some(("audio", v)) => {
+                                o.audio = Some(
+                                    v.split(',')
+                                        .filter(|d| !d.is_empty())
+                                        .map(String::from)
+                                        .collect(),
+                                )
+                            }
+                            Some(_) => return Err(format!("unknown record option {w:?}")),
+                            None => {
+                                let (flag, value) = match w.strip_prefix("no-") {
+                                    Some(f) => (f, false),
+                                    None => (w, true),
+                                };
+                                match flag {
+                                    "edit" => o.edit = Some(value),
+                                    "notify" => o.notify = Some(value),
+                                    "clipboard" => o.clipboard = Some(value),
+                                    "cursor" => o.cursor = Some(value),
+                                    "audio" if !value => o.audio = Some(Vec::new()),
+                                    _ => return Err(format!("unknown record option {w:?}")),
+                                }
+                            }
+                        }
+                    }
+                    return Ok(Request::Record(o));
+                }
+            }
+            "audio-devices" => Request::AudioDevices,
             "open-last" => Request::OpenLast,
             "pick" => Request::Pick,
             "settings" => Request::Settings,
@@ -265,6 +439,41 @@ impl fmt::Display for Request {
             Request::Settings => write!(f, "settings"),
             Request::Notifications(s) => write!(f, "notifications {}", s.as_str()),
             Request::Pick => write!(f, "pick"),
+            Request::Record(o) => {
+                write!(f, "record {} {}", o.kind.as_str(), o.mode.as_str())?;
+                for (name, v) in [
+                    ("edit", o.edit),
+                    ("notify", o.notify),
+                    ("clipboard", o.clipboard),
+                    ("cursor", o.cursor),
+                ] {
+                    match v {
+                        Some(true) => write!(f, " {name}")?,
+                        Some(false) => write!(f, " no-{name}")?,
+                        None => {}
+                    }
+                }
+                if let Some(fps) = o.fps {
+                    write!(f, " fps={fps}")?;
+                }
+                if let Some(format) = o.format {
+                    write!(f, " format={format}")?;
+                }
+                match &o.audio {
+                    Some(devices) if devices.is_empty() => write!(f, " no-audio")?,
+                    Some(devices) => write!(f, " audio={}", devices.join(","))?,
+                    None => {}
+                }
+                if let Some(out) = &o.output {
+                    write!(f, " output={out}")?;
+                }
+                if let Some(g) = &o.geometry {
+                    write!(f, " geometry={g}")?;
+                }
+                Ok(())
+            }
+            Request::RecordControl(action) => write!(f, "record {}", action.as_str()),
+            Request::AudioDevices => write!(f, "audio-devices"),
             Request::Ping => write!(f, "ping"),
             Request::Quit => write!(f, "quit"),
         }
@@ -305,6 +514,65 @@ impl Response {
         if let Some(msg) = line.strip_prefix("err ") {
             return Ok(Response::Error(msg.to_string()));
         }
+        if let Some(json) = line.strip_prefix("ok audio ") {
+            return serde_json::from_str(json)
+                .map(Response::AudioDevices)
+                .map_err(|e| format!("malformed audio device list: {e}"));
+        }
+        if let Some(rest) = line.strip_prefix("ok record ") {
+            if rest == "idle" {
+                return Ok(Response::RecordStatus(None));
+            }
+            let malformed = || format!("malformed record status {line:?}");
+            let mut parts = rest.split(' ');
+            let kind = parts.next().and_then(Kind::parse).ok_or_else(malformed)?;
+            let elapsed_ms = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(malformed)?;
+            let paused = match parts.next() {
+                Some("paused") => true,
+                Some("running") => false,
+                _ => return Err(malformed()),
+            };
+            return Ok(Response::RecordStatus(Some(RecordState {
+                kind,
+                elapsed_ms,
+                paused,
+            })));
+        }
+        if let Some(rest) = line.strip_prefix("ok recording ") {
+            let malformed = || format!("malformed recording response {line:?}");
+            let (kind, size) = rest.split_once(' ').ok_or_else(malformed)?;
+            let kind = Kind::parse(kind).ok_or_else(malformed)?;
+            let (width, height) = parse_size(size).ok_or_else(malformed)?;
+            return Ok(Response::Recording {
+                kind,
+                width,
+                height,
+            });
+        }
+        if let Some(rest) = line.strip_prefix("ok recorded ") {
+            let malformed = || format!("malformed recorded response {line:?}");
+            let mut parts = rest.splitn(4, ' ');
+            let id = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(malformed)?;
+            let (width, height) = parts.next().and_then(parse_size).ok_or_else(malformed)?;
+            let duration_ms = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(malformed)?;
+            let path = parts.next().filter(|p| !p.is_empty()).ok_or_else(malformed)?;
+            return Ok(Response::Recorded {
+                id,
+                width,
+                height,
+                duration_ms,
+                path: PathBuf::from(path),
+            });
+        }
         let rest = line
             .strip_prefix("ok ")
             .ok_or_else(|| format!("malformed response {line:?}"))?;
@@ -315,8 +583,7 @@ impl Response {
             .ok_or_else(|| format!("malformed shot id in {line:?}"))?;
         let (width, height) = parts
             .next()
-            .and_then(|s| s.split_once('x'))
-            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+            .and_then(parse_size)
             .ok_or_else(|| format!("malformed size in {line:?}"))?;
         let saved = parts.next().map(PathBuf::from);
         Ok(Response::Shot {
@@ -326,6 +593,12 @@ impl Response {
             saved,
         })
     }
+}
+
+/// `WIDTHxHEIGHT`.
+fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 /// Keeps multi-line text on one protocol line: `\` and line breaks become
@@ -382,6 +655,35 @@ impl fmt::Display for Response {
                 write!(f, "ok notifications {}", if *on { "on" } else { "off" })
             }
             Response::Color(c) => write!(f, "ok color {}", crate::color::to_hex(*c)),
+            Response::Recording {
+                kind,
+                width,
+                height,
+            } => write!(f, "ok recording {} {width}x{height}", kind.as_str()),
+            Response::Recorded {
+                id,
+                width,
+                height,
+                duration_ms,
+                path,
+            } => write!(
+                f,
+                "ok recorded {id} {width}x{height} {duration_ms} {}",
+                path.display()
+            ),
+            Response::RecordStatus(None) => write!(f, "ok record idle"),
+            Response::RecordStatus(Some(s)) => write!(
+                f,
+                "ok record {} {} {}",
+                s.kind.as_str(),
+                s.elapsed_ms,
+                if s.paused { "paused" } else { "running" }
+            ),
+            Response::AudioDevices(devices) => write!(
+                f,
+                "ok audio {}",
+                serde_json::to_string(devices).expect("plain strings serialize")
+            ),
             Response::Cancelled => write!(f, "cancelled"),
             // Newlines would split the reply into several protocol lines.
             Response::Error(msg) => write!(f, "err {}", msg.replace('\n', " ")),

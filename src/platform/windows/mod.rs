@@ -21,7 +21,9 @@ use windows::Win32::UI::HiDpi::{
     AreDpiAwarenessContextsEqual, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     GetThreadDpiAwarenessContext, SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::Shell::{FOLDERID_Pictures, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows::Win32::UI::Shell::{
+    FOLDERID_Pictures, FOLDERID_Videos, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, SetForegroundWindow,
 };
@@ -53,15 +55,11 @@ pub fn initialize() -> Result<()> {
     Ok(())
 }
 
-pub(super) fn connect(events: EventSink) -> Platform {
+pub(super) fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
     let capture = capture::WindowsCapture::new()
         .map(|c| Arc::new(c) as Arc<dyn Capture>)
         .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
         .ok();
-    let config = crate::config::Config::load().unwrap_or_else(|error| {
-        log::error!("loading configuration for Windows shell: {error:#}; using defaults");
-        crate::config::Config::default()
-    });
     let shell = shell::spawn(events, &config.hotkeys)
         .map_err(|e| log::warn!("Windows shell services unavailable: {e:#}"))
         .ok();
@@ -74,14 +72,24 @@ pub(super) fn connect(events: EventSink) -> Platform {
         shell,
         surfaces: Surfaces::Windows,
         capture_may_prompt: false,
+        recorder: None,
+        tray: None,
     }
 }
 
 pub fn pictures_dir() -> PathBuf {
+    known_folder(&FOLDERID_Pictures, "Pictures")
+}
+
+pub fn videos_dir() -> PathBuf {
+    known_folder(&FOLDERID_Videos, "Videos")
+}
+
+fn known_folder(id: &windows::core::GUID, fallback: &str) -> PathBuf {
     // The known folder follows folder redirection and OneDrive, unlike a
-    // guessed USERPROFILE\\Pictures path. CoTaskMem ownership is ours.
+    // guessed USERPROFILE\\<name> path. CoTaskMem ownership is ours.
     unsafe {
-        match SHGetKnownFolderPath(&FOLDERID_Pictures, KF_FLAG_DEFAULT, None) {
+        match SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) {
             Ok(path) => {
                 let result = path.to_string().map(PathBuf::from);
                 CoTaskMemFree(Some(path.0.cast()));
@@ -89,13 +97,13 @@ pub fn pictures_dir() -> PathBuf {
                     return path;
                 }
             }
-            Err(e) => log::warn!("Pictures known folder unavailable: {e}"),
+            Err(e) => log::warn!("{fallback} known folder unavailable: {e}"),
         }
     }
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_default()
-        .join("Pictures")
+        .join(fallback)
 }
 
 /// Called by the interactive command process, which is allowed to transfer

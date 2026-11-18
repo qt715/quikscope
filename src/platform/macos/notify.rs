@@ -208,7 +208,14 @@ impl Notifications {
     }
 }
 impl Notifier for Notifications {
-    fn shot_captured(&self, shot: u64, image: &Image, body: &str, _timeout_ms: i32) -> Result<()> {
+    fn shot_captured(
+        &self,
+        shot: u64,
+        image: &Image,
+        summary: &str,
+        body: &str,
+        _timeout_ms: i32,
+    ) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -221,7 +228,7 @@ impl Notifier for Notifications {
                 None
             }
         };
-        self.notify(Some(shot), "Screenshot captured", body, thumbnail)
+        self.notify(Some(shot), summary, body, thumbnail)
     }
     fn message(&self, summary: &str, body: &str) -> Result<()> {
         self.notify(None, summary, body, None)

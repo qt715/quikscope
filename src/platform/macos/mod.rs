@@ -10,7 +10,7 @@ pub mod shell;
 pub use desktop::selection_outputs;
 pub use shell::autostart;
 
-pub fn connect(events: EventSink) -> Platform {
+pub fn connect(events: EventSink, _config: &crate::config::Config) -> Platform {
     let notifier = notify::Notifications::new(events.clone())
         .map(|n| Arc::new(n) as Arc<dyn Notifier>)
         .map_err(|e| log::warn!("macOS notifications unavailable: {e:#}"))
@@ -26,6 +26,8 @@ pub fn connect(events: EventSink) -> Platform {
         notifier,
         surfaces: Surfaces::MacOS,
         capture_may_prompt: true,
+        recorder: None,
+        tray: None,
         shell,
     }
 }

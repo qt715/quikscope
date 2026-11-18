@@ -14,6 +14,7 @@ pub mod export;
 pub mod fonts;
 pub mod geom;
 pub mod ipc;
+pub mod media;
 pub mod ocr;
 pub mod platform;
 pub mod raster;

@@ -719,7 +719,8 @@ fn portal_clipboard_worker() {
     }
     use std::io::Write as _;
     use std::sync::Arc;
-    let platform = quikscope::platform::connect(Arc::new(|_| {}));
+    let platform =
+        quikscope::platform::connect(Arc::new(|_| {}), &quikscope::config::Config::default());
     assert_eq!(platform.name, "portal");
     let clipboard = platform.clipboard.expect("Xwayland clipboard fallback");
     let _png = clipboard.set_image(Arc::new(Image::filled(128, 80, [13, 47, 193, 255])));

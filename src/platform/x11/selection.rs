@@ -144,6 +144,11 @@ impl Clipboard for SelectionOwner {
     fn set_text(&self, text: &str) {
         self.offer(Content::Text(text.into()));
     }
+
+    fn set_files(&self, paths: &[std::path::PathBuf]) {
+        let _ = paths;
+        todo!("Linux recording agent: text/uri-list + x-special/gnome-copied-files")
+    }
 }
 
 #[derive(Clone)]

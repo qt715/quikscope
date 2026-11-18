@@ -46,6 +46,10 @@ impl Clipboard for Pasteboard {
             }
         });
     }
+    fn set_files(&self, paths: &[std::path::PathBuf]) {
+        let _ = paths;
+        todo!("macOS agent: file URLs")
+    }
 }
 
 define_class!(

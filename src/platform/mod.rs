@@ -3,6 +3,7 @@
 //! selection overlay is put on screen. The daemon only talks to the traits
 //! here; [`connect`] picks the backends at start-up.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -71,15 +72,86 @@ pub trait Clipboard: Send + Sync {
     fn set_image(&self, image: Arc<Image>) -> Arc<PendingPng>;
     /// Offers UTF-8 text and takes the selection.
     fn set_text(&self, text: &str);
+    /// Offers files (a finished recording) the way file managers copy them:
+    /// `text/uri-list` and `x-special/gnome-copied-files` on Linux, `CF_HDROP`
+    /// on Windows, file URLs on macOS. Chat apps and file managers paste the
+    /// file itself.
+    fn set_files(&self, paths: &[PathBuf]);
 }
 
 /// Desktop notifications. Clicks on a capture notification come back as
 /// [`Event::OpenShot`].
 pub trait Notifier: Send + Sync {
-    /// "Screenshot captured" with a thumbnail; clicking it opens the editor.
-    fn shot_captured(&self, shot: u64, image: &Image, body: &str, timeout_ms: i32) -> Result<()>;
+    /// A capture or recording notification titled `summary`, with a
+    /// thumbnail; clicking it sends [`Event::OpenShot`]`(shot)`.
+    fn shot_captured(
+        &self,
+        shot: u64,
+        image: &Image,
+        summary: &str,
+        body: &str,
+        timeout_ms: i32,
+    ) -> Result<()>;
     /// Plain notification without actions (errors, saves, toggles).
     fn message(&self, summary: &str, body: &str) -> Result<()>;
+}
+
+/// What to record: a region of one output.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordTarget {
+    /// Output name as in [`Snapshot`].
+    pub output: String,
+    /// The output's logical rectangle.
+    pub output_rect: IRect,
+    /// The recorded rectangle in global logical coordinates, inside
+    /// `output_rect` (equal to it for whole-output recordings).
+    pub region: IRect,
+}
+
+/// Screen recording for a platform: continuous frames of one output region.
+pub trait ScreenRecorder: Send + Sync {
+    /// Starts capturing `target` at up to `fps` frames per second. Frames
+    /// have the region's physical pixel size (logical size × output scale).
+    fn open(
+        &self,
+        target: &RecordTarget,
+        fps: u32,
+        cursor: bool,
+    ) -> Result<Box<dyn crate::media::VideoSource>>;
+    /// Shows a thin outline just outside `region` (global logical
+    /// coordinates) that never appears in the recording and passes all
+    /// input through. Dropping the returned guard removes it.
+    fn outline(&self, region: IRect) -> Result<Box<dyn Send>>;
+}
+
+/// Recording status shown by a tray icon or menu-bar item.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordingStatus {
+    pub kind: crate::media::Kind,
+    /// Recorded time so far, excluding pauses, as of `at`.
+    pub elapsed: std::time::Duration,
+    pub at: std::time::Instant,
+    pub paused: bool,
+}
+
+/// Everything a tray menu shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrayState {
+    pub recording: Option<RecordingStatus>,
+    /// Every recordable audio device, and whether recordings include it.
+    pub audio: Vec<(crate::media::AudioDevice, bool)>,
+    pub video_fps: u32,
+    pub animation_fps: u32,
+}
+
+/// Frame rates the tray menus offer.
+pub const VIDEO_FPS_CHOICES: [u32; 4] = [24, 30, 60, 120];
+pub const ANIMATION_FPS_CHOICES: [u32; 4] = [10, 15, 24, 30];
+
+/// A system tray icon or menu-bar menu with recording controls. Menu
+/// actions arrive as [`Event`]s.
+pub trait Tray: Send + Sync {
+    fn update(&self, state: &TrayState);
 }
 
 /// Something the desktop asks the daemon to do: a notification click, or a
@@ -89,6 +161,10 @@ pub trait Notifier: Send + Sync {
 pub enum Event {
     OpenShot(u64),
     Request(Request),
+    /// Include (`true`) or leave out an audio device in recordings; persisted.
+    SetAudio(String, bool),
+    /// Frame rate for future recordings of a kind; persisted.
+    SetFps(crate::media::Kind, u32),
 }
 
 /// Delivers [`Event`]s to the daemon from any thread.
@@ -142,6 +218,10 @@ pub struct Platform {
     /// The desktop may show its own dialog while capturing (the Screenshot
     /// portal asks for permission), so nothing may take input meanwhile.
     pub capture_may_prompt: bool,
+    /// Continuous capture for video and animation recording.
+    pub recorder: Option<Arc<dyn ScreenRecorder>>,
+    /// Tray icon / menu-bar menu with recording controls.
+    pub tray: Option<Arc<dyn Tray>>,
     #[cfg(windows)]
     pub(crate) shell: Option<Arc<windows::Shell>>,
     #[cfg(target_os = "macos")]
@@ -151,7 +231,7 @@ pub struct Platform {
 /// Connects the backends for the current session. Missing pieces are
 /// logged and left `None`; the daemon reports them when a request needs
 /// them. `events` may be called from any thread.
-pub fn connect(events: EventSink) -> Platform {
+pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
     #[cfg(target_os = "linux")]
     {
         let notifier = freedesktop::Notifications::spawn(events.clone())
@@ -183,6 +263,8 @@ pub fn connect(events: EventSink) -> Platform {
                 notifier,
                 surfaces: Surfaces::X11,
                 capture_may_prompt: false,
+                recorder: None,
+                tray: None,
             };
         }
         let desktop: Arc<dyn Desktop> = if hyprland::available() {
@@ -241,15 +323,17 @@ pub fn connect(events: EventSink) -> Platform {
             notifier,
             surfaces,
             capture_may_prompt: use_portal,
+            recorder: None,
+            tray: None,
         }
     }
     #[cfg(windows)]
     {
-        windows::connect(events)
+        windows::connect(events, config)
     }
     #[cfg(target_os = "macos")]
     {
-        macos::connect(events)
+        macos::connect(events, config)
     }
 }
 
