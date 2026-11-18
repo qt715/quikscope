@@ -2,10 +2,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::mem::size_of;
-use std::sync::{Arc, mpsc};
-use std::thread::{self, JoinHandle};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
+use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, anyhow, bail};
 use windows::Win32::Foundation::{
@@ -23,9 +23,12 @@ use windows::core::{PCWSTR, w};
 
 use crate::clipboard::PendingPng;
 use crate::config::{Hotkeys, parse_hotkey};
-use crate::ipc::{CaptureOptions, Mode, Request, Switch, RecordOptions, RecordAction};
+use crate::ipc::{CaptureOptions, Mode, RecordAction, RecordOptions, Request, Switch};
 use crate::media::Kind;
-use crate::platform::{Clipboard, Event, EventSink, Notifier, Tray, TrayState, VIDEO_FPS_CHOICES, ANIMATION_FPS_CHOICES};
+use crate::platform::{
+    ANIMATION_FPS_CHOICES, Clipboard, Event, EventSink, Notifier, Tray, TrayState,
+    VIDEO_FPS_CHOICES,
+};
 use crate::raster::Image;
 
 const WAKE: u32 = WM_APP + 1;
@@ -281,7 +284,12 @@ unsafe fn run(
         pending: RefCell::new(None),
         retries: Cell::new(0),
         balloon_shot: Cell::new(None),
-        tray: RefCell::new(TrayState { recording: None, audio: Vec::new(), video_fps: 60, animation_fps: 30 }),
+        tray: RefCell::new(TrayState {
+            recording: None,
+            audio: Vec::new(),
+            video_fps: 60,
+            animation_fps: 30,
+        }),
         drop_effect_format: unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) },
     });
     // A hidden top-level window (not HWND_MESSAGE) receives Explorer restart
@@ -307,10 +315,10 @@ unsafe fn run(
     state.icon.set(unsafe {
         // Library hosts (including libtest) need not embed our executable's
         // icon resource; a native application icon keeps shell services usable.
-        CopyIcon(LoadIconW(
-            instance,
-            PCWSTR(std::ptr::without_provenance(1)),
-        ).or_else(|_| LoadIconW(None, IDI_APPLICATION))?)?
+        CopyIcon(
+            LoadIconW(instance, PCWSTR(std::ptr::without_provenance(1)))
+                .or_else(|_| LoadIconW(None, IDI_APPLICATION))?,
+        )?
     });
     unsafe {
         state.add_tray()?;
@@ -421,12 +429,15 @@ impl State {
     fn request(&self, id: usize) {
         if id >= 1000 {
             let tray = self.tray.borrow();
-            if let Some((device, enabled)) = tray.audio.get(id-1000) {
+            if let Some((device, enabled)) = tray.audio.get(id - 1000) {
                 (self.events)(Event::SetAudio(device.id.clone(), !enabled));
             }
             return;
         }
-        for (base, kind, choices) in [(100, Kind::Video, &VIDEO_FPS_CHOICES), (200, Kind::Animation, &ANIMATION_FPS_CHOICES)] {
+        for (base, kind, choices) in [
+            (100, Kind::Video, &VIDEO_FPS_CHOICES),
+            (200, Kind::Animation, &ANIMATION_FPS_CHOICES),
+        ] {
             if let Some(fps) = id.checked_sub(base).and_then(|i| choices.get(i)) {
                 (self.events)(Event::SetFps(kind, *fps));
                 return;
@@ -481,7 +492,12 @@ impl State {
         unsafe {
             if let Some(recording) = &state.recording {
                 append_item(menu.0, 0, &elapsed_label(recording), MF_DISABLED)?;
-                append_item(menu.0, 11, if recording.paused { "Resume" } else { "Pause" }, MF_STRING)?;
+                append_item(
+                    menu.0,
+                    11,
+                    if recording.paused { "Resume" } else { "Pause" },
+                    MF_STRING,
+                )?;
                 append_item(menu.0, 12, "Stop and save", MF_STRING)?;
                 append_item(menu.0, 13, "Discard", MF_STRING)?;
             } else {
@@ -491,13 +507,35 @@ impl State {
             let audio = CreatePopupMenu()?;
             append_item(menu.0, audio.0 as usize, "Audio", MF_POPUP)?;
             for (i, (device, enabled)) in state.audio.iter().enumerate() {
-                append_item(audio, 1000+i, &device.name, if *enabled { MF_CHECKED } else { MF_STRING })?;
+                append_item(
+                    audio,
+                    1000 + i,
+                    &device.name,
+                    if *enabled { MF_CHECKED } else { MF_STRING },
+                )?;
             }
-            for (label, base, selected, choices) in [("Video frame rate",100,state.video_fps,&VIDEO_FPS_CHOICES),("Animation frame rate",200,state.animation_fps,&ANIMATION_FPS_CHOICES)] {
+            for (label, base, selected, choices) in [
+                ("Video frame rate", 100, state.video_fps, &VIDEO_FPS_CHOICES),
+                (
+                    "Animation frame rate",
+                    200,
+                    state.animation_fps,
+                    &ANIMATION_FPS_CHOICES,
+                ),
+            ] {
                 let rates = CreatePopupMenu()?;
                 append_item(menu.0, rates.0 as usize, label, MF_POPUP)?;
-                for (i,fps) in choices.iter().enumerate() {
-                    append_item(rates,base+i,&format!("{fps} fps"),if *fps==selected {MF_CHECKED} else {MF_STRING})?;
+                for (i, fps) in choices.iter().enumerate() {
+                    append_item(
+                        rates,
+                        base + i,
+                        &format!("{fps} fps"),
+                        if *fps == selected {
+                            MF_CHECKED
+                        } else {
+                            MF_STRING
+                        },
+                    )?;
                 }
             }
         }
@@ -651,7 +689,9 @@ impl State {
                 unsafe { publish(format, &bytes) }
             }
             Content::Files(paths) if format == 15 => unsafe { publish(format, &file_drop(paths)?) },
-            Content::Files(_) if format == self.drop_effect_format => unsafe { publish(format, &1u32.to_le_bytes()) },
+            Content::Files(_) if format == self.drop_effect_format => unsafe {
+                publish(format, &1u32.to_le_bytes())
+            },
             _ => Ok(()),
         }
     }
@@ -664,7 +704,14 @@ impl State {
         if unsafe { GetClipboardOwner() }.ok() != Some(self.hwnd.get()) {
             return;
         }
-        for format in [self.png_format, DIB_V5, DIB, UNICODE_TEXT, 15, self.drop_effect_format] {
+        for format in [
+            self.png_format,
+            DIB_V5,
+            DIB,
+            UNICODE_TEXT,
+            15,
+            self.drop_effect_format,
+        ] {
             if let Err(error) = unsafe { self.render(format) } {
                 log::error!("rendering clipboard format {format}: {error:#}");
             }
@@ -675,9 +722,15 @@ impl State {
         let mut data = self.tray_data();
         data.uFlags = NIF_TIP;
         let tray = self.tray.borrow();
-        let text = tray.recording.as_ref().map(elapsed_label).unwrap_or_else(|| "quikscope".into());
+        let text = tray
+            .recording
+            .as_ref()
+            .map(elapsed_label)
+            .unwrap_or_else(|| "quikscope".into());
         wide_copy(&mut data.szTip, &text);
-        unsafe { let _ = Shell_NotifyIconW(NIM_MODIFY, &data); }
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+        }
     }
 }
 
@@ -812,14 +865,26 @@ unsafe fn publish(format: u32, bytes: &[u8]) -> Result<()> {
 
 unsafe fn append_item(menu: HMENU, id: usize, text: &str, flags: MENU_ITEM_FLAGS) -> Result<()> {
     let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-    unsafe { AppendMenuW(menu, flags, id, PCWSTR(text.as_ptr()))?; }
+    unsafe {
+        AppendMenuW(menu, flags, id, PCWSTR(text.as_ptr()))?;
+    }
     Ok(())
 }
 
 fn elapsed_label(recording: &crate::platform::RecordingStatus) -> String {
-    let elapsed = recording.elapsed + if recording.paused { std::time::Duration::ZERO } else { recording.at.elapsed() };
+    let elapsed = recording.elapsed
+        + if recording.paused {
+            std::time::Duration::ZERO
+        } else {
+            recording.at.elapsed()
+        };
     let seconds = elapsed.as_secs();
-    format!("quikscope — {:02}:{:02}{}", seconds/60, seconds%60, if recording.paused { " (paused)" } else { "" })
+    format!(
+        "quikscope — {:02}:{:02}{}",
+        seconds / 60,
+        seconds % 60,
+        if recording.paused { " (paused)" } else { "" }
+    )
 }
 
 fn file_drop(paths: &[PathBuf]) -> Result<Vec<u8>> {
@@ -898,37 +963,70 @@ mod tests {
 
     #[test]
     fn file_drop_has_wide_absolute_paths_and_double_terminator() {
-        let bytes=file_drop(&[PathBuf::from(r"C:\日本語\movie.mp4"),PathBuf::from(r"C:\animation.gif")]).unwrap();
-        assert_eq!(&bytes[..4],&20u32.to_le_bytes());
-        assert_eq!(&bytes[16..20],&1u32.to_le_bytes());
-        let words:Vec<u16>=bytes[20..].chunks_exact(2).map(|b|u16::from_le_bytes([b[0],b[1]])).collect();
-        assert_eq!(String::from_utf16(&words).unwrap(),"C:\\日本語\\movie.mp4\0C:\\animation.gif\0\0");
+        let bytes = file_drop(&[
+            PathBuf::from(r"C:\日本語\movie.mp4"),
+            PathBuf::from(r"C:\animation.gif"),
+        ])
+        .unwrap();
+        assert_eq!(&bytes[..4], &20u32.to_le_bytes());
+        assert_eq!(&bytes[16..20], &1u32.to_le_bytes());
+        let words: Vec<u16> = bytes[20..]
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        assert_eq!(
+            String::from_utf16(&words).unwrap(),
+            "C:\\日本語\\movie.mp4\0C:\\animation.gif\0\0"
+        );
         assert!(file_drop(&[PathBuf::from("relative.mp4")]).is_err());
     }
 
     #[test]
     fn recording_hotkeys_emit_distinct_ids() {
-        let bindings=hotkey_bindings(&Hotkeys::default()).unwrap();
-        assert!(bindings.iter().any(|(id,_,_,_)| *id==9));
-        assert!(bindings.iter().any(|(id,_,_,_)| *id==10));
+        let bindings = hotkey_bindings(&Hotkeys::default()).unwrap();
+        assert!(bindings.iter().any(|(id, _, _, _)| *id == 9));
+        assert!(bindings.iter().any(|(id, _, _, _)| *id == 10));
     }
 
     #[test]
     #[ignore = "requires interactive Windows clipboard and tray"]
     fn native_shell_file_clipboard_and_tray() -> Result<()> {
-        let shell=spawn(Arc::new(|_|{}), &Hotkeys::default())?;
-        let path=std::env::temp_dir().join("quikscope-file-drop-test.txt");
-        std::fs::write(&path,"quikscope recording clipboard verification")?;
+        let shell = spawn(Arc::new(|_| {}), &Hotkeys::default())?;
+        let path = std::env::temp_dir().join("quikscope-file-drop-test.txt");
+        std::fs::write(&path, "quikscope recording clipboard verification")?;
         shell.set_files(std::slice::from_ref(&path));
-        shell.update(&TrayState { recording:None,audio:crate::media::audio::devices()?.into_iter().map(|d|(d,true)).collect(),video_fps:60,animation_fps:30 });
+        shell.update(&TrayState {
+            recording: None,
+            audio: crate::media::audio::devices()?
+                .into_iter()
+                .map(|d| (d, true))
+                .collect(),
+            video_fps: 60,
+            animation_fps: 30,
+        });
         thread::sleep(std::time::Duration::from_millis(100));
-        let output=std::process::Command::new("powershell.exe").args(["-NoProfile","-Command","(Get-Clipboard -Format FileDropList).FullName"]).output()?;
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-Clipboard -Format FileDropList).FullName",
+            ])
+            .output()?;
         assert!(String::from_utf8_lossy(&output.stdout).contains(path.to_string_lossy().as_ref()));
-        unsafe { PostMessageW(HWND(shell.hwnd as _),TRAY,WPARAM(1),LPARAM(WM_RBUTTONUP as isize))?; }
+        unsafe {
+            PostMessageW(
+                HWND(shell.hwnd as _),
+                TRAY,
+                WPARAM(1),
+                LPARAM(WM_RBUTTONUP as isize),
+            )?;
+        }
         // The native acceptance runner uses this interval to inspect the actual
         // notification-area popup with UIA, without starting a production daemon.
         thread::sleep(std::time::Duration::from_secs(20));
-        unsafe { PostMessageW(HWND(shell.hwnd as _),WM_CANCELMODE,WPARAM(0),LPARAM(0))?; }
+        unsafe {
+            PostMessageW(HWND(shell.hwnd as _), WM_CANCELMODE, WPARAM(0), LPARAM(0))?;
+        }
         std::fs::remove_file(path)?;
         Ok(())
     }

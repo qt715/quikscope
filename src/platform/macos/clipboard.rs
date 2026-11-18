@@ -49,15 +49,23 @@ impl Clipboard for Pasteboard {
     fn set_files(&self, paths: &[std::path::PathBuf]) {
         let paths = paths.to_vec();
         super::shell::on_main(move || {
-            let urls: Vec<_> = paths.iter().filter_map(|path| {
-                match path.to_str() {
+            let urls: Vec<_> = paths
+                .iter()
+                .filter_map(|path| match path.to_str() {
                     Some(path) => Some(NSURL::fileURLWithPath(&NSString::from_str(path))),
-                    None => { log::error!("macOS pasteboard file path is not UTF-8: {path:?}"); None }
-                }
-            }).collect();
-            if urls.len() != paths.len() { return; }
-            let objects: Vec<&ProtocolObject<dyn NSPasteboardWriting>> =
-                urls.iter().map(|url| ProtocolObject::from_ref(&**url)).collect();
+                    None => {
+                        log::error!("macOS pasteboard file path is not UTF-8: {path:?}");
+                        None
+                    }
+                })
+                .collect();
+            if urls.len() != paths.len() {
+                return;
+            }
+            let objects: Vec<&ProtocolObject<dyn NSPasteboardWriting>> = urls
+                .iter()
+                .map(|url| ProtocolObject::from_ref(&**url))
+                .collect();
             let board = NSPasteboard::generalPasteboard();
             board.clearContents();
             if !board.writeObjects(&NSArray::from_slice(&objects)) {

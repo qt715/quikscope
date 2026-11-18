@@ -14,9 +14,11 @@ use objc2_app_kit::{NSAccessibility, NSImage, NSMenu, NSMenuItem, NSStatusBar, N
 use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, NSString};
 
 use crate::config::Hotkeys;
-use crate::ipc::{CaptureOptions, Mode, Request, Switch, RecordAction, RecordOptions};
+use crate::ipc::{CaptureOptions, Mode, RecordAction, RecordOptions, Request, Switch};
 use crate::media::Kind;
-use crate::platform::{Event, EventSink, Tray, TrayState, VIDEO_FPS_CHOICES, ANIMATION_FPS_CHOICES};
+use crate::platform::{
+    ANIMATION_FPS_CHOICES, Event, EventSink, Tray, TrayState, VIDEO_FPS_CHOICES,
+};
 
 // Cocoa objects never cross threads. Platform may freely share the handle.
 pub struct Shell {
@@ -84,7 +86,9 @@ fn deliver(events: &EventSink, event: Event) {
 }
 
 impl Shell {
-    pub fn tray(&self) -> MenuTray { MenuTray(self.id) }
+    pub fn tray(&self) -> MenuTray {
+        MenuTray(self.id)
+    }
     pub fn new(events: EventSink) -> Result<Self> {
         let mtm =
             MainThreadMarker::new().context("macOS shell must be created on the main thread")?;
@@ -92,7 +96,10 @@ impl Shell {
             SHELL.with(|s| s.borrow().is_none()),
             "macOS shell already exists"
         );
-        let this = MenuTarget::alloc(mtm).set_ivars(MenuActions { events: events.clone(), dynamic: RefCell::new(std::collections::HashMap::new()) });
+        let this = MenuTarget::alloc(mtm).set_ivars(MenuActions {
+            events: events.clone(),
+            dynamic: RefCell::new(std::collections::HashMap::new()),
+        });
         let target: Retained<MenuTarget> = unsafe { msg_send![super(this), init] };
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
@@ -229,7 +236,9 @@ impl Tray for MenuTray {
         on_main(move || {
             SHELL.with(|shell| {
                 let shell = shell.borrow();
-                let Some(native) = shell.as_ref().filter(|s| s.id == id) else { return; };
+                let Some(native) = shell.as_ref().filter(|s| s.id == id) else {
+                    return;
+                };
                 let mtm = MainThreadMarker::new().unwrap();
                 let target = &native._target;
                 let menu = NSMenu::new(mtm);
@@ -237,19 +246,44 @@ impl Tray for MenuTray {
                 let mut dynamic = target.ivars().dynamic.borrow_mut();
                 dynamic.clear();
                 let add = |menu: &NSMenu, title: &str, tag: isize, checked: bool| {
-                    let entry = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(performMenuAction:)), &NSString::from_str("")) };
+                    let entry = unsafe {
+                        NSMenuItem::initWithTitle_action_keyEquivalent(
+                            NSMenuItem::alloc(mtm),
+                            &NSString::from_str(title),
+                            Some(sel!(performMenuAction:)),
+                            &NSString::from_str(""),
+                        )
+                    };
                     entry.setTag(tag);
                     entry.setState(if checked { 1 } else { 0 });
-                    unsafe { entry.setTarget(Some(target)); }
+                    unsafe {
+                        entry.setTarget(Some(target));
+                    }
                     menu.addItem(&entry);
                     entry
                 };
                 if let Some(recording) = &state.recording {
-                    let elapsed = recording.elapsed + if recording.paused { std::time::Duration::ZERO } else { recording.at.elapsed() };
+                    let elapsed = recording.elapsed
+                        + if recording.paused {
+                            std::time::Duration::ZERO
+                        } else {
+                            recording.at.elapsed()
+                        };
                     let secs = elapsed.as_secs();
-                    let title = format!("{} {:02}:{:02}{}", recording.kind.as_str(), secs / 60, secs % 60, if recording.paused { " (paused)" } else { "" });
+                    let title = format!(
+                        "{} {:02}:{:02}{}",
+                        recording.kind.as_str(),
+                        secs / 60,
+                        secs % 60,
+                        if recording.paused { " (paused)" } else { "" }
+                    );
                     add(&menu, &title, 0, false).setEnabled(false);
-                    add(&menu, if recording.paused { "Resume" } else { "Pause" }, 11, false);
+                    add(
+                        &menu,
+                        if recording.paused { "Resume" } else { "Pause" },
+                        11,
+                        false,
+                    );
                     add(&menu, "Stop and save", 12, false);
                     add(&menu, "Discard recording", 13, false);
                 } else {
@@ -265,8 +299,20 @@ impl Tray for MenuTray {
                 }
                 add(&menu, "Audio", 0, false).setSubmenu(Some(&audio));
                 for (kind, title, choices, selected, base) in [
-                    (Kind::Video, "Video frame rate", VIDEO_FPS_CHOICES, state.video_fps, 100isize),
-                    (Kind::Animation, "Animation frame rate", ANIMATION_FPS_CHOICES, state.animation_fps, 200isize),
+                    (
+                        Kind::Video,
+                        "Video frame rate",
+                        VIDEO_FPS_CHOICES,
+                        state.video_fps,
+                        100isize,
+                    ),
+                    (
+                        Kind::Animation,
+                        "Animation frame rate",
+                        ANIMATION_FPS_CHOICES,
+                        state.animation_fps,
+                        200isize,
+                    ),
                 ] {
                     let submenu = NSMenu::new(mtm);
                     submenu.setAutoenablesItems(false);
@@ -278,7 +324,18 @@ impl Tray for MenuTray {
                     add(&menu, title, 0, false).setSubmenu(Some(&submenu));
                 }
                 menu.addItem(&NSMenuItem::separatorItem(mtm));
-                for (id, title) in [(1,"Capture region"),(2,"Capture screen"),(3,"Capture window"),(4,"Open last capture"),(8,"Pick color"),(5,"Settings…"),(6,"Toggle notifications"),(7,"Quit")] { add(&menu, title, id, false); }
+                for (id, title) in [
+                    (1, "Capture region"),
+                    (2, "Capture screen"),
+                    (3, "Capture window"),
+                    (4, "Open last capture"),
+                    (8, "Pick color"),
+                    (5, "Settings…"),
+                    (6, "Toggle notifications"),
+                    (7, "Quit"),
+                ] {
+                    add(&menu, title, id, false);
+                }
                 native.item.setMenu(Some(&menu));
             });
         });

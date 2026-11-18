@@ -28,7 +28,9 @@ pub fn connect(events: EventSink, _config: &crate::config::Config) -> Platform {
         surfaces: Surfaces::MacOS,
         capture_may_prompt: true,
         recorder: Some(Arc::new(record::Recorder)),
-        tray: shell.as_ref().map(|s| Arc::new(s.tray()) as Arc<dyn super::Tray>),
+        tray: shell
+            .as_ref()
+            .map(|s| Arc::new(s.tray()) as Arc<dyn super::Tray>),
         shell,
     }
 }

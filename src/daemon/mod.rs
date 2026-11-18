@@ -1517,7 +1517,7 @@ fn open_video(id: u64, path: PathBuf, cx: &mut App) -> Result<()> {
                 "quikscope — {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             );
-            Ok(cx.open_window(
+            cx.open_window(
                 WindowOptions {
                     titlebar: Some(gpui::TitlebarOptions {
                         title: Some(title.into()),
@@ -1540,7 +1540,7 @@ fn open_video(id: u64, path: PathBuf, cx: &mut App) -> Result<()> {
                     window.activate_window();
                     editor
                 },
-            )?)
+            )
         });
         match opened {
             Ok(handle) => daemon(cx, |d, _| {
