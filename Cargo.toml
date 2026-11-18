@@ -118,6 +118,7 @@ block2 = "0.6"
 dispatch2 = "0.3"
 core-foundation = "0.10"
 core-graphics = "0.24"
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2"

@@ -136,127 +136,146 @@ pub fn run(socket: PathBuf) -> Result<()> {
     });
 
     let socket_for_exit = socket.clone();
-    gpui_platform::application()
+    let app = gpui_platform::application()
         .with_assets(Assets)
-        .with_quit_mode(QuitMode::Explicit)
-        .run(move |cx: &mut App| {
-            ui::init(cx);
-            // GPUI defaults to a regular application even when LSUIElement is set.
-            #[cfg(target_os = "macos")]
-            cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
-            #[cfg(not(target_os = "macos"))]
-            let platform = Arc::new(services.join().expect("platform start-up panicked"));
-            #[cfg(target_os = "macos")]
-            let platform = Arc::new(platform::connect(
-                Arc::new(move |event| {
-                    let _ = tx.unbounded_send(Msg::Desktop(event));
-                }),
-                &config,
-            ));
-            #[cfg(target_os = "macos")]
-            if let Some(shell) = &platform.shell
-                && let Err(error) = shell.set_hotkeys(&config.hotkeys)
-            {
-                log::warn!("registering macOS shortcuts: {error:#}");
-            }
-            log::info!("platform backend: {}", platform.name);
-            cx.set_global(EditorServices {
-                config: config.clone(),
-                clipboard: platform.clipboard.clone(),
-                pick_color: Some(std::rc::Rc::new(|cx: &mut App| {
-                    cx.spawn(async move |cx| pick_color(cx).await)
-                })),
-            });
-            let prewarm = platform.prewarm_options();
-            cx.set_global(Daemon {
-                notify: config.notify,
-                config,
-                platform,
-                cache: LastCapture::spawn(config::last_capture_path()),
-                shots: VecDeque::new(),
-                docs: HashMap::new(),
-                editors: HashMap::new(),
-                settings: None,
-                color: None,
-                next_id: 1,
-                selecting: false,
-                recording: record::Slot::Idle,
-                videos: HashMap::new(),
-                video_editors: HashMap::new(),
-                audio_devices: Vec::new(),
-            });
-            record::refresh_devices(cx);
-            match prewarm {
-                Some(options) => prewarm_gpu(options, cx),
-                None => log::debug!("GPU prewarm skipped: no invisible surface on this backend"),
-            }
-            cx.on_action::<OpenSettings>(|_, cx| {
-                if let Err(error) = open_settings(false, cx) {
-                    log::error!("opening settings: {error:#}");
+        .with_quit_mode(QuitMode::Explicit);
+    // Finder hands documents to a running app as open-URL events, not argv.
+    #[cfg(target_os = "macos")]
+    app.on_open_urls({
+        let tx = tx.clone();
+        move |urls| {
+            for url in urls {
+                match url::Url::parse(&url)
+                    .ok()
+                    .and_then(|u| u.to_file_path().ok())
+                {
+                    Some(path) => {
+                        let _ =
+                            tx.unbounded_send(Msg::Desktop(Event::Request(Request::Open(path))));
+                    }
+                    None => log::warn!("ignoring non-file URL {url}"),
                 }
-            });
-            if welcome && let Err(error) = open_settings(true, cx) {
-                log::error!("opening welcome settings: {error:#}");
             }
-            log::info!(
-                "daemon ready on {} in {:.0}ms",
-                socket.display(),
-                started.elapsed().as_secs_f64() * 1e3
-            );
-            cx.spawn(async move |cx| {
-                let mut rx = rx;
-                while let Some(msg) = rx.next().await {
-                    match msg {
-                        Msg::Request(req, reply) => {
-                            cx.spawn(async move |cx| {
-                                let quit = req == Request::Quit;
-                                let response = handle(req, cx).await;
-                                let _ = reply.send(response);
-                                if quit {
-                                    // Give the IPC thread a moment to flush the reply.
-                                    cx.background_executor()
-                                        .timer(Duration::from_millis(20))
-                                        .await;
-                                    cx.update(|cx| cx.quit());
-                                }
-                            })
-                            .detach();
-                        }
-                        Msg::Desktop(Event::OpenShot(id)) => {
-                            cx.update(|cx| {
-                                if let Err(e) = record::open_media(id, cx) {
-                                    log::error!("opening editor: {e:#}");
-                                }
-                            });
-                        }
-                        Msg::Desktop(Event::Request(req)) => {
-                            cx.spawn(async move |cx| {
-                                let quit = req == Request::Quit;
-                                // Recording requests notify their own failures.
-                                let notifies = matches!(req, Request::Record(_));
-                                log::debug!("desktop request: {req}");
-                                if let Response::Error(e) = handle(req, cx).await
-                                    && !notifies
-                                {
-                                    notify_error("Screenshot failed", &e, cx);
-                                }
-                                if quit {
-                                    cx.update(|cx| cx.quit());
-                                }
-                            })
-                            .detach();
-                        }
-                        Msg::Desktop(Event::SetAudio(id, enabled)) => {
-                            cx.update(|cx| record::set_audio(id, enabled, cx));
-                        }
-                        Msg::Desktop(Event::SetFps(kind, fps)) => {
-                            cx.update(|cx| record::set_fps(kind, fps, cx));
-                        }
+        }
+    });
+    app.run(move |cx: &mut App| {
+        ui::init(cx);
+        // GPUI defaults to a regular application even when LSUIElement is set.
+        #[cfg(target_os = "macos")]
+        cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
+        #[cfg(not(target_os = "macos"))]
+        let platform = Arc::new(services.join().expect("platform start-up panicked"));
+        #[cfg(target_os = "macos")]
+        let platform = Arc::new(platform::connect(
+            Arc::new(move |event| {
+                let _ = tx.unbounded_send(Msg::Desktop(event));
+            }),
+            &config,
+        ));
+        #[cfg(target_os = "macos")]
+        if let Some(shell) = &platform.shell
+            && let Err(error) = shell.set_hotkeys(&config.hotkeys)
+        {
+            log::warn!("registering macOS shortcuts: {error:#}");
+        }
+        log::info!("platform backend: {}", platform.name);
+        cx.set_global(EditorServices {
+            config: config.clone(),
+            clipboard: platform.clipboard.clone(),
+            pick_color: Some(std::rc::Rc::new(|cx: &mut App| {
+                cx.spawn(async move |cx| pick_color(cx).await)
+            })),
+        });
+        let prewarm = platform.prewarm_options();
+        cx.set_global(Daemon {
+            notify: config.notify,
+            config,
+            platform,
+            cache: LastCapture::spawn(config::last_capture_path()),
+            shots: VecDeque::new(),
+            docs: HashMap::new(),
+            editors: HashMap::new(),
+            settings: None,
+            color: None,
+            next_id: 1,
+            selecting: false,
+            recording: record::Slot::Idle,
+            videos: HashMap::new(),
+            video_editors: HashMap::new(),
+            audio_devices: Vec::new(),
+        });
+        record::refresh_devices(cx);
+        match prewarm {
+            Some(options) => prewarm_gpu(options, cx),
+            None => log::debug!("GPU prewarm skipped: no invisible surface on this backend"),
+        }
+        cx.on_action::<OpenSettings>(|_, cx| {
+            if let Err(error) = open_settings(false, cx) {
+                log::error!("opening settings: {error:#}");
+            }
+        });
+        if welcome && let Err(error) = open_settings(true, cx) {
+            log::error!("opening welcome settings: {error:#}");
+        }
+        log::info!(
+            "daemon ready on {} in {:.0}ms",
+            socket.display(),
+            started.elapsed().as_secs_f64() * 1e3
+        );
+        cx.spawn(async move |cx| {
+            let mut rx = rx;
+            while let Some(msg) = rx.next().await {
+                match msg {
+                    Msg::Request(req, reply) => {
+                        cx.spawn(async move |cx| {
+                            let quit = req == Request::Quit;
+                            let response = handle(req, cx).await;
+                            let _ = reply.send(response);
+                            if quit {
+                                // Give the IPC thread a moment to flush the reply.
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(20))
+                                    .await;
+                                cx.update(|cx| cx.quit());
+                            }
+                        })
+                        .detach();
+                    }
+                    Msg::Desktop(Event::OpenShot(id)) => {
+                        cx.update(|cx| {
+                            if let Err(e) = record::open_media(id, cx) {
+                                log::error!("opening editor: {e:#}");
+                            }
+                        });
+                    }
+                    Msg::Desktop(Event::Request(req)) => {
+                        cx.spawn(async move |cx| {
+                            let quit = req == Request::Quit;
+                            // Recording requests notify their own failures.
+                            let notifies = matches!(req, Request::Record(_));
+                            log::debug!("desktop request: {req}");
+                            if let Response::Error(e) = handle(req, cx).await
+                                && !notifies
+                            {
+                                notify_error("Screenshot failed", &e, cx);
+                            }
+                            if quit {
+                                cx.update(|cx| cx.quit());
+                            }
+                        })
+                        .detach();
+                    }
+                    Msg::Desktop(Event::SetAudio(id, enabled)) => {
+                        cx.update(|cx| record::set_audio(id, enabled, cx));
+                    }
+                    Msg::Desktop(Event::SetFps(kind, fps)) => {
+                        cx.update(|cx| record::set_fps(kind, fps, cx));
                     }
                 }
-            })
-            .detach();
-        });
+            }
+        })
+        .detach();
+    });
     let _ = std::fs::remove_file(socket_for_exit);
     Ok(())
 }
@@ -1124,7 +1143,8 @@ async fn finish_capture(
                 };
                 let timeout = config.notification_timeout_ms;
                 cx.background_spawn(async move {
-                    if let Err(e) = n.shot_captured(id, &image, "Screenshot captured", &body, timeout)
+                    if let Err(e) =
+                        n.shot_captured(id, &image, "Screenshot captured", &body, timeout)
                     {
                         log::warn!("notification failed: {e:#}");
                     }
@@ -1440,13 +1460,8 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
                 d.next_id += 1;
                 id
             });
-            let shot = Shot::new(id, Arc::new(first), 1.0, Some(path.clone())).with_animation(
-                ui::Animation {
-                    path,
-                    info,
-                    format,
-                },
-            );
+            let shot = Shot::new(id, Arc::new(first), 1.0, Some(path.clone()))
+                .with_animation(ui::Animation { path, info, format });
             let shot = insert_shot(shot, cx);
             cx.update(|cx| open_editor(shot.id, EditorTool::Default, cx))?;
             return Ok(Some(shot_response(&shot)));

@@ -242,7 +242,11 @@ impl RecordConfig {
 
     /// Path for a new recording started at `time`, never an existing file.
     pub fn new_save_path(&self, time: SystemTime, format: crate::media::OutputFormat) -> PathBuf {
-        let name = format!("{}.{}", format_time(&self.filename, time), format.extension());
+        let name = format!(
+            "{}.{}",
+            format_time(&self.filename, time),
+            format.extension()
+        );
         unique_path(&self.save_dir(), &name)
     }
 }
@@ -340,7 +344,9 @@ impl Config {
         );
         for device in &r.audio {
             anyhow::ensure!(
-                !device.is_empty() && !device.contains([',', '\0', '\n']) && device.trim() == device,
+                !device.is_empty()
+                    && !device.contains([',', '\0', '\n'])
+                    && device.trim() == device,
                 "record.audio: {device:?} is not a device id"
             );
         }

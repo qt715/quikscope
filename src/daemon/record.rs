@@ -324,11 +324,13 @@ fn watch_failure(id: u64, cx: &mut AsyncApp) {
 
 /// Stops the running recording, saves it and tells the user.
 async fn stop(cx: &mut AsyncApp) -> Result<Option<Response>> {
-    let active = daemon(cx, |d, _| match std::mem::replace(&mut d.recording, Slot::Stopping) {
-        Slot::Active(active) => Some(active),
-        other => {
-            d.recording = other;
-            None
+    let active = daemon(cx, |d, _| {
+        match std::mem::replace(&mut d.recording, Slot::Stopping) {
+            Slot::Active(active) => Some(active),
+            other => {
+                d.recording = other;
+                None
+            }
         }
     });
     let Some(active) = active else {
@@ -438,7 +440,9 @@ async fn finish_recording(
 }
 
 /// First frame of an animation and its facts.
-pub(super) fn first_frame(path: &std::path::Path) -> Result<(crate::raster::Image, media::MediaInfo)> {
+pub(super) fn first_frame(
+    path: &std::path::Path,
+) -> Result<(crate::raster::Image, media::MediaInfo)> {
     let mut decoder = media::decode::Decoder::open(path)?;
     let info = decoder.info().clone();
     let frame = decoder
@@ -532,10 +536,7 @@ pub(super) async fn audio_devices(cx: &mut AsyncApp) -> Result<Option<Response>>
 /// Lists audio devices in the background and refreshes the tray with them.
 pub(super) fn refresh_devices(cx: &mut App) {
     cx.spawn(async move |cx| {
-        match cx
-            .background_spawn(async { media::audio::devices() })
-            .await
-        {
+        match cx.background_spawn(async { media::audio::devices() }).await {
             Ok(devices) => daemon(cx, |d, _| d.audio_devices = devices),
             Err(e) => log::warn!("listing audio devices: {e:#}"),
         }
@@ -561,7 +562,10 @@ pub(super) fn set_fps(kind: Kind, fps: u32, cx: &mut App) {
         Kind::Video => "video_fps",
         Kind::Animation => "animation_fps",
     };
-    persist(&[(&["record", key], toml_edit::Value::from(i64::from(fps)))], cx);
+    persist(
+        &[(&["record", key], toml_edit::Value::from(i64::from(fps)))],
+        cx,
+    );
 }
 
 fn persist(values: &[(&[&str], toml_edit::Value)], cx: &mut App) {

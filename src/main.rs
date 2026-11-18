@@ -146,8 +146,7 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             } else {
                 let mut code = ExitCode::SUCCESS;
                 for path in &rest {
-                    let path =
-                        std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                    let path = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
                     let result = ipc::send_or_spawn(
                         &socket,
                         &Request::Open(path),

@@ -1,15 +1,16 @@
 [Desktop Entry]
 Type=Application
 Name=quikscope
-GenericName=Screenshot annotator
-Comment=Open the last screenshot in the quikscope editor
-Exec=quikscope open-last
+GenericName=Screenshot and recording editor
+Comment=Annotate images and animations, trim and convert videos
+Exec=quikscope open %F
 Icon=quikscope
 Terminal=false
 Categories=Graphics;Utility;
-Keywords=screenshot;annotate;capture;
+Keywords=screenshot;annotate;capture;record;screencast;gif;video;
+MimeType=image/png;image/jpeg;image/webp;image/gif;image/avif;image/jxl;image/apng;video/mp4;video/x-matroska;video/quicktime;video/webm;
 StartupNotify=false
-Actions=region;screen;
+Actions=region;screen;record-video;record-animation;
 
 [Desktop Action region]
 Name=Capture a region
@@ -18,3 +19,11 @@ Exec=quikscope capture region
 [Desktop Action screen]
 Name=Capture all screens
 Exec=quikscope capture screen
+
+[Desktop Action record-video]
+Name=Record a video (run again to stop)
+Exec=quikscope record video
+
+[Desktop Action record-animation]
+Name=Record an animation (run again to stop)
+Exec=quikscope record animation

@@ -305,7 +305,9 @@ impl Request {
                 return Ok(Request::Capture(mode, o));
             }
             "record" => {
-                let first = words.next().ok_or("record needs video, animation or an action")?;
+                let first = words
+                    .next()
+                    .ok_or("record needs video, animation or an action")?;
                 if let Some(action) = RecordAction::parse(first) {
                     Request::RecordControl(action)
                 } else {
@@ -564,7 +566,10 @@ impl Response {
                 .next()
                 .and_then(|s| s.parse().ok())
                 .ok_or_else(malformed)?;
-            let path = parts.next().filter(|p| !p.is_empty()).ok_or_else(malformed)?;
+            let path = parts
+                .next()
+                .filter(|p| !p.is_empty())
+                .ok_or_else(malformed)?;
             return Ok(Response::Recorded {
                 id,
                 width,
