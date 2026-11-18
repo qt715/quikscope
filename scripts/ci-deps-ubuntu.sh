@@ -6,4 +6,6 @@ sudo apt-get install -y --no-install-recommends \
   clang pkg-config \
   libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
   libfontconfig-dev libfreetype-dev libssl-dev libzstd-dev libasound2-dev \
-  libvulkan1 mesa-vulkan-drivers
+  libvulkan1 mesa-vulkan-drivers \
+  libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev libavutil-dev \
+  libswscale-dev libswresample-dev libgbm-dev
