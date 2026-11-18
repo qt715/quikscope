@@ -88,9 +88,12 @@ ttf-parser = "0.25"
 unicode-bidi = "0.3"
 unicode-script = "0.5"
 unicode-segmentation = "1"
-ffmpeg-next = "9.1"
+ffmpeg-next = { version = "9.1", default-features = false, features = ["codec", "format", "filter", "software-scaling", "software-resampling"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+libpulse-binding = "2.30"
+libpulse-simple-binding = "2.29"
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 pipewire = "0.10"
 rustix = { version = "1", features = ["event", "fs", "pipe"] }
