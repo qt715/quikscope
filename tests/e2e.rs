@@ -700,6 +700,73 @@ fn geometry_capture_crops_exactly_and_saves() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("outside every output"));
 }
 
+/// Spread of a frame's green channel: a black or blank recording has none.
+fn green_spread(img: &Image) -> u8 {
+    let greens = img.data.chunks_exact(4).map(|p| p[1]);
+    let (lo, hi) = greens.fold((255, 0), |(lo, hi), g| (g.min(lo), g.max(hi)));
+    hi.saturating_sub(lo)
+}
+
+#[test]
+fn recording_toggles_saves_and_offers_the_file() {
+    use quikscope::media::{Kind, decode};
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+    let dir = s.root().join("home/Videos/Screencasts");
+    for (kind, size) in [("video", "320x240"), ("animation", "160x120")] {
+        let out = s.quikscope(&["record", kind, "-g", &format!("10,10 {size}"), "--no-audio"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(stdout(&out), format!("recording {kind} {size}"));
+        let status = stdout(&s.quikscope(&["record", "status"]));
+        assert!(status.starts_with(kind), "{status}");
+        std::thread::sleep(Duration::from_millis(1200));
+        // The same command stops what it started.
+        let out = s.quikscope(&["record", kind]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let path = PathBuf::from(stdout(&out));
+        assert!(path.starts_with(&dir), "{}", path.display());
+        assert_eq!(stdout(&s.quikscope(&["record", "status"])), "idle");
+
+        let info = decode::probe(&path).unwrap();
+        assert_eq!(format!("{}x{}", info.width, info.height), size);
+        assert!(info.duration >= Duration::from_millis(800), "{info:?}");
+        let expected = if kind == "video" {
+            Kind::Video
+        } else {
+            Kind::Animation
+        };
+        assert_eq!(info.kind, expected);
+        let frame = decode::Decoder::open(&path)
+            .unwrap()
+            .next_frame()
+            .unwrap()
+            .unwrap();
+        assert!(
+            green_spread(&frame.image) > 64,
+            "the recording shows the test pattern"
+        );
+
+        let uris = String::from_utf8_lossy(&s.helper(&["paste", "text/uri-list"]).stdout)
+            .trim()
+            .to_string();
+        assert!(
+            uris.starts_with("file://")
+                && uris.ends_with(path.file_name().unwrap().to_str().unwrap()),
+            "{uris}"
+        );
+    }
+}
+
 #[test]
 fn region_drag_selects_a_rectangle() {
     let Some(mut s) = Session::start() else {
