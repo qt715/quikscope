@@ -28,5 +28,40 @@
     <string>quikscope captures your screen so you can select, annotate, copy, and save screenshots.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>quikscope records microphone audio when you include an input device in a screen recording.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.png</string>
+                <string>public.jpeg</string>
+                <string>org.webmproject.webp</string>
+                <string>com.compuserve.gif</string>
+                <string>public.avif</string>
+                <string>public.jpeg-xl</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.mpeg-4</string>
+                <string>com.apple.quicktime-movie</string>
+                <string>org.matroska.mkv</string>
+                <string>org.webmproject.webm</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

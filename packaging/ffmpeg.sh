@@ -26,8 +26,15 @@ dir="${dir%.zip}"
 if [ ! -d "$dir/lib" ]; then
   case "$name" in
     *.tar.xz) tar -xJf "$archive" -C "$dest" ;;
-    *.zip) unzip -q -o "$archive" -d "$dest" ;;
+    *.zip)
+      if command -v unzip >/dev/null; then
+        unzip -q -o "$archive" -d "$dest"
+      else
+        # Windows runners' Git Bash has no unzip.
+        powershell.exe -NoProfile -Command "Expand-Archive -Force -LiteralPath '$(cygpath -w "$archive")' -DestinationPath '$(cygpath -w "$dest")'"
+      fi ;;
   esac
 fi
 test -f "$dir/include/libavcodec/avcodec.h"
-(cd "$dir" && pwd)
+# Windows tools (Cargo, NSIS) need a native path, not Git Bash's /d/...
+if command -v cygpath >/dev/null; then cygpath -w "$(cd "$dir" && pwd)"; else (cd "$dir" && pwd); fi

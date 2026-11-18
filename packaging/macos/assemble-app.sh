@@ -44,6 +44,20 @@ for license in LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html; do
 done
 cp "$root/assets/fonts/INTER-LICENSE.txt" "$app/Contents/Resources/Licenses/"
 cp "$root/assets/icons/LICENSE" "$app/Contents/Resources/Licenses/ICONS-LICENSE"
+# FFmpeg (packaging/macos/build-ffmpeg.sh, possibly lipo-merged): the binary
+# loads @rpath/lib<name>.<major>.dylib with rpath @executable_path/../Frameworks.
+ffmpeg_lib="${FFMPEG_LIB:?set FFMPEG_LIB to the FFmpeg lib directory to bundle}"
+mkdir -p "$app/Contents/Frameworks"
+dylibs=()
+for dylib in "$ffmpeg_lib"/lib*.dylib; do
+    [[ "$(basename "$dylib")" =~ ^lib[a-z]+\.[0-9]+\.dylib$ ]] && dylibs+=("$dylib")
+done
+[[ ${#dylibs[@]} -eq 7 ]] || { echo "Expected 7 FFmpeg dylibs in $ffmpeg_lib, found ${#dylibs[@]}" >&2; exit 1; }
+for dylib in "${dylibs[@]}"; do
+    cp -L "$dylib" "$app/Contents/Frameworks/"
+    codesign --force --sign - "$app/Contents/Frameworks/$(basename "$dylib")"
+done
+cp "$ffmpeg_lib/../LICENSE.txt" "$app/Contents/Resources/Licenses/FFMPEG-LICENSE.txt"
 # Ad-hoc signing gives local/CI bundles a coherent identity. Distribution
 # signing and notarization are separate release operations.
 codesign --force --sign - --identifier io.github.qt715.quikscope "$app"

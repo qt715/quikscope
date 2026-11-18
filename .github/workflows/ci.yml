@@ -90,6 +90,12 @@ jobs:
           rustflags: ""
           components: clippy
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: LGPL FFmpeg development build (DLLs on PATH for tests)
+        shell: bash
+        run: |
+          dir=$(packaging/ffmpeg.sh win64)
+          echo "FFMPEG_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$dir\\bin" >> "$GITHUB_PATH"
       - run: cargo build --locked --release
       - run: cargo clippy --locked --all-targets -- --deny warnings
       # GPUI 0.3.10 returns no headless renderer on Windows. The two
@@ -112,8 +118,23 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Require native ARM64 runner
         run: test "$(uname -m)" = arm64
-      - name: Native OCR runtime
-        run: brew install tesseract
+      - name: Native OCR runtime and FFmpeg build tools
+        run: brew install tesseract nasm
+      - name: Cache the LGPL FFmpeg build
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg
+          key: ffmpeg-macos-${{ hashFiles('packaging/macos/build-ffmpeg.sh') }}
+      - name: Build LGPL FFmpeg for both architectures
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          packaging/macos/build-ffmpeg.sh arm64 "$HOME/ffmpeg/arm64"
+          packaging/macos/build-ffmpeg.sh x86_64 "$HOME/ffmpeg/x86_64"
+      - name: Point Cargo and test binaries at the ARM64 build
+        run: |
+          echo "FFMPEG_DIR=$HOME/ffmpeg/arm64" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$HOME/ffmpeg/arm64/lib" >> "$GITHUB_ENV"
       - name: Resolve bundled UI font through CoreText
         run: |
           xcrun swift - "$PWD/assets/fonts/InterVariable.ttf" <<'SWIFT'
@@ -135,7 +156,7 @@ jobs:
           SWIFT
       - run: cargo build --locked --release
       - name: Compile Intel macOS release
-        run: cargo build --locked --release --target x86_64-apple-darwin
+        run: FFMPEG_DIR="$HOME/ffmpeg/x86_64" cargo build --locked --release --target x86_64-apple-darwin
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Check native regression sensitivity
         run: |
@@ -175,7 +196,7 @@ jobs:
           QUIKSCOPE_REQUIRE_OCR: "1"
         run: cargo test --locked --test ocr a_region_reads_only_what_it_covers_and_maps_back
       - name: Assemble app
-        run: packaging/macos/assemble-app.sh target/release/quikscope dist/quikscope.app
+        run: FFMPEG_LIB="$HOME/ffmpeg/arm64/lib" packaging/macos/assemble-app.sh target/release/quikscope dist/quikscope.app
       - name: ScreenCaptureKit daemon smoke
         run: packaging/macos/ci-smoke.sh "$GITHUB_WORKSPACE/dist/quikscope.app"
       - name: Upload capture and diagnostic logs

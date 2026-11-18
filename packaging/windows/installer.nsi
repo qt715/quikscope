@@ -13,6 +13,17 @@ Unicode true
 !ifndef OUTPUT
   !define OUTPUT "${SOURCE}/dist/quikscope-${VERSION}-windows-x86_64-installer.exe"
 !endif
+!ifndef FFMPEG
+  !error "Pass /DFFMPEG=<directory printed by packaging/ffmpeg.sh win64>"
+!endif
+
+!macro OpenWith EXT
+  WriteRegStr HKCU "Software\Classes\${EXT}\OpenWithProgids" "quikscope.media" ""
+  WriteRegStr HKCU "Software\Classes\Applications\quikscope.exe\SupportedTypes" "${EXT}" ""
+!macroend
+!macro RemoveOpenWith EXT
+  DeleteRegValue HKCU "Software\Classes\${EXT}\OpenWithProgids" "quikscope.media"
+!macroend
 Name "quikscope"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\quikscope"
@@ -73,8 +84,34 @@ Section "quikscope (required)" Main
   File "${SOURCE}\README.md"
   File "${SOURCE}\assets\fonts\INTER-LICENSE.txt"
   File /oname=LUCIDE-LICENSE.txt "${SOURCE}\assets\icons\LICENSE"
+  # LGPL FFmpeg the executable links (packaging/ffmpeg.sh win64).
+  File "${FFMPEG}\bin\avcodec-*.dll"
+  File "${FFMPEG}\bin\avdevice-*.dll"
+  File "${FFMPEG}\bin\avfilter-*.dll"
+  File "${FFMPEG}\bin\avformat-*.dll"
+  File "${FFMPEG}\bin\avutil-*.dll"
+  File "${FFMPEG}\bin\swresample-*.dll"
+  File "${FFMPEG}\bin\swscale-*.dll"
+  File /oname=FFMPEG-LICENSE.txt "${FFMPEG}\LICENSE.txt"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\quikscope.lnk" "$INSTDIR\quikscope.exe" "daemon" "$INSTDIR\quikscope.ico"
+  # Explorer's "Open with" list: images, animations and videos. Defaults
+  # stay with the user's existing apps; Windows decides those itself.
+  WriteRegStr HKCU "Software\Classes\quikscope.media" "" "quikscope media"
+  WriteRegStr HKCU "Software\Classes\quikscope.media\DefaultIcon" "" "$INSTDIR\quikscope.ico"
+  WriteRegStr HKCU "Software\Classes\quikscope.media\shell\open\command" "" '"$INSTDIR\quikscope.exe" open "%1"'
+  WriteRegStr HKCU "Software\Classes\Applications\quikscope.exe\shell\open\command" "" '"$INSTDIR\quikscope.exe" open "%1"'
+  !insertmacro OpenWith ".png"
+  !insertmacro OpenWith ".jpg"
+  !insertmacro OpenWith ".jpeg"
+  !insertmacro OpenWith ".webp"
+  !insertmacro OpenWith ".gif"
+  !insertmacro OpenWith ".avif"
+  !insertmacro OpenWith ".jxl"
+  !insertmacro OpenWith ".mp4"
+  !insertmacro OpenWith ".mkv"
+  !insertmacro OpenWith ".mov"
+  !insertmacro OpenWith ".webm"
   WriteRegStr HKCU "Software\quikscope" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\quikscope" "DisplayName" "quikscope"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\quikscope" "DisplayVersion" "${VERSION}"
@@ -101,10 +138,25 @@ Section "Uninstall"
   Delete "$LOCALAPPDATA\quikscope\last.raw.*.part"
   Delete "$LOCALAPPDATA\quikscope\daemon.log"
   Delete "$LOCALAPPDATA\quikscope\ipc.sock"
+  # Lossless animation masters are cache, unlike saved recordings.
+  RMDir /r "$LOCALAPPDATA\quikscope\recordings"
   RMDir "$LOCALAPPDATA\quikscope"
   Delete "$SMPROGRAMS\quikscope.lnk"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\quikscope"
   DeleteRegKey HKCU "Software\quikscope"
+  DeleteRegKey HKCU "Software\Classes\quikscope.media"
+  DeleteRegKey HKCU "Software\Classes\Applications\quikscope.exe"
+  !insertmacro RemoveOpenWith ".png"
+  !insertmacro RemoveOpenWith ".jpg"
+  !insertmacro RemoveOpenWith ".jpeg"
+  !insertmacro RemoveOpenWith ".webp"
+  !insertmacro RemoveOpenWith ".gif"
+  !insertmacro RemoveOpenWith ".avif"
+  !insertmacro RemoveOpenWith ".jxl"
+  !insertmacro RemoveOpenWith ".mp4"
+  !insertmacro RemoveOpenWith ".mkv"
+  !insertmacro RemoveOpenWith ".mov"
+  !insertmacro RemoveOpenWith ".webm"
   Delete "$INSTDIR\quikscope.ico"
   Delete "$INSTDIR\LICENSE-MIT"
   Delete "$INSTDIR\LICENSE-APACHE"
@@ -112,6 +164,14 @@ Section "Uninstall"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\INTER-LICENSE.txt"
   Delete "$INSTDIR\LUCIDE-LICENSE.txt"
+  Delete "$INSTDIR\FFMPEG-LICENSE.txt"
+  Delete "$INSTDIR\avcodec-*.dll"
+  Delete "$INSTDIR\avdevice-*.dll"
+  Delete "$INSTDIR\avfilter-*.dll"
+  Delete "$INSTDIR\avformat-*.dll"
+  Delete "$INSTDIR\avutil-*.dll"
+  Delete "$INSTDIR\swresample-*.dll"
+  Delete "$INSTDIR\swscale-*.dll"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   # User configuration and screenshots intentionally remain untouched.

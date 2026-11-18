@@ -84,6 +84,9 @@ jobs:
       - name: Generate licence report
         shell: bash
         run: packaging/licenses.sh
+      - name: Fetch the bundled LGPL FFmpeg build
+        shell: bash
+        run: echo "FFMPEG_DIR=$(packaging/ffmpeg.sh win64)" >> "$GITHUB_ENV"
       - name: Build native executable and record Cargo's output path
         id: native
         shell: pwsh
@@ -115,7 +118,7 @@ jobs:
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           New-Item -ItemType Directory -Force dist | Out-Null
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /WX "/DVERSION=$version" "/DSOURCE=$pwd" "/DBINARY=${{ steps.native.outputs.binary }}" packaging/windows/installer.nsi
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /WX "/DVERSION=$version" "/DSOURCE=$pwd" "/DBINARY=${{ steps.native.outputs.binary }}" "/DFFMPEG=$env:FFMPEG_DIR" packaging/windows/installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
@@ -138,13 +141,25 @@ jobs:
           test -f packaging/macos/Info.plist
           test -x packaging/macos/assemble-app.sh
           test -f assets/branding/quikscope.icns
-      - run: cargo build --frozen --release --target aarch64-apple-darwin --bin quikscope
-      - run: cargo build --frozen --release --target x86_64-apple-darwin --bin quikscope
+      - run: brew install nasm
+      - name: Build LGPL FFmpeg for both architectures and merge them
+        run: |
+          packaging/macos/build-ffmpeg.sh arm64 "$HOME/ffmpeg/arm64"
+          packaging/macos/build-ffmpeg.sh x86_64 "$HOME/ffmpeg/x86_64"
+          mkdir -p "$HOME/ffmpeg/universal/lib"
+          cp "$HOME/ffmpeg/arm64/LICENSE.txt" "$HOME/ffmpeg/universal/"
+          for dylib in "$HOME"/ffmpeg/arm64/lib/lib*.dylib; do
+            name=$(basename "$dylib")
+            [[ "$name" =~ ^lib[a-z]+\.[0-9]+\.dylib$ ]] || continue
+            lipo -create "$dylib" "$HOME/ffmpeg/x86_64/lib/$name" -output "$HOME/ffmpeg/universal/lib/$name"
+          done
+      - run: FFMPEG_DIR="$HOME/ffmpeg/arm64" cargo build --frozen --release --target aarch64-apple-darwin --bin quikscope
+      - run: FFMPEG_DIR="$HOME/ffmpeg/x86_64" cargo build --frozen --release --target x86_64-apple-darwin --bin quikscope
       - name: Assemble universal app and unsigned disk image
         run: |
           mkdir -p dist/dmg
           lipo -create target/aarch64-apple-darwin/release/quikscope target/x86_64-apple-darwin/release/quikscope -output dist/quikscope
-          packaging/macos/assemble-app.sh dist/quikscope dist/dmg/quikscope.app
+          FFMPEG_LIB="$HOME/ffmpeg/universal/lib" packaging/macos/assemble-app.sh dist/quikscope dist/dmg/quikscope.app
           ln -s /Applications dist/dmg/Applications
           version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
           hdiutil create -volname quikscope -srcfolder dist/dmg -ov -format UDZO "dist/quikscope-$version-macos-universal.dmg"
