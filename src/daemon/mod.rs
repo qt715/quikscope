@@ -205,6 +205,7 @@ pub fn run(socket: PathBuf) -> Result<()> {
             audio_devices: Vec::new(),
         });
         record::refresh_devices(cx);
+        record::clear_masters(cx);
         match prewarm {
             Some(options) => prewarm_gpu(options, cx),
             None => log::debug!("GPU prewarm skipped: no invisible surface on this backend"),
@@ -1080,6 +1081,18 @@ fn insert_shot(shot: Shot, cx: &mut AsyncApp) -> Arc<Shot> {
         while d.shots.len() > KEEP_SHOTS {
             if let Some(old) = d.shots.pop_front() {
                 d.docs.remove(&old.id);
+                // A lossless animation master is only reachable through its
+                // shot; an editor still showing it keeps it until restart.
+                if let Some(animation) = &old.animation
+                    && animation.path.starts_with(record::masters_dir())
+                    && !d.editors.contains_key(&old.id)
+                {
+                    let path = animation.path.clone();
+                    cx.background_spawn(async move {
+                        let _ = std::fs::remove_file(path);
+                    })
+                    .detach();
+                }
             }
         }
         // GPU tiles are built off the main thread so a later "open editor"

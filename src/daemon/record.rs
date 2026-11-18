@@ -131,9 +131,7 @@ async fn start(o: RecordOptions, cx: &mut AsyncApp) -> Result<Option<Response>> 
         d.next_id += 1;
         id
     });
-    let master = config::cache_dir()
-        .join("recordings")
-        .join(format!("{id}-{}.mkv", unix_secs(now)));
+    let master = masters_dir().join(format!("{id}-{}.mkv", unix_secs(now)));
     let session_config = SessionConfig {
         path: path.clone(),
         format,
@@ -531,6 +529,23 @@ pub(super) async fn audio_devices(cx: &mut AsyncApp) -> Result<Option<Response>>
     daemon(cx, |d, _| d.audio_devices = devices.clone());
     update_tray(cx);
     Ok(Some(Response::AudioDevices(devices)))
+}
+
+/// Lossless animation masters (cache, not user files).
+pub(super) fn masters_dir() -> std::path::PathBuf {
+    config::cache_dir().join("recordings")
+}
+
+/// Masters from earlier daemon runs belong to shots that no longer exist.
+pub(super) fn clear_masters(cx: &mut App) {
+    cx.background_spawn(async {
+        if let Err(e) = std::fs::remove_dir_all(masters_dir())
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("clearing old animation masters: {e}");
+        }
+    })
+    .detach();
 }
 
 /// Lists audio devices in the background and refreshes the tray with them.
