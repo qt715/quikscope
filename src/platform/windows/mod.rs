@@ -3,6 +3,7 @@
 
 mod capture;
 mod desktop;
+mod record;
 mod shell;
 
 pub use shell::Shell;
@@ -69,11 +70,11 @@ pub(super) fn connect(events: EventSink, config: &crate::config::Config) -> Plat
         desktop: Arc::new(desktop::WindowsDesktop) as Arc<dyn Desktop>,
         clipboard: shell.as_ref().map(|s| s.clone() as Arc<dyn Clipboard>),
         notifier: shell.as_ref().map(|s| s.clone() as Arc<dyn Notifier>),
+        tray: shell.as_ref().map(|s| s.clone() as Arc<dyn super::Tray>),
         shell,
         surfaces: Surfaces::Windows,
         capture_may_prompt: false,
-        recorder: None,
-        tray: None,
+        recorder: Some(Arc::new(record::WindowsRecorder)),
     }
 }
 
