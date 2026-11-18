@@ -7,7 +7,7 @@ use objc2_app_kit::{
     NSImage, NSPasteboard, NSPasteboardItem, NSPasteboardItemDataProvider, NSPasteboardTypePNG,
     NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardWriting,
 };
-use objc2_foundation::{NSArray, NSData, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSArray, NSData, NSObject, NSObjectProtocol, NSString, NSURL};
 use std::sync::Arc;
 
 pub struct Pasteboard;
@@ -47,8 +47,23 @@ impl Clipboard for Pasteboard {
         });
     }
     fn set_files(&self, paths: &[std::path::PathBuf]) {
-        let _ = paths;
-        todo!("macOS agent: file URLs")
+        let paths = paths.to_vec();
+        super::shell::on_main(move || {
+            let urls: Vec<_> = paths.iter().filter_map(|path| {
+                match path.to_str() {
+                    Some(path) => Some(NSURL::fileURLWithPath(&NSString::from_str(path))),
+                    None => { log::error!("macOS pasteboard file path is not UTF-8: {path:?}"); None }
+                }
+            }).collect();
+            if urls.len() != paths.len() { return; }
+            let objects: Vec<&ProtocolObject<dyn NSPasteboardWriting>> =
+                urls.iter().map(|url| ProtocolObject::from_ref(&**url)).collect();
+            let board = NSPasteboard::generalPasteboard();
+            board.clearContents();
+            if !board.writeObjects(&NSArray::from_slice(&objects)) {
+                log::error!("macOS pasteboard rejected file URLs");
+            }
+        });
     }
 }
 

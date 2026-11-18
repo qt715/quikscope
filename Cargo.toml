@@ -112,6 +112,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features =
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
 objc2-user-notifications = "0.3"
 objc2-screen-capture-kit = "0.3"
 objc2-core-media = "0.3"

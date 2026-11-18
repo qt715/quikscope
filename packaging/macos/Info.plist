@@ -26,5 +26,7 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>quikscope captures your screen so you can select, annotate, copy, and save screenshots.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>quikscope records microphone audio when you include an input device in a screen recording.</string>
 </dict>
 </plist>

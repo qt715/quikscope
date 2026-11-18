@@ -14,12 +14,18 @@ use objc2_app_kit::{NSAccessibility, NSImage, NSMenu, NSMenuItem, NSStatusBar, N
 use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, NSString};
 
 use crate::config::Hotkeys;
-use crate::ipc::{CaptureOptions, Mode, Request, Switch};
-use crate::platform::{Event, EventSink};
+use crate::ipc::{CaptureOptions, Mode, Request, Switch, RecordAction, RecordOptions};
+use crate::media::Kind;
+use crate::platform::{Event, EventSink, Tray, TrayState, VIDEO_FPS_CHOICES, ANIMATION_FPS_CHOICES};
 
 // Cocoa objects never cross threads. Platform may freely share the handle.
 pub struct Shell {
     id: u64,
+}
+pub struct MenuTray(u64);
+struct MenuActions {
+    events: EventSink,
+    dynamic: RefCell<std::collections::HashMap<isize, Event>>,
 }
 struct NativeShell {
     id: u64,
@@ -36,14 +42,17 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 define_class!(
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
-    #[ivars = EventSink]
+    #[ivars = MenuActions]
     struct MenuTarget;
     unsafe impl NSObjectProtocol for MenuTarget {}
     impl MenuTarget {
         #[unsafe(method(performMenuAction:))]
         fn perform_menu_action(&self, sender: &NSMenuItem) {
-            if let Some(request) = request(sender.tag() as u32) {
-                deliver(self.ivars(), Event::Request(request));
+            let dynamic = self.ivars().dynamic.borrow().get(&sender.tag()).cloned();
+            if let Some(event) = dynamic {
+                deliver(&self.ivars().events, event);
+            } else if let Some(request) = request(sender.tag() as u32) {
+                deliver(&self.ivars().events, Event::Request(request));
             }
         }
     }
@@ -59,6 +68,11 @@ fn request(id: u32) -> Option<Request> {
         6 => Request::Notifications(Switch::Toggle),
         7 => Request::Quit,
         8 => Request::Pick,
+        9 => Request::Record(RecordOptions::new(Kind::Video)),
+        10 => Request::Record(RecordOptions::new(Kind::Animation)),
+        11 => Request::RecordControl(RecordAction::TogglePause),
+        12 => Request::RecordControl(RecordAction::Stop),
+        13 => Request::RecordControl(RecordAction::Cancel),
         _ => return None,
     })
 }
@@ -70,6 +84,7 @@ fn deliver(events: &EventSink, event: Event) {
 }
 
 impl Shell {
+    pub fn tray(&self) -> MenuTray { MenuTray(self.id) }
     pub fn new(events: EventSink) -> Result<Self> {
         let mtm =
             MainThreadMarker::new().context("macOS shell must be created on the main thread")?;
@@ -77,7 +92,7 @@ impl Shell {
             SHELL.with(|s| s.borrow().is_none()),
             "macOS shell already exists"
         );
-        let this = MenuTarget::alloc(mtm).set_ivars(events.clone());
+        let this = MenuTarget::alloc(mtm).set_ivars(MenuActions { events: events.clone(), dynamic: RefCell::new(std::collections::HashMap::new()) });
         let target: Retained<MenuTarget> = unsafe { msg_send![super(this), init] };
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
@@ -85,6 +100,8 @@ impl Shell {
             (1, "Capture region"),
             (2, "Capture screen"),
             (3, "Capture window"),
+            (9, "Record video"),
+            (10, "Record animation"),
             (4, "Open last capture"),
             (8, "Pick color"),
             (5, "Settings…"),
@@ -169,6 +186,8 @@ impl Shell {
             (2, &hotkeys.screen),
             (3, &hotkeys.window),
             (4, &hotkeys.open_last),
+            (9, &hotkeys.record_video),
+            (10, &hotkeys.record_animation),
         ] {
             if let Some((mods, key)) = parse_hotkey(value)? {
                 ensure!(
@@ -200,6 +219,69 @@ impl Shell {
                 }
             }
         })
+    }
+}
+
+impl Tray for MenuTray {
+    fn update(&self, state: &TrayState) {
+        let id = self.0;
+        let state = state.clone();
+        on_main(move || {
+            SHELL.with(|shell| {
+                let shell = shell.borrow();
+                let Some(native) = shell.as_ref().filter(|s| s.id == id) else { return; };
+                let mtm = MainThreadMarker::new().unwrap();
+                let target = &native._target;
+                let menu = NSMenu::new(mtm);
+                menu.setAutoenablesItems(false);
+                let mut dynamic = target.ivars().dynamic.borrow_mut();
+                dynamic.clear();
+                let add = |menu: &NSMenu, title: &str, tag: isize, checked: bool| {
+                    let entry = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(performMenuAction:)), &NSString::from_str("")) };
+                    entry.setTag(tag);
+                    entry.setState(if checked { 1 } else { 0 });
+                    unsafe { entry.setTarget(Some(target)); }
+                    menu.addItem(&entry);
+                    entry
+                };
+                if let Some(recording) = &state.recording {
+                    let elapsed = recording.elapsed + if recording.paused { std::time::Duration::ZERO } else { recording.at.elapsed() };
+                    let secs = elapsed.as_secs();
+                    let title = format!("{} {:02}:{:02}{}", recording.kind.as_str(), secs / 60, secs % 60, if recording.paused { " (paused)" } else { "" });
+                    add(&menu, &title, 0, false).setEnabled(false);
+                    add(&menu, if recording.paused { "Resume" } else { "Pause" }, 11, false);
+                    add(&menu, "Stop and save", 12, false);
+                    add(&menu, "Discard recording", 13, false);
+                } else {
+                    add(&menu, "Record video", 9, false);
+                    add(&menu, "Record animation", 10, false);
+                }
+                let audio = NSMenu::new(mtm);
+                audio.setAutoenablesItems(false);
+                for (index, (device, checked)) in state.audio.iter().enumerate() {
+                    let tag = 1000 + index as isize;
+                    add(&audio, &device.name, tag, *checked);
+                    dynamic.insert(tag, Event::SetAudio(device.id.clone(), !checked));
+                }
+                add(&menu, "Audio", 0, false).setSubmenu(Some(&audio));
+                for (kind, title, choices, selected, base) in [
+                    (Kind::Video, "Video frame rate", VIDEO_FPS_CHOICES, state.video_fps, 100isize),
+                    (Kind::Animation, "Animation frame rate", ANIMATION_FPS_CHOICES, state.animation_fps, 200isize),
+                ] {
+                    let submenu = NSMenu::new(mtm);
+                    submenu.setAutoenablesItems(false);
+                    for fps in choices {
+                        let tag = base + fps as isize;
+                        add(&submenu, &format!("{fps} fps"), tag, fps == selected);
+                        dynamic.insert(tag, Event::SetFps(kind, fps));
+                    }
+                    add(&menu, title, 0, false).setSubmenu(Some(&submenu));
+                }
+                menu.addItem(&NSMenuItem::separatorItem(mtm));
+                for (id, title) in [(1,"Capture region"),(2,"Capture screen"),(3,"Capture window"),(4,"Open last capture"),(8,"Pick color"),(5,"Settings…"),(6,"Toggle notifications"),(7,"Quit")] { add(&menu, title, id, false); }
+                native.item.setMenu(Some(&menu));
+            });
+        });
     }
 }
 impl Drop for Shell {

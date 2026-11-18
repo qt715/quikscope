@@ -6,6 +6,7 @@ mod capture;
 mod clipboard;
 mod desktop;
 mod notify;
+pub(crate) mod record;
 pub mod shell;
 pub use desktop::selection_outputs;
 pub use shell::autostart;
@@ -26,8 +27,8 @@ pub fn connect(events: EventSink, _config: &crate::config::Config) -> Platform {
         notifier,
         surfaces: Surfaces::MacOS,
         capture_may_prompt: true,
-        recorder: None,
-        tray: None,
+        recorder: Some(Arc::new(record::Recorder)),
+        tray: shell.as_ref().map(|s| Arc::new(s.tray()) as Arc<dyn super::Tray>),
         shell,
     }
 }
