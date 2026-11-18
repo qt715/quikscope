@@ -4597,6 +4597,7 @@ name = "quikscope"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "ash",
  "block2 0.6.2",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",

@@ -2,10 +2,12 @@
 
 mod desktop;
 mod input;
+mod record;
 mod selection;
 
 pub use desktop::Ewmh;
 pub use input::SelectionFocus;
+pub use record::Recorder;
 pub use selection::SelectionOwner;
 
 use std::sync::{Arc, mpsc};

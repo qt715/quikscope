@@ -100,6 +100,7 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
 zbus = "5"
+ash = "0.38"
 
 raw-window-handle = "0.6"
 x11rb = { version = "0.13.2", features = ["randr", "shm", "xfixes", "xtest", "present"] }

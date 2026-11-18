@@ -40,6 +40,8 @@ x11rb::atom_manager! {
         PNG: b"image/png",
         UTF8_MIME: b"text/plain;charset=utf-8",
         TEXT_MIME: b"text/plain",
+        URI_LIST: b"text/uri-list",
+        GNOME_FILES: b"x-special/gnome-copied-files",
     }
 }
 
@@ -78,6 +80,7 @@ enum Command {
 enum Content {
     Png(Arc<PendingPng>, bool),
     Text(Arc<str>),
+    Files(Arc<[std::path::PathBuf]>),
 }
 
 impl SelectionOwner {
@@ -146,8 +149,7 @@ impl Clipboard for SelectionOwner {
     }
 
     fn set_files(&self, paths: &[std::path::PathBuf]) {
-        let _ = paths;
-        todo!("Linux recording agent: text/uri-list + x-special/gnome-copied-files")
+        self.offer(Content::Files(paths.into()));
     }
 }
 
@@ -415,6 +417,19 @@ impl Owner {
                     self.respond(request, Bytes::Text(text), type_)
                 }
             }
+            Content::Files(paths) => {
+                let mime = if request.target == self.atoms.URI_LIST {
+                    "text/uri-list"
+                } else if request.target == self.atoms.GNOME_FILES {
+                    "x-special/gnome-copied-files"
+                } else if request.target == self.atoms.TEXT_MIME {
+                    "text/plain"
+                } else {
+                    return self.notify(request, NONE);
+                };
+                let text = crate::platform::wlroots::data_control::file_content(&paths, mime);
+                self.respond(request, Bytes::Text(text.into()), request.target)
+            }
             _ => self.notify(request, NONE),
         }
     }
@@ -434,6 +449,11 @@ impl Owner {
         match content {
             Content::Png(..) => result.push(self.atoms.PNG),
             Content::Text(_) => result.extend(self.text_targets()),
+            Content::Files(_) => result.extend([
+                self.atoms.URI_LIST,
+                self.atoms.GNOME_FILES,
+                self.atoms.TEXT_MIME,
+            ]),
         }
         result
     }

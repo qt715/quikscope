@@ -240,12 +240,16 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
             .map(|n| Arc::new(n) as Arc<dyn Notifier>)
             .map_err(|e| log::warn!("notifications unavailable: {e:#}"))
             .ok();
-        let tray = config.record.tray.then(|| {
-            sni::StatusNotifier::spawn(events.clone(), &config.record)
-                .map(|tray| Arc::new(tray) as Arc<dyn Tray>)
-                .map_err(|e| log::warn!("system tray unavailable: {e:#}"))
-                .ok()
-        }).flatten();
+        let tray = config
+            .record
+            .tray
+            .then(|| {
+                sni::StatusNotifier::spawn(events.clone(), &config.record)
+                    .map(|tray| Arc::new(tray) as Arc<dyn Tray>)
+                    .map_err(|e| log::warn!("system tray unavailable: {e:#}"))
+                    .ok()
+            })
+            .flatten();
         let backend = std::env::var("QUIKSCOPE_BACKEND").ok();
         if backend.as_deref() == Some("x11")
             || (backend.is_none()
@@ -271,7 +275,7 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
                 notifier,
                 surfaces: Surfaces::X11,
                 capture_may_prompt: false,
-                recorder: None,
+                recorder: Some(Arc::new(x11::Recorder)),
                 tray,
             };
         }
@@ -337,7 +341,7 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
                     .map_err(|e| log::warn!("ScreenCast portal unavailable: {e:#}"))
                     .ok()
             } else {
-                None
+                Some(Arc::new(wlroots::Recorder))
             },
             tray,
         }

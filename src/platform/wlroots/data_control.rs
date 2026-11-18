@@ -37,11 +37,39 @@ const TEXT_MIMES: [&str; 5] = [
     "STRING",
 ];
 
+pub(crate) const FILE_MIMES: [&str; 3] = [
+    "text/uri-list",
+    "x-special/gnome-copied-files",
+    "text/plain",
+];
+
+pub(crate) fn file_content(paths: &[std::path::PathBuf], mime: &str) -> String {
+    let absolute: Vec<_> = paths
+        .iter()
+        .filter_map(|p| std::path::absolute(p).ok())
+        .collect();
+    let uris: Vec<_> = absolute
+        .iter()
+        .filter_map(|p| url::Url::from_file_path(p).ok())
+        .map(|u| u.to_string())
+        .collect();
+    match mime {
+        "text/uri-list" => format!("{}\r\n", uris.join("\r\n")),
+        "x-special/gnome-copied-files" => format!("copy\n{}", uris.join("\n")),
+        _ => absolute
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
 /// What the daemon offers on the clipboard.
 #[derive(Clone)]
 enum Content {
     Png(Arc<PendingPng>),
     Text(Arc<str>),
+    Files(Arc<[std::path::PathBuf]>),
 }
 
 /// Handle to the clipboard thread.
@@ -96,8 +124,7 @@ impl Clipboard for DataControl {
     }
 
     fn set_files(&self, paths: &[std::path::PathBuf]) {
-        let _ = paths;
-        todo!("Linux recording agent: text/uri-list + x-special/gnome-copied-files")
+        self.send(Content::Files(paths.into()));
     }
 }
 
@@ -186,6 +213,7 @@ impl Owner {
         match &content {
             Content::Png(_) => source.offer(PNG_MIME.into()),
             Content::Text(_) => TEXT_MIMES.iter().for_each(|m| source.offer((*m).into())),
+            Content::Files(_) => FILE_MIMES.iter().for_each(|m| source.offer((*m).into())),
         }
         self.device.set_selection(Some(&source));
         if let Some((old, _)) = self.state.current.replace((source, content)) {
@@ -199,10 +227,11 @@ fn serves(content: &Content, mime: &str) -> bool {
     match content {
         Content::Png(_) => mime == PNG_MIME,
         Content::Text(_) => TEXT_MIMES.contains(&mime),
+        Content::Files(_) => FILE_MIMES.contains(&mime),
     }
 }
 
-fn write_to(fd: OwnedFd, content: Content) {
+fn write_to(fd: OwnedFd, content: Content, mime: String) {
     std::thread::spawn(move || {
         let mut file = std::fs::File::from(fd);
         // A reader that hangs up early (EPIPE) is not an error worth logging.
@@ -215,6 +244,9 @@ fn write_to(fd: OwnedFd, content: Content) {
             },
             Content::Text(text) => {
                 let _ = file.write_all(text.as_bytes());
+            }
+            Content::Files(paths) => {
+                let _ = file.write_all(file_content(&paths, &mime).as_bytes());
             }
         }
     });
@@ -238,7 +270,7 @@ impl Dispatch<zwlr_data_control_source_v1::ZwlrDataControlSourceV1, ()> for Stat
                     .filter(|(s, c)| s == source && serves(c, &mime_type))
                     .map(|(_, c)| c.clone());
                 match content {
-                    Some(content) => write_to(fd, content),
+                    Some(content) => write_to(fd, content, mime_type),
                     None => drop(fd),
                 }
             }
@@ -314,5 +346,19 @@ mod tests {
         let png = Content::Png(PendingPng::encode(Arc::new(Image::new(1, 1))));
         assert!(serves(&png, PNG_MIME));
         assert!(!serves(&png, "text/plain"));
+    }
+
+    #[test]
+    fn file_targets_escape_uri_bytes_and_keep_plain_paths() {
+        let paths = [std::path::PathBuf::from("/tmp/a b#日本.mp4")];
+        assert_eq!(
+            file_content(&paths, "text/uri-list"),
+            "file:///tmp/a%20b%23%E6%97%A5%E6%9C%AC.mp4\r\n"
+        );
+        assert_eq!(
+            file_content(&paths, "x-special/gnome-copied-files"),
+            "copy\nfile:///tmp/a%20b%23%E6%97%A5%E6%9C%AC.mp4"
+        );
+        assert_eq!(file_content(&paths, "text/plain"), "/tmp/a b#日本.mp4");
     }
 }

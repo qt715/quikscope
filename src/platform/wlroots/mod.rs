@@ -2,7 +2,9 @@
 //! `wlr-screencopy` for pixels and `wlr-data-control` for the clipboard.
 
 pub mod data_control;
+pub mod record;
 pub mod screencopy;
 
 pub use data_control::DataControl;
+pub use record::Recorder;
 pub use screencopy::Screencopy;
