@@ -502,14 +502,6 @@ makes it the default). The Windows installer adds it to Explorer's **Open
 with** menu, and the macOS app accepts files dropped on it or opened from
 Finder.
 
-## Video editor
-
-A small editor for recordings and other videos: play/pause (`Space`), scrub
-the timeline, drag the in/out handles (or `I`/`O` at the playhead) to trim,
-mute (`M`), then **Save** (`Ctrl+S`, into the recordings folder) or **Copy**
-(`Ctrl+C`, as a file) in MP4, MKV, MOV, GIF, WebP, AVIF or JPEG XL. The
-original file is never modified.
-
 ## Editor
 
 ![The editor with rectangle, arrow and text annotations](docs/images/editor.png)
@@ -589,6 +581,32 @@ Hebrew run right to left (mixed with left-to-right text), Arabic letters
 join, and Indic scripts form conjuncts. Characters the chosen font lacks are
 drawn from Inter, then from whichever installed font has them, so CJK
 appears in your CJK font and emoji in colour.
+
+## Video editor
+
+Video recordings and opened video files open in a lightweight editor: the
+video above a timeline with a filmstrip, trim handles and the playhead;
+transport at the bottom left, outputs at the bottom right. The original file
+is never changed: every output is a new file.
+
+| Action | Keys |
+| --- | --- |
+| Play / pause | `Space` or the play button; playback stops at the out point and restarts from the in point |
+| Seek | Click or drag on the timeline; `Home` / `End` jump to the in / out point |
+| Step | `←` / `→` one frame, `Shift+←` / `Shift+→` one second |
+| Trim | Drag the handles at either end of the timeline, or `I` / `O` to set the in / out point at the playhead |
+| Mute | `M` or the speaker button (files with audio only); muted exports have no audio track |
+| Format | The format button: MP4, MKV, MOV (video) or GIF, WebP, AVIF, JPEG XL (animation, no sound); starts at the file's own container |
+| Save to the recordings folder | `Ctrl+S` or **Save**: exports the trimmed range in the chosen format |
+| Copy as a file (paste into a chat or file manager) | `Ctrl+C`; an untouched clip is copied as it is, otherwise exported first |
+| Annotate frame | `F`: saves the frame at full size as a screenshot PNG and opens it in the annotator |
+| Cancel an export | `Esc` or the × beside the progress bar |
+| Close | `Esc`, `Ctrl+W` |
+
+Audio plays through the default output device, which is opened on the
+first play rather than when the editor opens; picture follows the audio
+clock. Animation exports use the configured animation frame rate (never
+above the source's), and GIFs are scaled to at most 1280 pixels wide.
 
 ## Performance
 

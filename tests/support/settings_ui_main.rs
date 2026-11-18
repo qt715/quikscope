@@ -11,4 +11,5 @@ main_thread_tests![
     welcome_previews_without_file_then_done_commits_live_atomically,
     welcome_done_commits_frozen_choice_too,
     welcome_refuses_config_that_became_invalid_while_open,
+    recording_section_writes_record_values,
 ];

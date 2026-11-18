@@ -215,6 +215,15 @@ pub fn run(socket: PathBuf) -> Result<()> {
                 log::error!("opening settings: {error:#}");
             }
         });
+        cx.on_action::<ui::video_editor::AnnotateFrame>(|action, cx| {
+            let path = action.path.clone();
+            cx.spawn(async move |cx| {
+                if let Err(error) = open_path(path, cx).await {
+                    log::error!("annotating video frame: {error:#}");
+                }
+            })
+            .detach();
+        });
         if welcome && let Err(error) = open_settings(true, cx) {
             log::error!("opening welcome settings: {error:#}");
         }

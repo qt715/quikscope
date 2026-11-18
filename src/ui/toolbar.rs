@@ -41,10 +41,10 @@ pub const ICONS: [&str; 20] = [
 
 /// Distance from the window edges to every panel.
 pub const EDGE: f32 = 10.0;
-const BUTTON: f32 = 32.0;
+pub(super) const BUTTON: f32 = 32.0;
 /// Between neighbouring buttons.
-const GAP: f32 = 2.0;
-const PAD: f32 = 4.0;
+pub(super) const GAP: f32 = 2.0;
+pub(super) const PAD: f32 = 4.0;
 const BORDER: f32 = 1.0;
 /// A 1 px rule with 4 px either side.
 const SEPARATOR: f32 = 1.0 + 2.0 * 4.0;
@@ -117,14 +117,14 @@ pub struct Probes {
     pub scrubber: ScrollHandle,
 }
 
-fn icon(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
+pub(super) fn icon(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
     svg()
         .path(format!("icons/{name}.svg"))
         .size(px(16.))
         .text_color(color)
 }
 
-struct Tip(&'static str);
+pub(super) struct Tip(pub &'static str);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -143,7 +143,7 @@ impl Render for Tip {
 }
 
 /// A square button with a tooltip and no hover style yet (GPUI allows one).
-fn base(id: &'static str, tip: &'static str) -> gpui::Stateful<gpui::Div> {
+pub(super) fn base(id: &'static str, tip: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .size(px(BUTTON))
@@ -155,7 +155,7 @@ fn base(id: &'static str, tip: &'static str) -> gpui::Stateful<gpui::Div> {
         .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
 }
 
-fn button(
+pub(super) fn button(
     id: &'static str,
     tip: &'static str,
     active: bool,
@@ -167,7 +167,7 @@ fn button(
         .when(!enabled, |d| d.opacity(0.35))
 }
 
-fn separator() -> impl IntoElement {
+pub(super) fn separator() -> impl IntoElement {
     div()
         .flex_shrink_0()
         .w(px(1.))
@@ -177,7 +177,7 @@ fn separator() -> impl IntoElement {
 }
 
 /// A floating panel; `probe` records where it was laid out.
-fn panel(id: &'static str, probe: &ScrollHandle) -> gpui::Stateful<gpui::Div> {
+pub(super) fn panel(id: &'static str, probe: &ScrollHandle) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .track_scroll(probe)

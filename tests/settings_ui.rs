@@ -24,6 +24,10 @@ struct Ui {
 
 impl Ui {
     fn new(text: Option<&str>, welcome: bool) -> Self {
+        Self::with_height(text, welcome, 1400.)
+    }
+
+    fn with_height(text: Option<&str>, welcome: bool, height: f32) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         if let Some(text) = text {
@@ -45,7 +49,7 @@ impl Ui {
         cx.update(quikscope::ui::init);
         let p = path.clone();
         let window = cx
-            .open_window(size(px(760.), px(1400.)), |window, cx| {
+            .open_window(size(px(760.), px(height)), |window, cx| {
                 cx.new(|cx| Settings::new(Arc::new(config), p, welcome, callback, window, cx))
             })
             .unwrap();
@@ -257,3 +261,52 @@ pub(super) fn welcome_refuses_config_that_became_invalid_while_open() {
 
 // Native close is deliberately covered by compositor e2e, not simulated here:
 // GPUI's Linux headless PlatformWindow::on_should_close ignores its callback.
+
+pub(super) fn recording_section_writes_record_values() {
+    let mut ui = Ui::with_height(Some("# keep this comment\n"), false, 2600.);
+    for (id, check) in [
+        (
+            "record-video-format:mkv",
+            (|c: &Config| c.record.video_format == "mkv") as fn(&Config) -> bool,
+        ),
+        ("record-video-fps:30", |c| c.record.video_fps == 30),
+        ("record-animation-format:webp", |c| {
+            c.record.animation_format == "webp"
+        }),
+        ("record-animation-fps:15", |c| c.record.animation_fps == 15),
+        ("record-encoder:software", |c| {
+            c.record.encoder == "software"
+        }),
+        ("record-outline", |c| !c.record.outline),
+        ("record-cursor", |c| !c.record.cursor),
+        ("record-clipboard", |c| !c.record.copy_to_clipboard),
+        ("record-notify", |c| !c.record.notify),
+        ("record-open-editor", |c| c.record.open_editor),
+        ("record-audio:default-input", |c| {
+            c.record.audio == ["default-output", "default-input"]
+        }),
+        ("record-audio:default-output", |c| {
+            c.record.audio == ["default-input"]
+        }),
+    ] {
+        ui.click(id);
+        assert!(ui.error().is_none(), "{id}: {:?}", ui.error());
+        assert!(check(&ui.saved()), "{id} was not written");
+        assert!(check(ui.applied.lock().unwrap().last().unwrap()), "{id}");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ui.click("record-tray");
+        assert!(!ui.saved().record.tray);
+    }
+    ui.click("record-save-dir");
+    ui.type_text("~/Clips");
+    ui.key("enter", None);
+    assert_eq!(ui.saved().record.save_dir, "~/Clips");
+    let text = std::fs::read_to_string(&ui.path).unwrap();
+    assert!(text.contains("# keep this comment"));
+
+    // The segmented controls follow the file.
+    ui.click("record-video-fps:120");
+    assert_eq!(ui.saved().record.video_fps, 120);
+}

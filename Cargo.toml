@@ -63,6 +63,11 @@ name = "settings_ui"
 path = "tests/support/settings_ui_main.rs"
 harness = false
 
+[[test]]
+name = "video_editor_ui"
+path = "tests/support/video_editor_ui_main.rs"
+harness = false
+
 [dependencies]
 anyhow = "1"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
@@ -89,9 +94,13 @@ unicode-bidi = "0.3"
 unicode-script = "0.5"
 unicode-segmentation = "1"
 ffmpeg-next = { version = "9.1", default-features = false, features = ["codec", "format", "filter", "software-scaling", "software-resampling"] }
+# Video editor playback. On Linux the PipeWire host (sharing the `pipewire`
+# crate recording uses) is preferred; ALSA is cpal's always-built fallback.
+cpal = "0.18.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+cpal = { version = "0.18.2", features = ["pipewire"] }
 libpulse-binding = "2.30"
 libpulse-simple-binding = "2.29"
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }

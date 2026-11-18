@@ -29,13 +29,19 @@
 
 ### Editors
 
-- Videos open in a small video editor: play, scrub, trim, mute, and export as
-  MP4, MKV, MOV, GIF, WebP, AVIF or JPEG XL; copy the result as a file.
+- Videos open in a small video editor: playback with sound, a filmstrip
+  timeline with trim handles (or `I` / `O`), frame stepping, mute, and export of
+  the trimmed range as MP4, MKV, MOV, GIF, WebP, AVIF or JPEG XL, saved to the
+  recordings folder or copied as a file. `F` opens the current frame in the
+  annotator.
 - Animations open in the annotator: annotations apply to every frame and Save
   or Copy re-encode the animation.
 - The top bar is split up: tools stay at the top, colors/stroke/fill move to a
   side panel that appears while drawing, undo/redo and zoom sit bottom left and
   copy/save/settings bottom right.
+- Settings has a Recording section: formats and frame rates, recordings
+  folder, audio devices, encoder, outline, pointer, clipboard, notification,
+  editor and (Linux) tray options.
 
 ### Opening files
 

@@ -130,6 +130,13 @@ impl AssetSource for Assets {
             "chevron-down",
             "plus",
             "pipette",
+            "play",
+            "pause",
+            "volume-2",
+            "volume-x",
+            "image-plus",
+            "x",
+            "check",
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -442,7 +449,11 @@ mod tests {
 
     #[test]
     fn assets_resolve_every_toolbar_icon() {
-        for name in crate::ui::toolbar::ICONS {
+        let used = crate::ui::toolbar::ICONS
+            .iter()
+            .chain(&crate::ui::video_editor::ICONS)
+            .chain(&["check"]);
+        for name in used {
             assert!(
                 Assets.load(&format!("icons/{name}.svg")).unwrap().is_some(),
                 "{name}"

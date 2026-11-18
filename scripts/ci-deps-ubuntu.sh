@@ -8,4 +8,5 @@ sudo apt-get install -y --no-install-recommends \
   libfontconfig-dev libfreetype-dev libssl-dev libzstd-dev libasound2-dev \
   libvulkan1 mesa-vulkan-drivers \
   libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev libavutil-dev \
-  libswscale-dev libswresample-dev libgbm-dev libpipewire-0.3-dev libpulse-dev
+  libswscale-dev libswresample-dev libgbm-dev libpipewire-0.3-dev libpulse-dev \
+  ffmpeg

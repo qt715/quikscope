@@ -11,7 +11,7 @@ license=('MIT' 'Apache-2.0')
 # Cargo strips release debuginfo, so makepkg must not create an empty debug split.
 options=('!lto' '!debug')
 depends=('glibc' 'libgcc' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'libxcb' 'hicolor-icon-theme'
-         'ffmpeg' 'libpulse' 'libpipewire' 'mesa')
+         'ffmpeg' 'libpulse' 'libpipewire' 'alsa-lib' 'mesa')
 makedepends=('cargo' 'clang' 'cmake' 'pkgconf' 'python' 'openssl' 'libx11' 'zstd' 'alsa-lib' 'fontconfig' 'freetype2')
 optdepends=('tesseract: OCR text extraction' 'tesseract-data-eng: English OCR model' 'xdg-desktop-portal: GNOME/KDE capture backend' 'vulkan-driver: GPU rendering')
 source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver-source.tar.gz")
