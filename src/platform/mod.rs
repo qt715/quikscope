@@ -28,6 +28,8 @@ pub mod hyprland;
 pub mod macos;
 #[cfg(target_os = "linux")]
 pub mod portal;
+#[cfg(target_os = "linux")]
+mod sni;
 #[cfg(windows)]
 pub mod windows;
 #[cfg(target_os = "linux")]
@@ -238,6 +240,12 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
             .map(|n| Arc::new(n) as Arc<dyn Notifier>)
             .map_err(|e| log::warn!("notifications unavailable: {e:#}"))
             .ok();
+        let tray = config.record.tray.then(|| {
+            sni::StatusNotifier::spawn(events.clone(), &config.record)
+                .map(|tray| Arc::new(tray) as Arc<dyn Tray>)
+                .map_err(|e| log::warn!("system tray unavailable: {e:#}"))
+                .ok()
+        }).flatten();
         let backend = std::env::var("QUIKSCOPE_BACKEND").ok();
         if backend.as_deref() == Some("x11")
             || (backend.is_none()
@@ -264,7 +272,7 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
                 surfaces: Surfaces::X11,
                 capture_may_prompt: false,
                 recorder: None,
-                tray: None,
+                tray,
             };
         }
         let desktop: Arc<dyn Desktop> = if hyprland::available() {
@@ -324,7 +332,7 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
             surfaces,
             capture_may_prompt: use_portal,
             recorder: None,
-            tray: None,
+            tray,
         }
     }
     #[cfg(windows)]
