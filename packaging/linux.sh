@@ -10,6 +10,19 @@ mkdir -p dist
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 install -Dm755 "$binary" "$stage/usr/bin/quikscope"
+# Distributions ship FFmpeg under different sonames (and Fedora without H.264
+# encoders), so packages carry the LGPL build the binary was linked against
+# (packaging/ffmpeg.sh; the release build sets RUNPATH=/usr/lib/quikscope).
+bundled=()
+if [ -n "${FFMPEG_DIR:-}" ]; then
+  install -d "$stage/usr/lib/quikscope"
+  for lib in avcodec avdevice avfilter avformat avutil swresample swscale; do
+    soname=$(readelf -d "$FFMPEG_DIR/lib/lib$lib.so" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')
+    install -m644 "$(readlink -f "$FFMPEG_DIR/lib/$soname")" "$stage/usr/lib/quikscope/$soname"
+    bundled+=("$soname")
+  done
+  install -Dm644 "$FFMPEG_DIR/LICENSE.txt" "$stage/usr/share/licenses/quikscope/FFMPEG-LICENSE.txt"
+fi
 install -Dm644 packaging/quikscope.desktop "$stage/usr/share/applications/quikscope.desktop"
 install -Dm644 packaging/quikscope.service "$stage/usr/lib/systemd/user/quikscope.service"
 for size in 16 24 32 48 64 128 256 512; do
@@ -24,10 +37,16 @@ done
 # Debian's scanner resolves DT_NEEDED into distro/version-specific package names.
 mkdir -p "$stage/debian"
 printf 'Source: quikscope\nSection: graphics\nPriority: optional\nMaintainer: quikscope contributors <212748636+qt715@users.noreply.github.com>\n\nPackage: quikscope\nArchitecture: amd64\nDescription: screenshot daemon and annotation editor\n' > "$stage/debian/control"
-debdeps=$(cd "$stage" && dpkg-shlibdeps -O usr/bin/quikscope | cut -d= -f2-)
+# Bundled FFmpeg libraries resolve from the package itself, so they are
+# searched (-l) but have no package to depend on.
+elves=(usr/bin/quikscope "${bundled[@]/#/usr/lib/quikscope/}")
+debdeps=$(cd "$stage" && dpkg-shlibdeps -O -lusr/lib/quikscope --ignore-missing-info "${elves[@]}" | cut -d= -f2-)
 # RPM records ELF soname and GLIBC symbol requirements, rather than guessing
 # Fedora/openSUSE package names. The binary is identical to the .deb binary.
-rpmrequires=$(printf '%s\n' "$stage/usr/bin/quikscope" | /usr/lib/rpm/find-requires)
+rpmrequires=$(printf "$stage/%s\n" "${elves[@]}" | /usr/lib/rpm/find-requires)
+for soname in "${bundled[@]}"; do
+  rpmrequires=$(printf '%s\n' "$rpmrequires" | grep -v "^${soname}(" || true)
+done
 python3 - "$stage" "$version" "$debdeps" "$rpmrequires" <<'PY'
 import json, pathlib, sys
 stage, version, debdeps, rpmdeps = sys.argv[1:]

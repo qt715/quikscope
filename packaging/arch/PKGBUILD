@@ -2,7 +2,7 @@
 pkgname=quikscope
 pkgver=0.2.0
 pkgrel=1
-pkgdesc='Screenshot daemon and GPUI annotation editor'
+pkgdesc='Screenshot and screen recording daemon with GPUI annotation and video editors'
 arch=('x86_64')
 url='https://github.com/qt715/quikscope'
 license=('MIT' 'Apache-2.0')
@@ -10,7 +10,8 @@ license=('MIT' 'Apache-2.0')
 # Keep Cargo's own release LTO, but disable makepkg's injected C/C++ LTO flags.
 # Cargo strips release debuginfo, so makepkg must not create an empty debug split.
 options=('!lto' '!debug')
-depends=('glibc' 'libgcc' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'libxcb' 'hicolor-icon-theme')
+depends=('glibc' 'libgcc' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'libxcb' 'hicolor-icon-theme'
+         'ffmpeg' 'libpulse' 'libpipewire' 'mesa')
 makedepends=('cargo' 'clang' 'cmake' 'pkgconf' 'python' 'openssl' 'libx11' 'zstd' 'alsa-lib' 'fontconfig' 'freetype2')
 optdepends=('tesseract: OCR text extraction' 'tesseract-data-eng: English OCR model' 'xdg-desktop-portal: GNOME/KDE capture backend' 'vulkan-driver: GPU rendering')
 source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver-source.tar.gz")

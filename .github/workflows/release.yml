@@ -22,9 +22,17 @@ jobs:
       - run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.4
       - run: cargo install cargo-about --locked --version 0.8.4
       - run: packaging/licenses.sh
+      - name: Fetch the bundled LGPL FFmpeg build
+        run: echo "FFMPEG_BUNDLE=$(packaging/ffmpeg.sh linux64)" >> "$GITHUB_ENV"
       - name: Build once for both Linux formats
+        env:
+          FFMPEG_DIR: ${{ env.FFMPEG_BUNDLE }}
+          # The packages install the bundled FFmpeg here (packaging/linux.sh).
+          RUSTFLAGS: -D warnings -C link-arg=-Wl,-rpath,/usr/lib/quikscope
         run: cargo build --frozen --release --bin quikscope
       - run: packaging/linux.sh
+        env:
+          FFMPEG_DIR: ${{ env.FFMPEG_BUNDLE }}
       - name: Release source archive and AUR-ready recipe
         shell: bash
         run: |
