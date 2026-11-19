@@ -176,10 +176,11 @@ pub fn init(cx: &mut App) {
 }
 
 /// Closes `window` the way its own close commands should: removed from a
-/// task rather than during the current update, and on Windows hidden first
-/// with the deactivation task that hiding queues run before the removal.
-/// Removing the active window directly (or letting Windows destroy it) runs
-/// that task after GPUI forgot the window, which logs "window not found".
+/// task rather than during the current update, and on Windows hidden first,
+/// with the deactivation and pointer-leave notifications that hiding causes
+/// handled before the removal. Removing the active window directly (or
+/// letting Windows destroy it) delivers those after GPUI forgot the window,
+/// which logs "window not found".
 pub fn close_window(window: &Window, cx: &mut App) {
     let handle = window.window_handle();
     cx.spawn(async move |cx| {
@@ -191,6 +192,19 @@ pub fn close_window(window: &Window, cx: &mut App) {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
     })
     .detach();
+}
+
+/// Makes the title bar's close button (and Alt+F4) close `window` through
+/// [`close_window`]. Only Windows needs it: there the native close destroys
+/// the window before GPUI handles its deactivation.
+pub fn close_natively_through_task(window: &Window, cx: &App) {
+    #[cfg(windows)]
+    window.on_window_should_close(cx, |window, cx| {
+        close_window(window, cx);
+        false
+    });
+    #[cfg(not(windows))]
+    let _ = (window, cx);
 }
 
 /// One GPU texture's worth of a screenshot.

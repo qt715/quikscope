@@ -207,9 +207,20 @@ pub fn focus_overlay(window: &gpui::Window, physical: crate::geom::IRect, cx: &g
 }
 
 /// Hides `window` before its removal; see `ui::close_window`.
+///
+/// GPUI handles a window's deactivation in a task it queues, and its
+/// pointer-leave in a message Windows posts; either one reaching a window
+/// GPUI already removed logs "window not found". So this cancels the
+/// pointer-leave tracking, hides the window and, once Windows has moved the
+/// activation elsewhere (another process's window can take the foreground
+/// only later), lets the queued tasks run while the window still exists.
 pub async fn hide_window(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp) -> Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+    use std::time::{Duration, Instant};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetActiveWindow, TME_CANCEL, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SW_HIDE, ShowWindow};
 
     let hwnd = window.update(cx, |_, window, _| {
         let handle = HasWindowHandle::window_handle(window)
@@ -219,11 +230,30 @@ pub async fn hide_window(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp)
             _ => anyhow::bail!("window has no Win32 handle"),
         }
     })??;
-    // Hide while its GPUI window still exists, and outside an App borrow.
-    // WM_ACTIVATE queues another foreground task; drain it before removal so
-    // that task cannot attempt to update an already-removed window.
+    // Outside an App borrow: these send messages GPUI handles synchronously.
     unsafe {
+        for area in [TME_LEAVE, TME_LEAVE | TME_NONCLIENT] {
+            let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_CANCEL | area,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            });
+        }
         let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    // Timer ticks return to the message loop, which delivers what Windows
+    // posted meanwhile. Bounded: with no other window to activate, this one
+    // stays active.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        cx.background_executor()
+            .timer(Duration::from_millis(5))
+            .await;
+        let active = unsafe { GetActiveWindow() == hwnd || GetForegroundWindow() == hwnd };
+        if !active || Instant::now() >= deadline {
+            break;
+        }
     }
     cx.foreground_executor().spawn(async {}).await;
     Ok(())

@@ -241,6 +241,7 @@ impl VideoEditor {
     ) -> VideoEditor {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        super::close_natively_through_task(window, cx);
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         let video = VideoPlayer::spawn(
             path.clone(),

@@ -44,6 +44,7 @@ impl ColorWindow {
     pub fn new(color: Rgba, window: &mut Window, cx: &mut Context<Self>) -> ColorWindow {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        super::close_natively_through_task(window, cx);
         ColorWindow {
             color,
             status: None,

@@ -372,6 +372,7 @@ impl Editor {
     ) -> Editor {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        super::close_natively_through_task(window, cx);
         cx.observe(&doc, |e, _, cx| {
             e.animation_shapes.clear();
             cx.notify();
