@@ -95,12 +95,13 @@ impl AudioSource for Tone {
 }
 fn config(path: &Path, format: OutputFormat, encoder: EncoderPreference) -> SessionConfig {
     SessionConfig {
-        path: path.into(),
+        output: quikscope::output::OutputFile::replace(path).unwrap(),
         master: path.with_extension("master.mkv"),
         format,
         fps: 20,
         audio: vec![],
         encoder,
+        fragmented: true,
     }
 }
 fn record(
@@ -154,6 +155,7 @@ fn options(format: OutputFormat) -> ExportOptions {
         trim: None,
         mute: true,
         fps: Some(20),
+        fragmented: true,
         max_width: None,
         encoder: EncoderPreference::Software,
     }
@@ -215,7 +217,7 @@ fn animations_seek_trim_overlay_cancel() -> Result<()> {
         let path = dir.path().join(format!("converted.{}", format.extension()));
         export::export(
             &recorded.master,
-            &path,
+            quikscope::output::OutputFile::replace(&path).unwrap(),
             &options(format),
             None,
             &|_| {},
@@ -254,7 +256,7 @@ fn animations_seek_trim_overlay_cancel() -> Result<()> {
     });
     export::export(
         &video,
-        &muted,
+        quikscope::output::OutputFile::replace(&muted).unwrap(),
         &trim,
         None,
         &|_| {},
@@ -271,7 +273,7 @@ fn animations_seek_trim_overlay_cancel() -> Result<()> {
     trim.format = OutputFormat::Mov;
     export::export(
         &video,
-        &with_audio,
+        quikscope::output::OutputFile::replace(&with_audio).unwrap(),
         &trim,
         None,
         &|_| {},
@@ -281,7 +283,7 @@ fn animations_seek_trim_overlay_cancel() -> Result<()> {
     let back = dir.path().join("animation-video.mp4");
     export::export(
         &gif,
-        &back,
+        quikscope::output::OutputFile::replace(&back).unwrap(),
         &options(OutputFormat::Mp4),
         None,
         &|_| {},
@@ -301,7 +303,7 @@ fn animations_seek_trim_overlay_cancel() -> Result<()> {
     small.max_width = Some(80);
     export::export(
         &video,
-        &overlaid,
+        quikscope::output::OutputFile::replace(&overlaid).unwrap(),
         &small,
         Some(&overlay),
         &|_| {},
@@ -319,7 +321,7 @@ fn animations_seek_trim_overlay_cancel() -> Result<()> {
     assert!(
         export::export(
             &video,
-            &cancelled,
+            quikscope::output::OutputFile::replace(&cancelled).unwrap(),
             &options(OutputFormat::Mp4),
             None,
             &|_| cancel.store(true, Ordering::Release),

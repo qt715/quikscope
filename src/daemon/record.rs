@@ -132,26 +132,27 @@ async fn start(o: RecordOptions, cx: &mut AsyncApp) -> Result<Option<Response>> 
         id
     });
     let master = masters_dir().join(format!("{id}-{}.mkv", unix_secs(now)));
-    let session_config = SessionConfig {
-        path: path.clone(),
-        format,
-        master,
-        fps,
-        audio: match kind {
-            Kind::Video => o.audio.clone().unwrap_or_else(|| rc.audio.clone()),
-            Kind::Animation => Vec::new(),
-        },
-        encoder: EncoderPreference::parse(&rc.encoder).unwrap_or_default(),
+    let audio = match kind {
+        Kind::Video => o.audio.clone().unwrap_or_else(|| rc.audio.clone()),
+        Kind::Animation => Vec::new(),
     };
+    let encoder = EncoderPreference::parse(&rc.encoder).unwrap_or_default();
+    let fragmented = rc.mp4_fragmented;
     let session = cx
         .background_spawn(async move {
-            for dir in [session_config.path.parent(), session_config.master.parent()]
-                .into_iter()
-                .flatten()
-            {
+            if let Some(dir) = master.parent() {
                 std::fs::create_dir_all(dir)
                     .with_context(|| format!("creating {}", dir.display()))?;
             }
+            let session_config = SessionConfig {
+                output: crate::output::OutputFile::reserve(&path)?,
+                format,
+                master,
+                fps,
+                audio,
+                encoder,
+                fragmented,
+            };
             Session::start(session_config, source)
         })
         .await?;

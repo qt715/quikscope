@@ -19,22 +19,24 @@ use std::{
 };
 
 /// What to record into.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct SessionConfig {
-    /// Final file. Videos are written here directly (as `<path>.part` until
-    /// finished); animations are first recorded losslessly to `master` and
-    /// encoded into `path` when the session stops.
-    pub path: PathBuf,
+    /// The reserved final file. Videos stream into its partial file;
+    /// animations are first recorded losslessly to `master` and encoded into
+    /// it when the session stops.
+    pub output: crate::output::OutputFile,
     pub format: OutputFormat,
-    /// Lossless intermediate for animations (FFV1 in Matroska), kept after
-    /// the session so the annotator can re-export without generation loss.
-    /// Ignored for videos.
+    /// Lossless intermediate for animations, kept after the session so the
+    /// annotator can re-export without generation loss. Ignored for videos.
     pub master: PathBuf,
     pub fps: u32,
     /// Audio device ids for videos (see [`super::audio::devices`]); ignored
-    /// for animations.
+    /// for animations. Devices that cannot be opened are skipped and
+    /// reported by [`Session::warnings`].
     pub audio: Vec<String>,
     pub encoder: EncoderPreference,
+    /// MP4 layout (see [`super::container::Container::Mp4`]).
+    pub fragmented: bool,
 }
 
 /// A finished recording.
@@ -115,25 +117,42 @@ enum Event {
     Audio(usize, AudioChunk, Duration),
 }
 
+/// The parts of a [`SessionConfig`] the session needs after starting.
+struct Settings {
+    format: OutputFormat,
+    master: PathBuf,
+    fps: u32,
+    encoder: EncoderPreference,
+    fragmented: bool,
+}
+
 pub struct Session {
-    config: SessionConfig,
+    config: Settings,
+    output: Option<crate::output::OutputFile>,
     size: (u32, u32),
     control: Arc<Control>,
     pulls: Vec<JoinHandle<()>>,
     encoder: Option<JoinHandle<Result<(String, OutputFile)>>>,
+    warnings: Vec<String>,
 }
 impl Session {
-    pub fn start(config: SessionConfig, mut source: Box<dyn VideoSource>) -> Result<Self> {
+    pub fn start(config: SessionConfig, source: Box<dyn VideoSource>) -> Result<Self> {
         let mut audio = Vec::new();
+        let mut warnings = Vec::new();
         if config.format.is_video() {
             for id in &config.audio {
-                audio.push(super::audio::open(id)?);
-            }
-            if let Some(source) = source.take_audio() {
-                audio.push(source);
+                match super::audio::open(id) {
+                    Ok(device) => audio.push(device),
+                    Err(error) => {
+                        log::warn!("audio device {id} unavailable: {error:#}");
+                        warnings.push(format!("Recording without {id}: {error:#}"));
+                    }
+                }
             }
         }
-        Self::start_with_audio(config, source, audio)
+        let mut session = Self::start_with_audio(config, source, audio)?;
+        session.warnings = warnings;
+        Ok(session)
     }
 
     /// Allows embedded capture sources to supply additional audio tracks.
@@ -163,10 +182,14 @@ impl Session {
         let size = (first.width() & !1, first.height() & !1);
         let master = !config.format.is_video();
         ensure!(
-            !master || config.master != config.path,
+            !master || config.master != config.output.path(),
             "Animation master and output must differ"
         );
-        let transaction = OutputFile::new(if master { &config.master } else { &config.path });
+        let transaction = OutputFile::new(if master {
+            &config.master
+        } else {
+            config.output.part()
+        });
         let video = VideoEncoder::select(first.av(), config.fps, config.encoder, master)?;
         let mux = Muxer::new(
             &transaction.path,
@@ -265,13 +288,34 @@ impl Session {
             );
         }
         drop(send);
+        let SessionConfig {
+            output,
+            format,
+            master,
+            fps,
+            encoder: preference,
+            fragmented,
+            audio: _,
+        } = config;
         Ok(Self {
-            config,
+            config: Settings {
+                format,
+                master,
+                fps,
+                encoder: preference,
+                fragmented,
+            },
+            output: Some(output),
             size,
             control,
             pulls,
             encoder: Some(encoder),
+            warnings: Vec::new(),
         })
+    }
+    /// Problems that did not stop the recording (skipped audio devices).
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
     pub fn size(&self) -> (u32, u32) {
         self.size
@@ -328,31 +372,35 @@ impl Session {
     pub fn stop(mut self) -> Result<Recorded> {
         let (encoder, file) = self.finish_workers()?;
         file.commit()?;
-        if !self.config.format.is_video() {
+        let output = self.output.take().context("Recording already stopped")?;
+        let path = if self.config.format.is_video() {
+            output.commit()?
+        } else {
             super::export::export(
                 &self.config.master,
-                &self.config.path,
+                output,
                 &super::export::ExportOptions {
                     format: self.config.format,
                     trim: None,
                     mute: true,
                     fps: Some(self.config.fps),
+                    fragmented: self.config.fragmented,
                     max_width: None,
                     encoder: self.config.encoder,
                 },
                 None,
                 &|_| {},
                 &AtomicBool::new(false),
-            )?;
-        }
+            )?
+        };
         let master = if self.config.format.is_video() {
-            self.config.path.clone()
+            path.clone()
         } else {
             self.config.master.clone()
         };
         let thumbnail = super::decode::thumbnail(&master, 384)?;
         Ok(Recorded {
-            path: self.config.path.clone(),
+            path,
             format: self.config.format,
             master,
             width: self.size.0,

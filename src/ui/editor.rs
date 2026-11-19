@@ -1614,6 +1614,8 @@ impl Editor {
             return;
         };
         let format = playback.format;
+        // Repeat saves update the file saved before; everything else is new.
+        let replace = copy || (!new_file && self.saved.is_some());
         let path = if copy {
             let stamp = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -1643,6 +1645,7 @@ impl Editor {
             trim: None,
             mute: true,
             fps: None,
+            fragmented: services.config.record.mp4_fragmented,
             max_width: None,
             encoder: crate::media::EncoderPreference::parse(&services.config.record.encoder)
                 .unwrap_or(crate::media::EncoderPreference::Auto),
@@ -1656,20 +1659,21 @@ impl Editor {
         self.toast = None;
         cx.notify();
         let task = cx.background_spawn(async move {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+            let output = if replace {
+                crate::output::OutputFile::replace(&path)?
+            } else {
+                crate::output::OutputFile::reserve(&path)?
+            };
             // The overlay returns the cropped PNG-renderer output before encoding.
             // Scaling after composition would move annotation coordinates.
             crate::media::export::export(
                 &animation.path,
-                &path,
+                output,
                 &options,
                 Some(&|image| crate::export::composite(&job, image)),
                 &|value| progress.store((value * 100.0) as u32, Ordering::Relaxed),
                 &cancel,
-            )?;
-            Ok::<_, anyhow::Error>(path)
+            )
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;

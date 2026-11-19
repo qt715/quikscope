@@ -23,9 +23,12 @@ pub struct ExportOptions {
     pub trim: Option<Trim>,
     /// Leave audio out (videos only).
     pub mute: bool,
-    /// Frame rate for animations; `None` keeps the source rate (capped at 50
-    /// for GIF, whose delays have 10 ms resolution).
+    /// Resample animations to this rate; `None` keeps every source frame
+    /// with its own duration (variable-delay animations stay exact, within
+    /// the format's precision, e.g. 10 ms for GIF).
     pub fps: Option<u32>,
+    /// MP4 layout (see [`crate::media::container::Container::Mp4`]).
+    pub fragmented: bool,
     /// Scale down so the width is at most this (animations); `None` keeps
     /// the source size.
     pub max_width: Option<u32>,
@@ -35,17 +38,17 @@ pub struct ExportOptions {
 /// Paints annotations onto one decoded frame, BGRA at the source size.
 pub type Overlay<'a> = &'a (dyn Fn(&mut Image) + Sync);
 
-/// Encodes `src` into `dst` (written to `<dst>.part`, then renamed).
-/// `progress` receives 0.0–1.0; setting `cancel` stops early with an error
-/// and removes the partial file.
+/// Encodes `src` into `dst` and commits it, returning the saved path.
+/// `progress` receives 0.0–1.0; setting `cancel` stops early with an error,
+/// and dropping `dst` uncommitted removes the partial file.
 pub fn export(
     src: &Path,
-    dst: &Path,
+    dst: crate::output::OutputFile,
     options: &ExportOptions,
     overlay: Option<Overlay<'_>>,
     progress: &(dyn Fn(f32) + Sync),
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<std::path::PathBuf> {
     use super::{
         Frame,
         decode::AudioDecoder,
@@ -53,7 +56,7 @@ pub fn export(
     };
     use std::{sync::atomic::Ordering, time::Instant};
     super::init();
-    ensure!(src != dst, "Source and export destination must differ");
+    ensure!(src != dst.path(), "Source and export destination must differ");
     let info = super::decode::probe(src)?;
     let start = options.trim.map_or(Duration::ZERO, |t| t.start);
     let end = options.trim.map_or(info.duration, |t| t.end);
@@ -140,7 +143,7 @@ pub fn export(
             Some(&format!("{scale},format=rgb24")),
         )?,
     };
-    let file = OutputFile::new(dst);
+    let file = OutputFile::new(dst.part());
     let mut audio = if options.format.is_video() && !options.mute {
         AudioDecoder::open(src, 48000, 2)?
     } else {
@@ -201,7 +204,7 @@ pub fn export(
     mux.finish()?;
     file.commit()?;
     progress(1.0);
-    Ok(())
+    dst.commit()
 }
 
 struct Frames<'a> {

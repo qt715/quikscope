@@ -13,14 +13,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+pub mod anim;
 pub mod audio;
+pub mod codec;
+pub mod container;
+pub mod convert;
 pub mod decode;
 pub mod encode;
 pub mod export;
 mod frame;
 pub mod record;
 
-pub use frame::Frame;
+pub use frame::{Frame, PixelFormat, Pixels};
 
 /// Audio device id meaning "what the default output plays" (desktop audio).
 pub const DEFAULT_OUTPUT: &str = "default-output";
@@ -193,12 +197,15 @@ pub trait VideoSource: Send {
     /// rate. A static screen may deliver nothing for a while: sources wait
     /// for damage, and the session repeats the last frame as needed. Returns
     /// `Ok(None)` when no new frame arrived within `timeout` (the session then
-    /// checks whether it was stopped).
+    /// checks whether it was stopped). The first frame after opening and
+    /// after [`set_paused(false)`](Self::set_paused) is captured whether or
+    /// not anything changed, so the recording never shows a stale picture.
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>>;
-    /// Audio the capture itself provides (macOS ScreenCaptureKit system
-    /// audio). Called once, before the first frame.
-    fn take_audio(&mut self) -> Option<Box<dyn AudioSource>> {
-        None
+    /// While paused the source stops capturing (no compositor copies, no
+    /// GPU work) and `next_frame` only waits; called from the thread that
+    /// calls `next_frame`.
+    fn set_paused(&mut self, paused: bool) {
+        let _ = paused;
     }
 }
 

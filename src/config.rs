@@ -44,6 +44,10 @@ pub struct RecordConfig {
     pub filename: String,
     /// Container for videos: "mp4", "mkv" or "mov".
     pub video_format: String,
+    /// MP4 layout: fragmented (default) stays playable up to the last second
+    /// if quikscope or the machine dies mid-recording; `false` writes a
+    /// classic MP4 with its index at the front when the recording ends.
+    pub mp4_fragmented: bool,
     /// Format for animations: "gif", "webp", "avif" or "jxl".
     pub animation_format: String,
     /// Frames per second, 1–240 for video and 1–60 for animations.
@@ -192,6 +196,7 @@ impl Default for RecordConfig {
             save_dir: default_record_dir(),
             filename: "recording_%Y%m%d_%H%M%S".into(),
             video_format: "mp4".into(),
+            mp4_fragmented: true,
             animation_format: "gif".into(),
             video_fps: 60,
             animation_fps: 30,
@@ -224,14 +229,14 @@ impl RecordConfig {
             .expect("validated by Config::parse")
     }
 
-    /// Path for a new recording started at `time`, never an existing file.
+    /// Candidate path for a recording started at `time`; reserve it with
+    /// [`crate::output::OutputFile::reserve`], which picks a free name.
     pub fn new_save_path(&self, time: SystemTime, format: crate::media::OutputFormat) -> PathBuf {
-        let name = format!(
+        self.save_dir().join(format!(
             "{}.{}",
             format_time(&self.filename, time),
             format.extension()
-        );
-        unique_path(&self.save_dir(), &name)
+        ))
     }
 }
 
@@ -362,27 +367,12 @@ impl Config {
         expand_home(&self.save_dir)
     }
 
-    /// Path for a new screenshot taken at `time`. Never returns an existing
-    /// file: a numeric suffix is added when two saves land in the same second.
+    /// Candidate path for a screenshot taken at `time`; reserve it with
+    /// [`crate::output::OutputFile::reserve`], which adds a numeric suffix
+    /// when two saves land on the same name.
     pub fn new_save_path(&self, time: SystemTime) -> PathBuf {
-        unique_path(&self.save_dir(), &format_time(&self.filename, time))
+        self.save_dir().join(format_time(&self.filename, time))
     }
-}
-
-/// `dir/name`, or with a numeric suffix (`name-1.ext`) when that exists.
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (name.to_string(), String::new()),
-    };
-    (1..)
-        .map(|n| dir.join(format!("{stem}-{n}{ext}")))
-        .find(|p| !p.exists())
-        .expect("unbounded suffix search")
 }
 
 /// Updates typed config paths (for example `["editor", "stroke"]`) together.
@@ -966,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn save_path_never_overwrites() {
+    fn save_path_reservations_never_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
             save_dir: dir.path().to_string_lossy().into_owned(),
@@ -974,10 +964,10 @@ mod tests {
             ..Config::default()
         };
         let t = SystemTime::now();
-        let first = config.new_save_path(t);
-        assert_eq!(first, dir.path().join("fixed.png"));
-        std::fs::write(&first, b"x").unwrap();
-        assert_eq!(config.new_save_path(t), dir.path().join("fixed-1.png"));
+        let first = crate::output::OutputFile::reserve(&config.new_save_path(t)).unwrap();
+        assert_eq!(first.path(), dir.path().join("fixed.png"));
+        let second = crate::output::OutputFile::reserve(&config.new_save_path(t)).unwrap();
+        assert_eq!(second.path(), dir.path().join("fixed-1.png"));
     }
 
     #[test]

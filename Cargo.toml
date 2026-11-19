@@ -97,6 +97,25 @@ ffmpeg-next = { version = "9.1", default-features = false, features = ["codec", 
 # Video editor playback. On Linux the PipeWire host (sharing the `pipewire`
 # crate recording uses) is preferred; ALSA is cpal's always-built fallback.
 cpal = "0.18.2"
+gpu-video = { version = "0.5", default-features = false }
+openh264 = "0.9"
+opus = "0.4"
+mp4-atom = "0.17"
+mkv-element = "0.4"
+matroska-demuxer = "0.8"
+symphonia-core = "0.6"
+symphonia-codec-aac = "0.6"
+rubato = "5"
+yuv = "0.8"
+gif = "0.14"
+image-webp = "0.2"
+jxl-oxide = "0.12"
+zstd = "0.13"
+fast_image_resize = { version = "6", features = ["only_u8x4"] }
+quantette = { version = "0.6", default-features = false, features = ["threads", "kmeans"] }
+webp-animation = { version = "0.10", features = ["static"] }
+rav1e = { version = "0.8", default-features = false, features = ["threading"] }
+rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

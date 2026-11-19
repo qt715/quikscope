@@ -16,6 +16,7 @@ pub mod geom;
 pub mod ipc;
 pub mod media;
 pub mod ocr;
+pub mod output;
 pub mod platform;
 pub mod raster;
 pub mod render;

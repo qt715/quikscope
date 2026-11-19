@@ -779,6 +779,7 @@ impl VideoEditor {
             trim: self.trimmed().then_some(self.trim),
             mute: self.muted || !self.info.has_audio,
             fps: (!format.is_video()).then(|| record.animation_fps.min(source_fps)),
+            fragmented: record.mp4_fragmented,
             max_width: (format == OutputFormat::Gif).then_some(GIF_MAX_WIDTH),
             encoder: EncoderPreference::parse(&record.encoder).unwrap_or_default(),
         };
@@ -795,21 +796,25 @@ impl VideoEditor {
         let spawned = std::thread::Builder::new()
             .name("quikscope-export".into())
             .spawn(move || {
-                let result = if reencode {
-                    let report = |f: f32| {
-                        // A repaint per whole percent, not per frame.
-                        let before = f32::from_bits(p.swap(f.to_bits(), Ordering::Relaxed));
-                        if (f * 100.0) as u32 != (before * 100.0) as u32 {
-                            let _ = tx.unbounded_send(None);
-                        }
-                    };
-                    create_parent(&dst).and_then(|()| {
-                        crate::media::export::export(&src, &dst, &options, None, &report, &c)
-                    })
-                } else {
-                    copy_file(&src, &dst)
+                let output = match output {
+                    Output::Save => crate::output::OutputFile::reserve(&dst),
+                    Output::Copy => crate::output::OutputFile::replace(&dst),
                 };
-                let _ = tx.unbounded_send(Some(result.map(|()| dst)));
+                let result = output.and_then(|output| {
+                    if reencode {
+                        let report = |f: f32| {
+                            // A repaint per whole percent, not per frame.
+                            let before = f32::from_bits(p.swap(f.to_bits(), Ordering::Relaxed));
+                            if (f * 100.0) as u32 != (before * 100.0) as u32 {
+                                let _ = tx.unbounded_send(None);
+                            }
+                        };
+                        crate::media::export::export(&src, output, &options, None, &report, &c)
+                    } else {
+                        copy_file(&src, output)
+                    }
+                });
+                let _ = tx.unbounded_send(Some(result));
             });
         if let Err(e) = spawned {
             self.show_toast(format!("Export failed: {e}"), true, cx);
@@ -1409,20 +1414,11 @@ fn clip_path(src: &Path, format: OutputFormat) -> PathBuf {
     }
 }
 
-fn create_parent(path: &Path) -> anyhow::Result<()> {
-    let dir = path.parent().context("save path has no parent directory")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
-}
-
 /// Saves an untouched source as it is: no generation loss, no encoder.
-fn copy_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    create_parent(dst)?;
-    let part = dst.with_extension(format!(
-        "{}.part",
-        dst.extension().and_then(|e| e.to_str()).unwrap_or("")
-    ));
-    std::fs::copy(src, &part).with_context(|| format!("writing {}", part.display()))?;
-    std::fs::rename(&part, dst).with_context(|| format!("writing {}", dst.display()))
+fn copy_file(src: &Path, output: crate::output::OutputFile) -> anyhow::Result<PathBuf> {
+    std::fs::copy(src, output.part())
+        .with_context(|| format!("writing {}", output.part().display()))?;
+    output.commit()
 }
 
 impl Focusable for VideoEditor {
