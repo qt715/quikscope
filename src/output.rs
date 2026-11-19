@@ -93,10 +93,39 @@ impl OutputFile {
         &self.part
     }
 
-    /// Publishes the partial file under the final name and returns it.
+    /// Makes the writer write the reserved final file itself, for formats
+    /// that are playable at every point they are flushed (fragmented MP4,
+    /// Matroska): a crash then leaves a playable file under its real name
+    /// instead of an oddly named partial. Dropping without commit still
+    /// deletes it. Only for [`reserve`](Self::reserve)d files: writing in
+    /// place over an existing file would destroy it before the new one is
+    /// complete.
+    pub fn write_in_place(&mut self) -> Result<()> {
+        anyhow::ensure!(self.reserved, "Only reserved files can be written in place");
+        if self.part != self.path {
+            std::fs::remove_file(&self.part)
+                .with_context(|| format!("Removing {}", self.part.display()))?;
+            self.part = self.path.clone();
+        }
+        Ok(())
+    }
+
+    /// Publishes the partial file under the final name and returns it. If
+    /// the rename fails, the partial file is kept (and named in the error)
+    /// rather than deleted, so finished work is never lost.
     pub fn commit(mut self) -> Result<PathBuf> {
-        std::fs::rename(&self.part, &self.path)
-            .with_context(|| format!("Saving {}", self.path.display()))?;
+        if self.part != self.path
+            && let Err(e) = std::fs::rename(&self.part, &self.path)
+        {
+            self.done = true;
+            return Err(e).with_context(|| {
+                format!(
+                    "Saving {} (the finished file was kept as {})",
+                    self.path.display(),
+                    self.part.display()
+                )
+            });
+        }
         self.done = true;
         Ok(std::mem::take(&mut self.path))
     }
@@ -152,5 +181,31 @@ mod tests {
         std::fs::write(file.part(), b"new").unwrap();
         file.commit().unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[test]
+    fn in_place_writes_the_final_name_and_drop_still_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = OutputFile::reserve(&dir.path().join("rec.mp4")).unwrap();
+        file.write_in_place().unwrap();
+        assert_eq!(file.part(), file.path());
+        std::fs::write(file.part(), b"frag").unwrap();
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["rec.mp4"], "no partial file beside it");
+        drop(file);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        let mut file = OutputFile::reserve(&dir.path().join("rec.mp4")).unwrap();
+        file.write_in_place().unwrap();
+        std::fs::write(file.part(), b"frag").unwrap();
+        assert_eq!(std::fs::read(file.commit().unwrap()).unwrap(), b"frag");
+        assert!(
+            OutputFile::replace(&dir.path().join("x.mp4"))
+                .unwrap()
+                .write_in_place()
+                .is_err()
+        );
     }
 }
