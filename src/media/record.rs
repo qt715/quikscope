@@ -1,22 +1,44 @@
-//! Capture workers and a monotonic, pause-aware recording clock.
-use super::encode::{Muxer, OutputFile, VideoEncoder};
-use super::{
-    AudioChunk, AudioSource, AudioSpec, EncoderPreference, Frame, OutputFormat, VideoSource,
-};
-use crate::raster::Image;
+//! Recording sessions: capture threads feed one encoder thread through
+//! separate video and audio queues, timestamped by a monotonic, pause-aware
+//! clock.
+//!
+//! Policies:
+//! - Video is variable frame rate: every captured frame is encoded at its
+//!   own time (whole milliseconds, strictly increasing). Sources deliver
+//!   only changed frames; a static screen repeats its last picture once per
+//!   keyframe interval as a keyframe, so files stay seekable, and nothing
+//!   ever encodes a backlog of duplicate ticks.
+//! - The video queue holds [`VIDEO_QUEUE`] frames (each may hold a capture
+//!   buffer); when the encoder falls behind, the oldest waiting frame is
+//!   dropped and counted, so the newest picture always gets encoded.
+//! - Audio is never dropped: its queue only fails the recording when the
+//!   encoder has stalled for [`AUDIO_BACKLOG`]. Sources are mixed by sample
+//!   count ([`super::mix`]) into 20 ms Opus packets timed by sample count. An
+//!   audio source that fails ends its own track only.
+//! - Odd capture sizes are cropped to even (H.264 needs 4:2:0), never
+//!   scaled. Animations record their exact size into a lossless master.
+//! - An encoder or muxer failure stops the recording ([`Session::failure`])
+//!   and [`Session::stop`] keeps what was written: fragmented MP4 and
+//!   Matroska are playable up to the last fragment. When the rewrite of a
+//!   classic MP4/MOV fails, the complete fragmented file is kept under the
+//!   same name.
+
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
 use anyhow::{Context as _, Result, ensure};
-use ffmpeg_next as ffmpeg;
-use std::{
-    collections::VecDeque,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
-};
+
+use super::anim::{self, master::MasterWriter};
+use super::codec::Yuv420;
+use super::container::{self, Codec, Muxer};
+use super::export::{self, AUDIO_TRACK, H264Track, OpusTrack, VIDEO_TRACK};
+use super::mix::Mixer;
+use super::{AudioSource, EncoderPreference, Frame, OutputFormat, VideoSource, convert};
+use crate::raster::Image;
 
 /// What to record into.
 #[derive(Debug)]
@@ -50,18 +72,34 @@ pub struct Recorded {
     pub height: u32,
     /// Recorded time, pauses excluded.
     pub duration: Duration,
-    /// A representative frame (for notifications and the clipboard preview).
+    /// A representative frame (for notifications and the clipboard preview):
+    /// the middle of the recording, or its first frame when the file cannot
+    /// be read back.
     pub thumbnail: Image,
-    /// Encoder actually used, e.g. "h264_nvenc" or "libx264", for logs.
+    /// Encoder actually used, e.g. "OpenH264", for logs.
     pub encoder: String,
 }
+
+/// Longest side of [`Recorded::thumbnail`].
+const THUMBNAIL: u32 = 384;
+/// How long capture threads block before checking for stop and pause.
+const POLL: Duration = Duration::from_millis(40);
+/// How long the encoder thread waits for work before checking the clock
+/// (static-screen repeats, audio).
+const IDLE: Duration = Duration::from_millis(20);
+/// Video frames waiting for the encoder.
+const VIDEO_QUEUE: usize = 2;
+/// Queued audio that means the encoder has stalled.
+const AUDIO_BACKLOG: Duration = Duration::from_secs(30);
 
 struct Clock {
     start: Instant,
     pauses: Vec<(Instant, Option<Instant>)>,
     end: Option<Instant>,
 }
+
 impl Clock {
+    /// Session time of `at`; `None` before the start or while paused.
     fn at(&self, at: Instant) -> Option<Duration> {
         if at < self.start {
             return None;
@@ -71,13 +109,12 @@ impl Clock {
             if at < begin {
                 break;
             }
-            if end.is_none_or(|end| at < end) {
-                return None;
-            }
-            time = time.saturating_sub(end.unwrap().duration_since(begin));
+            let end = end.filter(|&end| at >= end)?;
+            time = time.saturating_sub(end.duration_since(begin));
         }
         Some(time)
     }
+
     fn elapsed(&self) -> Duration {
         let at = self.end.unwrap_or_else(Instant::now);
         let at = self
@@ -93,16 +130,112 @@ impl Clock {
         )
     }
 }
+
+/// Work for the encoder thread.
+#[derive(Default)]
+struct Queues {
+    video: VecDeque<(Frame, Duration)>,
+    /// Source, interleaved samples, session time.
+    audio: VecDeque<(usize, Vec<f32>, Duration)>,
+    audio_queued: Duration,
+    dropped: u64,
+    closed: bool,
+}
+
+#[derive(Default)]
+struct Inbox {
+    queues: Mutex<Queues>,
+    ready: Condvar,
+}
+
+/// What the encoder thread takes in one go.
+struct Batch {
+    audio: Vec<(usize, Vec<f32>, Duration)>,
+    video: Option<(Frame, Duration)>,
+    /// More frames wait after `video`.
+    more_video: bool,
+    /// Nothing more will come.
+    closed: bool,
+}
+
+impl Inbox {
+    /// Queues a frame, dropping the oldest waiting one when full. Returns
+    /// the number of frames dropped so far when this push dropped one.
+    fn push_video(&self, frame: Frame, at: Duration) -> Option<u64> {
+        let mut queues = self.queues.lock().unwrap();
+        let dropped = (queues.video.len() >= VIDEO_QUEUE).then(|| {
+            queues.video.pop_front();
+            queues.dropped += 1;
+            queues.dropped
+        });
+        queues.video.push_back((frame, at));
+        drop(queues);
+        self.ready.notify_one();
+        dropped
+    }
+
+    fn push_audio(
+        &self,
+        source: usize,
+        samples: Vec<f32>,
+        at: Duration,
+        length: Duration,
+    ) -> Result<()> {
+        let mut queues = self.queues.lock().unwrap();
+        ensure!(
+            queues.audio_queued + length <= AUDIO_BACKLOG,
+            "The encoder stopped taking audio ({} s queued)",
+            AUDIO_BACKLOG.as_secs()
+        );
+        queues.audio_queued += length;
+        queues.audio.push_back((source, samples, at));
+        drop(queues);
+        self.ready.notify_one();
+        Ok(())
+    }
+
+    /// All queued audio and the oldest frame, waiting up to `timeout` for
+    /// any.
+    fn take(&self, timeout: Duration) -> Batch {
+        let mut queues = self.queues.lock().unwrap();
+        if queues.video.is_empty() && queues.audio.is_empty() && !queues.closed {
+            queues = self.ready.wait_timeout(queues, timeout).unwrap().0;
+        }
+        queues.audio_queued = Duration::ZERO;
+        let audio = queues.audio.drain(..).collect();
+        let video = queues.video.pop_front();
+        Batch {
+            audio,
+            more_video: !queues.video.is_empty(),
+            closed: queues.closed && queues.video.is_empty(),
+            video,
+        }
+    }
+
+    fn close(&self) {
+        self.queues.lock().unwrap().closed = true;
+        self.ready.notify_one();
+    }
+
+    fn dropped(&self) -> u64 {
+        self.queues.lock().unwrap().dropped
+    }
+}
+
 struct Control {
     stop: AtomicBool,
+    paused: AtomicBool,
     clock: Mutex<Clock>,
     failure: Mutex<Option<String>>,
+    inbox: Inbox,
 }
+
 impl Control {
-    fn fail(&self, error: impl std::fmt::Display) {
+    /// Stops the recording because of `error` (the first one is kept).
+    fn fail(&self, error: &anyhow::Error) {
         let mut failure = self.failure.lock().unwrap();
         if failure.is_none() {
-            *failure = Some(error.to_string());
+            *failure = Some(format!("{error:#}"));
         }
         self.clock
             .lock()
@@ -111,30 +244,40 @@ impl Control {
             .get_or_insert_with(Instant::now);
         self.stop.store(true, Ordering::Release);
     }
-}
-enum Event {
-    Video(Frame, Duration),
-    Audio(usize, AudioChunk, Duration),
+
+    fn elapsed(&self) -> Duration {
+        self.clock.lock().unwrap().elapsed()
+    }
+
+    fn time(&self, at: Instant) -> Option<Duration> {
+        self.clock.lock().unwrap().at(at)
+    }
 }
 
-/// The parts of a [`SessionConfig`] the session needs after starting.
-struct Settings {
-    format: OutputFormat,
-    master: PathBuf,
-    fps: u32,
-    encoder: EncoderPreference,
-    fragmented: bool,
+/// How the encoder thread ended.
+struct Outcome {
+    /// Encoder name, for logs.
+    encoder: String,
+    /// Why encoding stopped early or finishing failed; what was written may
+    /// still be usable.
+    error: Option<anyhow::Error>,
 }
 
 pub struct Session {
-    config: Settings,
+    format: OutputFormat,
+    master: PathBuf,
+    encoder_preference: EncoderPreference,
+    fragmented: bool,
     output: Option<crate::output::OutputFile>,
     size: (u32, u32),
+    /// The first frame, for when the recording cannot be read back.
+    thumbnail: Image,
     control: Arc<Control>,
     pulls: Vec<JoinHandle<()>>,
-    encoder: Option<JoinHandle<Result<(String, OutputFile)>>>,
+    encoder: Option<JoinHandle<Outcome>>,
     warnings: Vec<String>,
 }
+
 impl Session {
     pub fn start(config: SessionConfig, source: Box<dyn VideoSource>) -> Result<Self> {
         let mut audio = Vec::new();
@@ -161,7 +304,6 @@ impl Session {
         mut source: Box<dyn VideoSource>,
         mut audio: Vec<Box<dyn AudioSource>>,
     ) -> Result<Self> {
-        super::init();
         ensure!(
             config.fps > 0 && config.fps <= 240,
             "Frame rate must be 1–240"
@@ -171,7 +313,7 @@ impl Session {
         }
         let deadline = Instant::now() + Duration::from_secs(3);
         let first = loop {
-            if let Some(frame) = source.next_frame(Duration::from_millis(40))? {
+            if let Some(frame) = source.next_frame(POLL)? {
                 break frame;
             }
             ensure!(
@@ -179,153 +321,107 @@ impl Session {
                 "Screen source did not produce its first frame"
             );
         };
-        let size = (first.width() & !1, first.height() & !1);
-        let master = !config.format.is_video();
-        ensure!(
-            !master || config.master != config.output.path(),
-            "Animation master and output must differ"
-        );
-        let transaction = OutputFile::new(if master {
-            &config.master
+        let thumbnail = first.to_image().thumbnail(THUMBNAIL);
+        let (sink, size) = if config.format.is_video() {
+            let size = (first.width() & !1, first.height() & !1);
+            let sink = VideoSink::create(&config, (first.width(), first.height()), &audio)?;
+            (Sink::Video(sink), size)
         } else {
-            config.output.part()
-        });
-        let video = VideoEncoder::select(first.av(), config.fps, config.encoder, master)?;
-        let mux = Muxer::new(
-            &transaction.path,
-            if master {
-                "matroska"
-            } else {
-                mux_name(config.format)
-            },
-            video,
-            !audio.is_empty(),
-        )?;
-        let mixer = Mixer::new(&audio.iter().map(|s| s.spec()).collect::<Vec<_>>())?;
+            ensure!(
+                config.master != config.output.path(),
+                "Animation master and output must differ"
+            );
+            let size = (first.width(), first.height());
+            check_animation_encoder(config.format, &config.master, size)?;
+            let writer = MasterWriter::create(&config.master, size.0, size.1)?;
+            (
+                Sink::Master(MasterSink {
+                    writer,
+                    size,
+                    last_pts: None,
+                }),
+                size,
+            )
+        };
+        let specs: Vec<_> = audio.iter().map(|source| source.spec()).collect();
         let control = Arc::new(Control {
             stop: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             clock: Mutex::new(Clock {
                 start: first.captured,
                 pauses: Vec::new(),
                 end: None,
             }),
             failure: Mutex::new(None),
+            inbox: Inbox::default(),
         });
-        let (send, receive) = mpsc::sync_channel(16);
-        let worker_control = control.clone();
-        let fps = config.fps;
-        let encoder = thread::Builder::new()
-            .name("quikscope-encode".into())
-            .spawn(
-                move || match encode_loop(mux, first, receive, &worker_control, fps, mixer) {
-                    Ok(name) => Ok((name, transaction)),
-                    Err(error) => {
-                        worker_control.fail(&error);
-                        Err(error)
-                    }
-                },
-            )?;
-        let mut pulls = Vec::new();
-        let video_control = control.clone();
-        let video_send = send.clone();
-        pulls.push(
-            thread::Builder::new()
-                .name("quikscope-video".into())
-                .spawn(move || {
-                    while !video_control.stop.load(Ordering::Acquire) {
-                        match source.next_frame(Duration::from_millis(40)) {
-                            Ok(Some(frame)) => {
-                                let time = video_control.clock.lock().unwrap().at(frame.captured);
-                                if let Some(time) = time
-                                    && let Err(mpsc::TrySendError::Disconnected(_)) =
-                                        video_send.try_send(Event::Video(frame, time))
-                                {
-                                    break;
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(error) => {
-                                video_control.fail(error);
-                                break;
-                            }
-                        }
-                    }
-                })
-                .inspect_err(|_| {
-                    control.stop.store(true, Ordering::Release);
-                })?,
-        );
-        for (index, mut source) in audio.into_iter().enumerate() {
-            let audio_control = control.clone();
-            let send = send.clone();
-            pulls.push(
-                thread::Builder::new()
-                    .name(format!("quikscope-audio-{index}"))
-                    .spawn(move || {
-                        while !audio_control.stop.load(Ordering::Acquire) {
-                            match source.read(Duration::from_millis(40)) {
-                                Ok(Some(chunk)) => {
-                                    let time =
-                                        audio_control.clock.lock().unwrap().at(chunk.captured);
-                                    if let Some(time) = time
-                                        && let Err(mpsc::TrySendError::Disconnected(_)) =
-                                            send.try_send(Event::Audio(index, chunk, time))
-                                    {
-                                        break;
-                                    }
-                                }
-                                Ok(None) => {}
-                                Err(error) => {
-                                    audio_control.fail(error);
-                                    break;
-                                }
-                            }
-                        }
-                    })
-                    .inspect_err(|_| {
-                        control.stop.store(true, Ordering::Release);
-                    })?,
-            );
-        }
-        drop(send);
+        control.inbox.push_video(first, Duration::ZERO);
         let SessionConfig {
             output,
             format,
             master,
-            fps,
-            encoder: preference,
+            encoder: encoder_preference,
             fragmented,
-            audio: _,
+            ..
         } = config;
-        Ok(Self {
-            config: Settings {
-                format,
-                master,
-                fps,
-                encoder: preference,
-                fragmented,
-            },
+        let encoder = {
+            let control = control.clone();
+            thread::Builder::new()
+                .name("quikscope-encode".into())
+                .spawn(move || encode(sink, &control))?
+        };
+        let mut session = Self {
+            format,
+            master,
+            encoder_preference,
+            fragmented,
             output: Some(output),
             size,
+            thumbnail,
             control,
-            pulls,
+            pulls: Vec::new(),
             encoder: Some(encoder),
             warnings: Vec::new(),
-        })
+        };
+        // A failed spawn drops `session`, which stops what already runs.
+        let control = session.control.clone();
+        session.pulls.push(
+            thread::Builder::new()
+                .name("quikscope-video".into())
+                .spawn(move || capture_video(source, &control))?,
+        );
+        for (index, (source, spec)) in audio.into_iter().zip(specs).enumerate() {
+            let control = session.control.clone();
+            let samples_per_second = f64::from(spec.rate) * f64::from(spec.channels);
+            session.pulls.push(
+                thread::Builder::new()
+                    .name(format!("quikscope-audio-{index}"))
+                    .spawn(move || capture_audio(index, source, samples_per_second, &control))?,
+            );
+        }
+        Ok(session)
     }
+
     /// Problems that did not stop the recording (skipped audio devices).
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
+
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
+
+    /// Stops the clock and the capture (the source stops copying frames).
     pub fn pause(&self) {
         let mut clock = self.control.clock.lock().unwrap();
         if clock.pauses.last().is_none_or(|(_, end)| end.is_some()) {
             clock.pauses.push((Instant::now(), None));
         }
+        self.control.paused.store(true, Ordering::Release);
     }
+
+    /// Restarts the clock; the source then delivers a fresh frame whether
+    /// or not the screen changed while paused.
     pub fn resume(&self) {
         let mut clock = self.control.clock.lock().unwrap();
         if let Some((_, end)) = clock.pauses.last_mut()
@@ -333,7 +429,9 @@ impl Session {
         {
             *end = Some(Instant::now());
         }
+        self.control.paused.store(false, Ordering::Release);
     }
+
     pub fn is_paused(&self) -> bool {
         self.control
             .clock
@@ -343,14 +441,20 @@ impl Session {
             .last()
             .is_some_and(|(_, end)| end.is_none())
     }
+
     pub fn elapsed(&self) -> Duration {
-        self.control.clock.lock().unwrap().elapsed()
+        self.control.elapsed()
     }
+
+    /// Why the recording stopped by itself (capture or encoding failed);
+    /// [`stop`](Self::stop) still saves what was recorded.
     pub fn failure(&self) -> Option<String> {
         self.control.failure.lock().unwrap().clone()
     }
 
-    fn finish_workers(&mut self) -> Result<(String, OutputFile)> {
+    /// Stops every thread; `None` if that already happened.
+    fn finish_workers(&mut self) -> Option<Outcome> {
+        let encoder = self.encoder.take()?;
         self.control
             .clock
             .lock()
@@ -360,48 +464,74 @@ impl Session {
         self.control.stop.store(true, Ordering::Release);
         for pull in self.pulls.drain(..) {
             if pull.join().is_err() {
-                self.control.fail("Capture thread panicked");
+                self.control
+                    .fail(&anyhow::anyhow!("A capture thread panicked"));
             }
         }
-        self.encoder
-            .take()
-            .context("Recording already stopped")?
-            .join()
-            .map_err(|_| anyhow::anyhow!("Encoder thread panicked"))?
+        self.control.inbox.close();
+        Some(encoder.join().unwrap_or_else(|_| Outcome {
+            encoder: "unknown".into(),
+            error: Some(anyhow::anyhow!("The encoder thread panicked")),
+        }))
     }
+
+    /// Stops and saves the recording. After a failure mid-recording (see
+    /// [`failure`](Self::failure)) this saves what was written before it.
+    /// For animations, an error here means the final file could not be
+    /// encoded; the master at [`SessionConfig::master`] is kept and opens
+    /// in the annotator.
     pub fn stop(mut self) -> Result<Recorded> {
-        let (encoder, file) = self.finish_workers()?;
-        file.commit()?;
+        let outcome = self.finish_workers().context("Recording already stopped")?;
         let output = self.output.take().context("Recording already stopped")?;
-        let path = if self.config.format.is_video() {
-            output.commit()?
+        let (path, encoder) = if self.format.is_video() {
+            if let Some(error) = outcome.error {
+                ensure!(
+                    playable(output.part()),
+                    "{error:#}; nothing of the recording could be saved"
+                );
+                log::error!("recording: {error:#}; keeping what was written");
+            }
+            (output.commit()?, outcome.encoder)
         } else {
-            super::export::export(
-                &self.config.master,
+            if let Some(error) = outcome.error {
+                // The master reads up to its last complete frame.
+                log::error!("recording the animation master: {error:#}");
+            }
+            let path = export::export(
+                &self.master,
                 output,
-                &super::export::ExportOptions {
-                    format: self.config.format,
+                &export::ExportOptions {
+                    format: self.format,
                     trim: None,
                     mute: true,
-                    fps: Some(self.config.fps),
-                    fragmented: self.config.fragmented,
+                    // Captured at the configured rate already; keep its timing.
+                    fps: None,
+                    fragmented: self.fragmented,
                     max_width: None,
-                    encoder: self.config.encoder,
+                    encoder: self.encoder_preference,
                 },
                 None,
                 &|_| {},
                 &AtomicBool::new(false),
-            )?
+            )
+            .with_context(|| format!("encoding the {}", self.format.label()))?;
+            (
+                path,
+                format!("{}, {}", outcome.encoder, self.format.label()),
+            )
         };
-        let master = if self.config.format.is_video() {
+        let master = if self.format.is_video() {
             path.clone()
         } else {
-            self.config.master.clone()
+            self.master.clone()
         };
-        let thumbnail = super::decode::thumbnail(&master, 384)?;
+        let thumbnail = super::decode::thumbnail(&master, THUMBNAIL).unwrap_or_else(|e| {
+            log::warn!("thumbnail of {}: {e:#}", master.display());
+            self.thumbnail.clone()
+        });
         Ok(Recorded {
             path,
-            format: self.config.format,
+            format: self.format,
             master,
             width: self.size.0,
             height: self.size.1,
@@ -410,175 +540,357 @@ impl Session {
             encoder,
         })
     }
+
+    /// Stops and discards the recording (master included).
     pub fn cancel(mut self) {
-        let _ = self.finish_workers();
+        self.discard();
+    }
+
+    fn discard(&mut self) {
+        if self.finish_workers().is_some() && !self.format.is_video() {
+            let _ = std::fs::remove_file(&self.master);
+        }
     }
 }
+
 impl Drop for Session {
     fn drop(&mut self) {
-        if self.encoder.is_some() {
-            let _ = self.finish_workers();
-        }
-    }
-}
-pub(crate) fn mux_name(format: OutputFormat) -> &'static str {
-    match format {
-        OutputFormat::Mp4 => "mp4",
-        OutputFormat::Mkv => "matroska",
-        OutputFormat::Mov => "mov",
-        OutputFormat::Gif => "gif",
-        OutputFormat::Webp => "webp",
-        OutputFormat::Avif => "avif",
-        OutputFormat::Jxl => "image2pipe",
+        // Neither stopped nor cancelled (an error while starting): discard.
+        self.discard();
     }
 }
 
-struct Mixer {
-    sources: Vec<ffmpeg::software::resampling::Context>,
-    specs: Vec<AudioSpec>,
-    pending: VecDeque<[f32; 2]>,
-    cursor: usize,
+/// Fails before recording when the final animation format cannot be
+/// written at this size, instead of after the whole recording.
+fn check_animation_encoder(
+    format: OutputFormat,
+    master: &Path,
+    (width, height): (u32, u32),
+) -> Result<()> {
+    let probe = master.with_extension("probe");
+    let result = anim::create_encoder(format, &probe, width, height).map(drop);
+    let _ = std::fs::remove_file(&probe);
+    result.with_context(|| format!("{} cannot be written at {width}x{height}", format.label()))
 }
-impl Mixer {
-    fn new(specs: &[AudioSpec]) -> Result<Self> {
-        let mut sources = Vec::new();
-        for spec in specs {
-            ensure!(
-                spec.rate > 0 && spec.channels > 0,
-                "Invalid source audio specification"
-            );
-            sources.push(ffmpeg::software::resampling::Context::get(
-                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                ffmpeg::ChannelLayout::default(spec.channels as i32),
-                spec.rate,
-                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                ffmpeg::ChannelLayout::STEREO,
-                48000,
-            )?);
+
+/// Whether `path` holds at least one readable H.264 packet.
+fn playable(path: &Path) -> bool {
+    let Ok(Some(mut demuxer)) = container::open_demuxer(path) else {
+        return false;
+    };
+    let Some(video) = demuxer.tracks().iter().position(|t| t.codec == Codec::H264) else {
+        return false;
+    };
+    loop {
+        match demuxer.next_packet() {
+            Ok(Some(packet)) if packet.track == video => return true,
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => return false,
         }
+    }
+}
+
+fn capture_video(mut source: Box<dyn VideoSource>, control: &Control) {
+    let mut paused = false;
+    while !control.stop.load(Ordering::Acquire) {
+        let pause = control.paused.load(Ordering::Acquire);
+        if pause != paused {
+            source.set_paused(pause);
+            paused = pause;
+        }
+        match source.next_frame(POLL) {
+            // Frames captured while paused have no session time.
+            Ok(Some(frame)) => {
+                if let Some(at) = control.time(frame.captured)
+                    && let Some(dropped) = control.inbox.push_video(frame, at)
+                    && (dropped == 1 || dropped.is_multiple_of(100))
+                {
+                    log::warn!("the encoder falls behind the capture: {dropped} frames dropped");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                control.fail(&error);
+                break;
+            }
+        }
+    }
+}
+
+fn capture_audio(
+    index: usize,
+    mut source: Box<dyn AudioSource>,
+    samples_per_second: f64,
+    control: &Control,
+) {
+    while !control.stop.load(Ordering::Acquire) {
+        match source.read(POLL) {
+            Ok(Some(chunk)) => {
+                let Some(at) = control.time(chunk.captured) else {
+                    continue;
+                };
+                let length =
+                    Duration::from_secs_f64(chunk.samples.len() as f64 / samples_per_second);
+                if let Err(error) = control.inbox.push_audio(index, chunk.samples, at, length) {
+                    control.fail(&error);
+                    break;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // A lost device ends its own track; the mix plays silence for it.
+                log::warn!("audio source {index} ended; recording continues without it: {error:#}");
+                break;
+            }
+        }
+    }
+}
+
+/// The encoder thread.
+fn encode(mut sink: Sink, control: &Control) -> Outcome {
+    let encoder = sink.name();
+    let result = (|| -> Result<()> {
+        loop {
+            let batch = control.inbox.take(IDLE);
+            for (source, samples, at) in batch.audio {
+                sink.add_audio(source, &samples, at);
+            }
+            if let Some((frame, at)) = batch.video {
+                sink.frame(frame, at)?;
+            }
+            // A static screen repeats its picture, never ahead of a queued one.
+            sink.tick(control.elapsed(), !batch.more_video)?;
+            if batch.closed {
+                return Ok(());
+            }
+        }
+    })();
+    let dropped = control.inbox.dropped();
+    if dropped > 0 {
+        log::warn!("{dropped} frames were dropped because the encoder fell behind");
+    }
+    let end = control.elapsed();
+    let error = match result {
+        Ok(()) => sink.finish(end).err(),
+        Err(error) => {
+            control.fail(&error);
+            // Frames still queued hold capture buffers.
+            control.inbox.queues.lock().unwrap().video.clear();
+            if let Err(e) = sink.salvage(control.elapsed()) {
+                log::warn!("finishing what was recorded: {e:#}");
+            }
+            Some(error)
+        }
+    };
+    Outcome { encoder, error }
+}
+
+enum Sink {
+    Video(VideoSink),
+    Master(MasterSink),
+}
+
+impl Sink {
+    fn name(&self) -> String {
+        match self {
+            Sink::Video(video) => video.video.name().to_owned(),
+            Sink::Master(_) => "lossless master".to_owned(),
+        }
+    }
+
+    fn add_audio(&mut self, source: usize, samples: &[f32], at: Duration) {
+        if let Sink::Video(video) = self
+            && let Some((mixer, _)) = &mut video.audio
+        {
+            mixer.add(source, samples, at);
+        }
+    }
+
+    fn frame(&mut self, frame: Frame, at: Duration) -> Result<()> {
+        let size = match self {
+            Sink::Video(video) => video.source_size,
+            Sink::Master(master) => master.size,
+        };
+        ensure!(
+            (frame.width(), frame.height()) == size,
+            "The captured size changed from {}x{} to {}x{} while recording",
+            size.0,
+            size.1,
+            frame.width(),
+            frame.height()
+        );
+        match self {
+            Sink::Video(video) => video.frame(frame, at),
+            Sink::Master(master) => master.frame(frame, at),
+        }
+    }
+
+    /// Writes the audio mixed up to `now`; with `repeat`, repeats a static
+    /// picture that is due.
+    fn tick(&mut self, now: Duration, repeat: bool) -> Result<()> {
+        match self {
+            Sink::Video(video) => video.tick(now, repeat),
+            Sink::Master(_) => Ok(()),
+        }
+    }
+
+    fn finish(self, end: Duration) -> Result<()> {
+        match self {
+            Sink::Video(video) => video.finish(end),
+            Sink::Master(master) => master.finish(end),
+        }
+    }
+
+    /// Completes the file after a failure, keeping everything already
+    /// encoded and leaving the possibly broken encoder alone.
+    fn salvage(self, end: Duration) -> Result<()> {
+        match self {
+            Sink::Video(mut video) => {
+                let held = video.video.finish_held(end, &mut *video.mux);
+                let audio = video.finish_audio(end);
+                video.mux.finish().and(held).and(audio)
+            }
+            Sink::Master(master) => master.finish(end),
+        }
+    }
+}
+
+struct VideoSink {
+    mux: Box<dyn Muxer>,
+    video: H264Track,
+    /// Captured frame size (the encoded size is cropped to even).
+    source_size: (u32, u32),
+    /// The latest picture, repeated on a static screen.
+    last: Option<Yuv420>,
+    audio: Option<(Mixer, OpusTrack)>,
+}
+
+impl VideoSink {
+    fn create(
+        config: &SessionConfig,
+        source_size: (u32, u32),
+        audio: &[Box<dyn AudioSource>],
+    ) -> Result<Self> {
+        let (width, height) = (source_size.0 & !1, source_size.1 & !1);
+        ensure!(
+            width > 0 && height > 0,
+            "A {}x{} capture is too small to record",
+            source_size.0,
+            source_size.1
+        );
+        let video = H264Track::new(VIDEO_TRACK, width, height, config.fps, config.encoder)?;
+        let audio = if audio.is_empty() {
+            None
+        } else {
+            let specs: Vec<_> = audio.iter().map(|source| source.spec()).collect();
+            Some((
+                Mixer::new(&specs)?,
+                OpusTrack::new(AUDIO_TRACK, Duration::ZERO)?,
+            ))
+        };
+        let mut tracks = vec![video.track()];
+        tracks.extend(audio.as_ref().map(|(_, opus)| opus.track()));
+        let mux = container::create_muxer(
+            config.output.part(),
+            export::container_for(config.format, config.fragmented)?,
+            &tracks,
+        )?;
         Ok(Self {
-            sources,
-            specs: specs.to_vec(),
-            pending: VecDeque::new(),
-            cursor: 0,
+            mux,
+            video,
+            source_size,
+            last: None,
+            audio,
         })
     }
-    fn add(&mut self, source: usize, chunk: AudioChunk, at: Duration) -> Result<()> {
-        let spec = self.specs[source];
-        let count = chunk.samples.len() / spec.channels as usize;
-        if count == 0 {
-            return Ok(());
-        }
-        let mut input = ffmpeg::frame::Audio::new(
-            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-            count,
-            ffmpeg::ChannelLayout::default(spec.channels as i32),
+
+    fn frame(&mut self, frame: Frame, at: Duration) -> Result<()> {
+        let (width, height) = (self.source_size.0 & !1, self.source_size.1 & !1);
+        let picture = convert::to_yuv420(
+            frame.pixels(),
+            frame.stride(),
+            frame.format(),
+            width,
+            height,
+            self.video.layout(),
         );
-        input.set_rate(spec.rate);
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                input.data_mut(0).as_mut_ptr().cast::<f32>(),
-                count * spec.channels as usize,
-            )
-            .copy_from_slice(&chunk.samples[..count * spec.channels as usize]);
+        // Hands a shared capture buffer back to its pool.
+        drop(frame);
+        self.video.push(&picture, at, false, &mut *self.mux)?;
+        self.last = Some(picture);
+        Ok(())
+    }
+
+    fn tick(&mut self, now: Duration, repeat: bool) -> Result<()> {
+        if repeat
+            && let (Some(last), Some(picture)) = (self.video.last_pts(), &self.last)
+            && now >= last + self.video.key_interval()
+        {
+            self.video.push(picture, now, true, &mut *self.mux)?;
         }
-        let delay = self.sources[source]
-            .delay()
-            .map_or(0, |d| d.output.max(0) as usize);
-        let output = super::encode::resample(&mut self.sources[source], &input)?;
-        let start = ((at.as_secs_f64() * 48000.0).round() as usize).saturating_sub(delay);
-        let samples = unsafe {
-            std::slice::from_raw_parts(output.data(0).as_ptr().cast::<f32>(), output.samples() * 2)
-        };
-        for (i, sample) in samples.chunks_exact(2).enumerate() {
-            let position = start + i;
-            if position < self.cursor {
-                continue;
-            }
-            let offset = position - self.cursor;
-            ensure!(
-                offset <= 48000 * 10,
-                "Audio timestamp is more than ten seconds ahead"
-            );
-            if self.pending.len() <= offset {
-                self.pending.resize(offset + 1, [0.0; 2]);
-            }
-            self.pending[offset][0] += sample[0];
-            self.pending[offset][1] += sample[1];
+        if let Some((mixer, opus)) = &mut self.audio {
+            opus.push(&mixer.take(now), &mut *self.mux)?;
         }
         Ok(())
     }
-    fn flush(&mut self, mux: &mut Muxer, until: Duration) -> Result<()> {
-        if self.sources.is_empty() {
-            return Ok(());
-        }
-        let end = (until.as_secs_f64() * 48000.0).round() as usize;
-        let mut block = [0.0; 2048];
-        while self.cursor < end {
-            let count = (end - self.cursor).min(block.len() / 2);
-            for pair in block[..count * 2].chunks_exact_mut(2) {
-                pair.copy_from_slice(&self.pending.pop_front().unwrap_or([0.0; 2]));
-            }
-            mux.audio(&block[..count * 2])?;
-            self.cursor += count;
+
+    fn finish_audio(&mut self, end: Duration) -> Result<()> {
+        if let Some((mixer, opus)) = &mut self.audio {
+            opus.push(&mixer.finish(end), &mut *self.mux)?;
+            opus.finish(&mut *self.mux)?;
         }
         Ok(())
+    }
+
+    fn finish(mut self, end: Duration) -> Result<()> {
+        self.video.finish(end, &mut *self.mux)?;
+        self.finish_audio(end)?;
+        self.mux.finish()
     }
 }
 
-fn encode_loop(
-    mut mux: Muxer,
-    first: Frame,
-    receive: mpsc::Receiver<Event>,
-    control: &Control,
-    fps: u32,
-    mut mixer: Mixer,
-) -> Result<String> {
-    let name = mux.name().to_owned();
-    let mut last = first;
-    let mut tick = 1_u64;
-    let time = |tick: u64| Duration::from_secs_f64(tick as f64 / fps as f64);
-    mux.video(last.av(), Duration::ZERO)?;
-    loop {
-        match receive.recv_timeout(Duration::from_millis(10)) {
-            Ok(Event::Video(frame, at)) => {
-                let target = (at.as_secs_f64() * fps as f64).round() as u64;
-                if target >= tick {
-                    while tick < target {
-                        mux.video(last.av(), time(tick))?;
-                        tick += 1;
-                    }
-                    last = frame;
-                    mux.video(last.av(), time(tick))?;
-                    tick += 1;
-                }
-            }
-            Ok(Event::Audio(source, chunk, at)) => mixer.add(source, chunk, at)?,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let elapsed = control.clock.lock().unwrap().elapsed();
-                while time(tick + 1) <= elapsed {
-                    mux.video(last.av(), time(tick))?;
-                    tick += 1;
-                }
-            }
-        }
-        mixer.flush(
-            &mut mux,
-            control
-                .clock
-                .lock()
-                .unwrap()
-                .elapsed()
-                .saturating_sub(Duration::from_millis(100)),
-        )?;
+struct MasterSink {
+    writer: MasterWriter,
+    size: (u32, u32),
+    last_pts: Option<Duration>,
+}
+
+impl MasterSink {
+    fn frame(&mut self, frame: Frame, at: Duration) -> Result<()> {
+        let image = frame.to_image();
+        drop(frame);
+        let pts = match self.last_pts {
+            Some(last) if at <= last => last + Duration::from_millis(1),
+            _ => at,
+        };
+        self.writer.push(&image, pts)?;
+        self.last_pts = Some(pts);
+        Ok(())
     }
-    let elapsed = control.clock.lock().unwrap().elapsed();
-    while time(tick) < elapsed {
-        mux.video(last.av(), time(tick))?;
-        tick += 1;
+
+    fn finish(self, end: Duration) -> Result<()> {
+        self.writer
+            .finish(end.max(self.last_pts.unwrap_or_default()))
     }
-    mixer.flush(&mut mux, time(tick))?;
-    mux.finish()?;
-    Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_excludes_pauses() {
+        let start = Instant::now();
+        let s = Duration::from_secs;
+        let clock = Clock {
+            start,
+            pauses: vec![(start + s(2), Some(start + s(5))), (start + s(7), None)],
+            end: None,
+        };
+        assert_eq!(clock.at(start + s(1)), Some(s(1)));
+        assert_eq!(clock.at(start + s(3)), None);
+        assert_eq!(clock.at(start + s(6)), Some(s(3)));
+        assert_eq!(clock.at(start + s(8)), None);
+        assert_eq!(clock.elapsed(), s(4));
+    }
 }

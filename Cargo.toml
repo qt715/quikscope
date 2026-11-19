@@ -93,7 +93,6 @@ ttf-parser = "0.25"
 unicode-bidi = "0.3"
 unicode-script = "0.5"
 unicode-segmentation = "1"
-ffmpeg-next = { version = "9.1", default-features = false, features = ["codec", "format", "filter", "software-scaling", "software-resampling"] }
 # Video editor playback. On Linux the PipeWire host (sharing the `pipewire`
 # crate recording uses) is preferred; ALSA is cpal's always-built fallback.
 cpal = "0.18.2"

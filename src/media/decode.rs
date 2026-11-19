@@ -1,162 +1,219 @@
-//! Reading media through libavformat, libavcodec, swscale and swresample.
+//! Reading media: H.264 video with Opus/AAC audio from MP4/MOV/Matroska
+//! ([`super::container`] and [`super::codec`]), animated images and
+//! recording masters ([`super::anim`]).
+//!
+//! Every timestamp is relative to the file's presentation start, which all
+//! tracks share (the demuxers apply edit lists and track start offsets), so
+//! audio that starts after the picture keeps its offset through playback,
+//! seeking and export.
 
-use super::{Kind, MediaInfo};
-use crate::raster::Image;
+use std::collections::VecDeque;
+use std::path::Path;
+use std::time::Duration;
+
 use anyhow::{Context as _, Result, bail, ensure};
-use ffmpeg::{ChannelLayout, codec, format, frame, media, software};
-use ffmpeg_next as ffmpeg;
-use std::{collections::VecDeque, path::Path, time::Duration};
 
-fn seconds(value: i64, base: ffmpeg::Rational) -> Duration {
-    Duration::from_secs_f64((value as f64 * f64::from(base)).max(0.0))
+use super::anim::{self, AnimDecoder, master::MasterReader};
+use super::codec::{self, DecodedPicture, VideoDecoder, resample::Resampler};
+use super::container::{self, Codec, Demuxer, Track, TrackKind};
+use super::{AudioSpec, EncoderPreference, Kind, MediaInfo, convert};
+use crate::raster::Image;
+
+/// What a file turned out to be.
+enum Opened {
+    Video {
+        demuxer: Box<dyn Demuxer>,
+        track: usize,
+    },
+    Animation(Box<dyn AnimDecoder>),
+    /// Kept as its own type for its keyframe-index seek.
+    Master(MasterReader),
 }
 
-fn next_packet(
-    input: &mut format::context::Input,
-    stream: usize,
-) -> Result<Option<ffmpeg::Packet>> {
-    loop {
-        let mut packet = ffmpeg::Packet::empty();
-        match packet.read(input) {
-            Ok(()) if packet.stream() == stream => return Ok(Some(packet)),
-            Ok(()) => {}
-            Err(ffmpeg::Error::Eof) => return Ok(None),
-            Err(error) => return Err(error.into()),
+/// Opens `path` by content: an MP4/MOV/Matroska file with an H.264 track,
+/// else an animated image or master (AVIF is ISOBMFF too, so a container
+/// without H.264 still gets that chance).
+fn open(path: &Path) -> Result<(Opened, MediaInfo)> {
+    let container_error = match container::open_demuxer(path) {
+        Ok(Some(demuxer)) => {
+            if let Some(track) = demuxer.tracks().iter().position(|t| t.codec == Codec::H264) {
+                let info = video_info(&*demuxer, track)?;
+                return Ok((Opened::Video { demuxer, track }, info));
+            }
+            None
         }
+        Ok(None) => None,
+        Err(e) => Some(e),
+    };
+    if anim::master::is_master(path) {
+        let master = MasterReader::open(path)?;
+        let info = animation_info(master.info());
+        return Ok((Opened::Master(master), info));
     }
+    match anim::open_decoder(path)? {
+        Some(decoder) => {
+            let info = animation_info(decoder.info());
+            Ok((Opened::Animation(decoder), info))
+        }
+        None => Err(container_error.unwrap_or_else(|| {
+            anyhow::anyhow!(
+                "{} is not a video or animation quikscope can read",
+                path.display()
+            )
+        })),
+    }
+}
+
+fn video_info(demuxer: &dyn Demuxer, track: usize) -> Result<MediaInfo> {
+    let TrackKind::Video { width, height, fps } = demuxer.tracks()[track].kind else {
+        bail!("H.264 track without picture size");
+    };
+    // The decoders crop odd sizes to even (4:2:0 pictures).
+    let (width, height) = (width & !1, height & !1);
+    ensure!(width > 0 && height > 0, "empty {width}x{height} video");
+    Ok(MediaInfo {
+        width,
+        height,
+        duration: demuxer.duration(),
+        fps: if fps.is_finite() && fps > 0.0 {
+            fps
+        } else {
+            0.0
+        },
+        frames: None,
+        has_audio: audio_track(demuxer.tracks()).is_some(),
+        kind: Kind::Video,
+    })
+}
+
+fn animation_info(info: &anim::AnimInfo) -> MediaInfo {
+    let seconds = info.duration.as_secs_f64();
+    MediaInfo {
+        width: info.width,
+        height: info.height,
+        duration: info.duration,
+        fps: if seconds > 0.0 {
+            info.frames as f64 / seconds
+        } else {
+            0.0
+        },
+        frames: Some(info.frames),
+        has_audio: false,
+        kind: Kind::Animation,
+    }
+}
+
+/// The first audio track in a codec we decode.
+fn audio_track(tracks: &[Track]) -> Option<usize> {
+    tracks.iter().position(|t| {
+        matches!(t.kind, TrackKind::Audio { .. }) && matches!(t.codec, Codec::Opus | Codec::Aac)
+    })
 }
 
 pub fn probe(path: &Path) -> Result<MediaInfo> {
-    super::init();
-    let mut input = format::input(path).with_context(|| format!("Opening {}", path.display()))?;
-    let stream = input
-        .streams()
-        .best(media::Type::Video)
-        .context("No video stream")?;
-    let mut decoder = codec::context::Context::from_parameters(stream.parameters())?
-        .decoder()
-        .video()?;
-    let mut fps = f64::from(stream.avg_frame_rate());
-    let mut duration = if stream.duration() > 0 {
-        seconds(stream.duration(), stream.time_base())
-    } else {
-        Duration::from_secs_f64((input.duration() as f64 / 1_000_000.0).max(0.0))
-    };
-    let input_format = input.format();
-    let name = input_format.name();
-    let image = name.split(',').any(|n| {
-        n.ends_with("_pipe")
-            || matches!(
-                n,
-                "gif" | "webp" | "webp_anim" | "avif" | "jpegxl_anim" | "jxl" | "apng" | "image2"
-            )
-    }) || path.extension().and_then(|x| x.to_str()).is_some_and(|x| {
-        ["gif", "webp", "avif", "jxl", "apng", "png"]
-            .iter()
-            .any(|s| x.eq_ignore_ascii_case(s))
-    });
-    let mut frames = (stream.frames() > 0).then_some(stream.frames() as u64);
-    let index = stream.index();
-    let base = stream.time_base();
-    let origin = if stream.start_time() == ffmpeg::ffi::AV_NOPTS_VALUE {
-        0
-    } else {
-        stream.start_time()
-    };
-    if image && (frames.is_none() || duration.is_zero()) {
-        let mut count = 0_u64;
-        let mut end = Duration::ZERO;
-        let mut frame = frame::Video::empty();
-        let mut drain = |decoder: &mut ffmpeg::decoder::Video| -> Result<()> {
-            loop {
-                match decoder.receive_frame(&mut frame) {
-                    Ok(()) => {
-                        count += 1;
-                        let at = frame.pts().or(frame.timestamp()).unwrap_or(0) - origin;
-                        let ticks = unsafe { (*frame.as_ptr()).duration };
-                        end = end.max(seconds(at + ticks.max(0), base));
-                    }
-                    Err(ffmpeg::Error::Eof) => break,
-                    Err(e) if super::encode::again(e) => break,
-                    Err(e) => return Err(e.into()),
-                }
-            }
-            Ok(())
-        };
-        while let Some(packet) = next_packet(&mut input, index)? {
-            decoder.set_packet_time_base(input.stream(index).unwrap().time_base());
-            decoder.send_packet(&packet)?;
-            drain(&mut decoder)?;
-        }
-        decoder.send_eof()?;
-        drain(&mut decoder)?;
-        frames = Some(count);
-        duration = duration.max(end);
-        if duration > Duration::ZERO && (!fps.is_finite() || fps <= 0.0) {
-            fps = count as f64 / duration.as_secs_f64();
-        }
-    }
-    Ok(MediaInfo {
-        width: decoder.width(),
-        height: decoder.height(),
-        duration,
-        fps: if fps.is_finite() { fps } else { 0.0 },
-        frames,
-        has_audio: input.streams().best(media::Type::Audio).is_some(),
-        kind: if image { Kind::Animation } else { Kind::Video },
-    })
+    open(path)
+        .map(|(_, info)| info)
+        .with_context(|| format!("Opening {}", path.display()))
 }
 
 pub struct DecodedFrame {
     pub image: Image,
     pub pts: Duration,
+    /// How long the frame shows: up to the next frame, for the last one up to
+    /// the end of its track.
     pub duration: Duration,
 }
 
+/// A frame decoded ahead of being returned. Video pictures stay YUV until
+/// returned, so frames a seek skips past are never converted.
+struct Pending {
+    picture: Picture,
+    pts: Duration,
+    /// Known for animation frames; video frames run to the next one.
+    duration: Option<Duration>,
+}
+
+enum Picture {
+    Yuv(codec::Yuv420),
+    Bgra(Image),
+}
+
+struct VideoStream {
+    demuxer: Box<dyn Demuxer>,
+    track: usize,
+    decoder: Box<dyn VideoDecoder>,
+    eof: bool,
+    /// End of the latest video packet read, for the last frame's duration.
+    end: Duration,
+    /// Nominal frame interval, for packets without a duration.
+    interval: Duration,
+}
+
+impl VideoStream {
+    /// Pictures from the next packets that produce any; `None` once the
+    /// stream is drained.
+    fn decode_more(&mut self) -> Result<Option<Vec<DecodedPicture>>> {
+        if self.eof {
+            return Ok(None);
+        }
+        loop {
+            match self.demuxer.next_packet()? {
+                Some(packet) if packet.track == self.track => {
+                    let length = packet.duration.unwrap_or(self.interval);
+                    self.end = self.end.max(packet.pts + length);
+                    let pictures = self.decoder.decode(&packet.data, packet.pts)?;
+                    if !pictures.is_empty() {
+                        return Ok(Some(pictures));
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    self.eof = true;
+                    return Ok(Some(self.decoder.flush()?));
+                }
+            }
+        }
+    }
+}
+
+enum Source {
+    Video(VideoStream),
+    Animation(Box<dyn AnimDecoder>),
+    Master(MasterReader),
+}
+
+/// Decodes the frames of a video or animation in presentation order, as BGRA
+/// at [`set_output_size`](Self::set_output_size) (the file's size unless
+/// set).
 pub struct Decoder {
-    input: format::context::Input,
-    path: std::path::PathBuf,
-    decoder: ffmpeg::decoder::Video,
-    stream: usize,
-    base: ffmpeg::Rational,
-    origin: i64,
+    source: Source,
     info: MediaInfo,
     size: (u32, u32),
-    scaler: Option<software::scaling::Context>,
-    eof: bool,
-    pending: VecDeque<DecodedFrame>,
-    next_pts: Duration,
+    pending: VecDeque<Pending>,
 }
 
 impl Decoder {
     pub fn open(path: &Path) -> Result<Self> {
-        let info = probe(path)?;
-        let input = format::input(path)?;
-        let stream = input
-            .streams()
-            .best(media::Type::Video)
-            .context("No video stream")?;
-        let mut decoder = codec::context::Context::from_parameters(stream.parameters())?
-            .decoder()
-            .video()?;
-        decoder.set_packet_time_base(stream.time_base());
+        let (opened, info) = open(path).with_context(|| format!("Opening {}", path.display()))?;
+        let source = match opened {
+            Opened::Video { demuxer, track } => Source::Video(VideoStream {
+                demuxer,
+                track,
+                decoder: codec::h264_decoder(EncoderPreference::Auto)?,
+                eof: false,
+                end: Duration::ZERO,
+                interval: Duration::from_secs_f64(
+                    1.0 / if info.fps > 0.0 { info.fps } else { 30.0 },
+                ),
+            }),
+            Opened::Animation(decoder) => Source::Animation(decoder),
+            Opened::Master(master) => Source::Master(master),
+        };
         Ok(Self {
-            path: path.to_owned(),
-            stream: stream.index(),
-            base: stream.time_base(),
-            origin: if stream.start_time() == ffmpeg::ffi::AV_NOPTS_VALUE {
-                0
-            } else {
-                stream.start_time()
-            },
-            decoder,
-            input,
+            source,
             size: (info.width, info.height),
             info,
-            scaler: None,
-            eof: false,
             pending: VecDeque::new(),
-            next_pts: Duration::ZERO,
         })
     }
 
@@ -166,311 +223,298 @@ impl Decoder {
 
     pub fn set_output_size(&mut self, width: u32, height: u32) {
         self.size = (width.max(1), height.max(1));
-        self.scaler = None;
-        self.pending.clear();
     }
 
+    /// Positions the decoder so that [`next_frame`](Self::next_frame)
+    /// returns the frame showing at `to` (the first frame before the file
+    /// starts, the last one past its end), then the frames after it.
     pub fn seek(&mut self, to: Duration) -> Result<()> {
-        let timestamp = (to.as_secs_f64() / f64::from(self.base)) as i64 + self.origin;
-        // Backward seeking deliberately lands before the target keyframe.
-        let result = if self.info.kind == Kind::Animation {
-            -1
-        } else {
-            unsafe {
-                ffmpeg::ffi::av_seek_frame(
-                    self.input.as_mut_ptr(),
-                    self.stream as i32,
-                    timestamp,
-                    ffmpeg::ffi::AVSEEK_FLAG_BACKWARD,
-                )
-            }
-        };
-        if result < 0 {
-            // Animated images may depend on the preceding canvas even when
-            // their demuxer accepts seeking. Reopen and reconstruct that canvas.
-            let size = self.size;
-            *self = Self::open(&self.path)?;
-            self.size = size;
-        }
-        self.decoder.flush();
-        self.eof = false;
         self.pending.clear();
-        self.next_pts = Duration::ZERO;
-        let mut previous = None;
-        while let Some(frame) = self.raw_next()? {
-            if frame.pts > to {
-                if let Some(previous) = previous.take() {
-                    self.pending.push_back(previous);
+        match &mut self.source {
+            Source::Video(video) => {
+                video.demuxer.seek(to)?;
+                // Pictures still in the decoder belong to the old position.
+                video.decoder.flush()?;
+                video.eof = false;
+                let mut previous = None;
+                while let Some(pictures) = video.decode_more()? {
+                    let mut pictures = pictures.into_iter();
+                    for picture in pictures.by_ref() {
+                        if picture.pts <= to {
+                            previous = Some(picture);
+                            continue;
+                        }
+                        self.pending.extend(previous.take().map(video_pending));
+                        self.pending.push_back(video_pending(picture));
+                        self.pending.extend(pictures.map(video_pending));
+                        return Ok(());
+                    }
                 }
-                self.pending.push_back(frame);
-                return Ok(());
+                self.pending.extend(previous.map(video_pending));
             }
-            previous = Some(frame);
-        }
-        if let Some(frame) = previous {
-            self.pending.push_back(frame);
+            Source::Animation(decoder) => {
+                decoder.rewind()?;
+                let mut last = None;
+                while let Some(frame) = decoder.next_frame()? {
+                    if frame.pts + frame.duration > to {
+                        last = Some(frame);
+                        break;
+                    }
+                    last = Some(frame);
+                }
+                self.pending.extend(last.map(|frame| Pending {
+                    picture: Picture::Bgra(frame.image),
+                    pts: frame.pts,
+                    duration: Some(frame.duration),
+                }));
+            }
+            Source::Master(master) => master.seek(to)?,
         }
         Ok(())
     }
 
-    fn raw_next(&mut self) -> Result<Option<DecodedFrame>> {
-        loop {
-            let mut av = frame::Video::empty();
-            match self.decoder.receive_frame(&mut av) {
-                Ok(()) => {
-                    let pts = av
-                        .timestamp()
-                        .map(|p| seconds(p - self.origin, self.base))
-                        .unwrap_or(self.next_pts);
-                    let ticks = unsafe { (*av.as_ptr()).duration };
-                    let duration = if ticks > 0 {
-                        seconds(ticks, self.base)
-                    } else {
-                        Duration::from_secs_f64(1.0 / self.info.fps.max(1.0))
-                    };
-                    self.next_pts = pts + duration;
-                    if self.scaler.as_ref().is_none_or(|s| {
-                        s.input().format != av.format()
-                            || s.input().width != av.width()
-                            || s.input().height != av.height()
-                    }) {
-                        self.scaler = Some(software::scaling::Context::get(
-                            av.format(),
-                            av.width(),
-                            av.height(),
-                            format::Pixel::BGRA,
-                            self.size.0,
-                            self.size.1,
-                            software::scaling::flag::Flags::AREA,
-                        )?);
-                    }
-                    let mut bgra = frame::Video::empty();
-                    self.scaler.as_mut().unwrap().run(&av, &mut bgra)?;
-                    let mut image = Image::new(self.size.0, self.size.1);
-                    let stride = image.stride();
-                    for y in 0..self.size.1 as usize {
-                        image.data[y * stride..(y + 1) * stride].copy_from_slice(
-                            &bgra.data(0)[y * bgra.stride(0)..y * bgra.stride(0) + stride],
-                        );
-                    }
-                    return Ok(Some(DecodedFrame {
-                        image,
-                        pts,
-                        duration,
-                    }));
-                }
-                Err(ffmpeg::Error::Eof) => return Ok(None),
-                Err(e) if super::encode::again(e) => {}
-                Err(e) => return Err(e.into()),
-            }
-            if self.eof {
-                return Ok(None);
-            }
-            match next_packet(&mut self.input, self.stream)? {
-                Some(packet) => self.decoder.send_packet(&packet)?,
-                None => {
-                    self.decoder.send_eof()?;
-                    self.eof = true;
-                }
+    /// Decodes until `count` frames are pending or the stream ends.
+    fn fill(&mut self, count: usize) -> Result<()> {
+        while self.pending.len() < count {
+            match &mut self.source {
+                Source::Video(video) => match video.decode_more()? {
+                    Some(pictures) => self.pending.extend(pictures.into_iter().map(video_pending)),
+                    None => break,
+                },
+                Source::Animation(decoder) => match decoder.next_frame()? {
+                    Some(frame) => self.pending.push_back(anim_pending(frame)),
+                    None => break,
+                },
+                Source::Master(master) => match master.next_frame()? {
+                    Some(frame) => self.pending.push_back(anim_pending(frame)),
+                    None => break,
+                },
             }
         }
+        Ok(())
     }
 
     pub fn next_frame(&mut self) -> Result<Option<DecodedFrame>> {
-        let frame = if let Some(frame) = self.pending.pop_front() {
-            Some(frame)
-        } else {
-            self.raw_next()?
-        };
-        let Some(mut frame) = frame else {
+        // One frame of lookahead gives a video frame its duration.
+        self.fill(2)?;
+        let Some(frame) = self.pending.pop_front() else {
             return Ok(None);
         };
-        if self.pending.is_empty()
-            && let Some(next) = self.raw_next()?
-        {
-            self.pending.push_back(next);
-        }
-        if let Some(next) = self.pending.front()
-            && next.pts > frame.pts
-        {
-            frame.duration = next.pts - frame.pts;
-        }
-        Ok(Some(frame))
+        let duration = match (frame.duration, self.pending.front(), &self.source) {
+            (Some(duration), ..) => duration,
+            (None, Some(next), _) if next.pts > frame.pts => next.pts - frame.pts,
+            (None, _, Source::Video(video)) => Some(video.end.saturating_sub(frame.pts))
+                .filter(|d| !d.is_zero())
+                .unwrap_or(video.interval),
+            (None, ..) => Duration::ZERO,
+        };
+        let image = match frame.picture {
+            Picture::Yuv(picture) => convert::to_bgra(&picture),
+            Picture::Bgra(image) => image,
+        };
+        let image = if (image.width, image.height) == self.size {
+            image
+        } else {
+            convert::resize(&image, self.size.0, self.size.1)
+        };
+        Ok(Some(DecodedFrame {
+            image,
+            pts: frame.pts,
+            duration,
+        }))
     }
 }
 
+fn video_pending(picture: DecodedPicture) -> Pending {
+    Pending {
+        pts: picture.pts,
+        picture: Picture::Yuv(picture.picture),
+        duration: None,
+    }
+}
+
+fn anim_pending(frame: anim::AnimFrame) -> Pending {
+    Pending {
+        picture: Picture::Bgra(frame.image),
+        pts: frame.pts,
+        duration: Some(frame.duration),
+    }
+}
+
+/// Packet-time disagreement beyond which the audio timeline is repaired: a
+/// gap is filled with silence, an overlap dropped. Far above timestamp
+/// rounding and the Opus pre-skip (which packet times include).
+const MAX_JITTER: Duration = Duration::from_millis(40);
+
+/// Decodes a file's audio track to interleaved f32 at a requested rate and
+/// channel count. Output is contiguous: each chunk starts where the previous
+/// ended. Gaps between packets come out as silence and overlaps are dropped,
+/// so callers place samples by count from the first chunk's time.
 pub struct AudioDecoder {
-    input: format::context::Input,
-    decoder: ffmpeg::decoder::Audio,
-    resampler: software::resampling::Context,
-    stream: usize,
-    base: ffmpeg::Rational,
-    origin: i64,
-    rate: u32,
-    channels: u16,
-    eof: bool,
-    drained: bool,
-    next_pts: Duration,
+    demuxer: Box<dyn Demuxer>,
+    track: usize,
+    decoder: Box<dyn codec::AudioDecoder>,
+    input: AudioSpec,
+    output: AudioSpec,
+    resampler: Resampler,
+    /// Media time of the first sample since opening or seeking.
+    anchor: Option<Duration>,
+    /// Where the next packet should start, on the packet timeline.
+    expect: Option<Duration>,
+    /// Resampler warm-up frames still to discard.
+    warmup: usize,
+    /// Output frames returned since `anchor`.
+    emitted: u64,
+    /// After a seek: output before this time is dropped.
     skip_to: Option<Duration>,
+    eof: bool,
 }
 
 impl AudioDecoder {
+    /// `Ok(None)` when the file has no audio track quikscope can decode.
     pub fn open(path: &Path, rate: u32, channels: u16) -> Result<Option<Self>> {
-        super::init();
-        Self::from_input(format::input(path)?, rate, channels)
-    }
-
-    pub(crate) fn from_input(
-        input: format::context::Input,
-        rate: u32,
-        channels: u16,
-    ) -> Result<Option<Self>> {
         ensure!(
             rate > 0 && channels > 0,
             "Invalid audio output specification"
         );
-        let Some(stream) = input.streams().best(media::Type::Audio) else {
+        let Some(demuxer) =
+            container::open_demuxer(path).with_context(|| format!("Opening {}", path.display()))?
+        else {
             return Ok(None);
         };
-        let decoder = codec::context::Context::from_parameters(stream.parameters())?
-            .decoder()
-            .audio()?;
-        let layout = if decoder.channel_layout().is_empty() {
-            ChannelLayout::default(decoder.channels() as i32)
-        } else {
-            decoder.channel_layout()
+        let Some(track) = audio_track(demuxer.tracks()) else {
+            return Ok(None);
         };
-        let resampler = software::resampling::Context::get(
-            decoder.format(),
-            layout,
-            decoder.rate(),
-            format::Sample::F32(format::sample::Type::Packed),
-            ChannelLayout::default(channels as i32),
-            rate,
-        )?;
-        Ok(Some(Self {
-            stream: stream.index(),
-            base: stream.time_base(),
-            origin: if stream.start_time() == ffmpeg::ffi::AV_NOPTS_VALUE {
-                0
-            } else {
-                stream.start_time()
+        let Track {
+            codec,
+            kind,
+            codec_private,
+        } = &demuxer.tracks()[track];
+        let TrackKind::Audio {
+            rate: track_rate,
+            channels: track_channels,
+        } = *kind
+        else {
+            unreachable!("audio_track only finds audio tracks");
+        };
+        let decoder = codec::audio_decoder(
+            *codec,
+            codec_private,
+            AudioSpec {
+                rate: track_rate,
+                channels: track_channels,
             },
-            input,
+        )?;
+        let input = decoder.spec();
+        let output = AudioSpec { rate, channels };
+        let resampler = Resampler::new(input, output)?;
+        Ok(Some(Self {
+            demuxer,
+            track,
             decoder,
+            input,
+            output,
+            warmup: resampler.delay(),
             resampler,
-            rate,
-            channels,
-            eof: false,
-            drained: false,
-            next_pts: Duration::ZERO,
+            anchor: None,
+            expect: None,
+            emitted: 0,
             skip_to: None,
+            eof: false,
         }))
     }
 
+    /// Continues from `to`: the next chunk starts at `to` (or at the track's
+    /// first sample when that is later).
     pub fn seek(&mut self, to: Duration) -> Result<()> {
-        let timestamp = (to.as_secs_f64() / f64::from(self.base)) as i64 + self.origin;
-        unsafe {
-            super::encode::check(ffmpeg::ffi::av_seek_frame(
-                self.input.as_mut_ptr(),
-                self.stream as i32,
-                timestamp,
-                ffmpeg::ffi::AVSEEK_FLAG_BACKWARD,
-            ))?;
-        }
-        self.decoder.flush();
-        unsafe {
-            ffmpeg::ffi::swr_close(self.resampler.as_mut_ptr());
-            super::encode::check(ffmpeg::ffi::swr_init(self.resampler.as_mut_ptr()))?;
-        }
-        self.eof = false;
-        self.drained = false;
-        self.next_pts = to;
+        self.demuxer.seek(to)?;
+        self.decoder.reset();
+        self.resampler = Resampler::new(self.input, self.output)?;
+        self.warmup = self.resampler.delay();
+        self.anchor = None;
+        self.expect = None;
+        self.emitted = 0;
         self.skip_to = Some(to);
+        self.eof = false;
         Ok(())
     }
 
+    /// The next samples and the media time of the first; `Ok(None)` at the
+    /// end of the track.
     pub fn next_chunk(&mut self) -> Result<Option<(Vec<f32>, Duration)>> {
-        loop {
-            let mut decoded = frame::Audio::empty();
-            match self.decoder.receive_frame(&mut decoded) {
-                Ok(()) => {
-                    let delay = self.resampler.delay().map_or(Duration::ZERO, |d| {
-                        Duration::from_secs_f64(d.output.max(0) as f64 / self.rate as f64)
+        while !self.eof {
+            let output = match self.demuxer.next_packet()? {
+                Some(packet) if packet.track == self.track => {
+                    let decoded = self.decoder.decode(&packet.data)?;
+                    let frames = decoded.len() / usize::from(self.input.channels);
+                    let length = packet.duration.unwrap_or_else(|| {
+                        Duration::from_secs_f64(frames as f64 / f64::from(self.input.rate))
                     });
-                    let pts = decoded
-                        .timestamp()
-                        .map(|p| seconds(p - self.origin, self.base))
-                        .unwrap_or(self.next_pts)
-                        .saturating_sub(delay);
-                    let output = super::encode::resample(&mut self.resampler, &decoded)?;
-                    let result = self.samples(&output, pts);
-                    if result.0.is_empty() {
-                        continue;
-                    }
-                    return Ok(Some(result));
+                    let input = self.place(decoded, packet.pts, length);
+                    self.resampler.process(&input)?
                 }
-                Err(ffmpeg::Error::Eof) => {
-                    if self.drained {
-                        return Ok(None);
-                    }
-                    let Some(delay) = self.resampler.delay() else {
-                        self.drained = true;
-                        return Ok(None);
-                    };
-                    let mut output = frame::Audio::new(
-                        format::Sample::F32(format::sample::Type::Packed),
-                        delay.output.max(32) as usize,
-                        ChannelLayout::default(self.channels as i32),
-                    );
-                    let delay = self.resampler.flush(&mut output)?;
-                    self.drained = delay.is_none();
-                    let result = self.samples(&output, self.next_pts);
-                    if !result.0.is_empty() {
-                        return Ok(Some(result));
-                    }
-                    return Ok(None);
-                }
-                Err(e) if super::encode::again(e) => {}
-                Err(e) => return Err(e.into()),
-            }
-            if self.eof {
-                return Ok(None);
-            }
-            match next_packet(&mut self.input, self.stream)? {
-                Some(packet) => self.decoder.send_packet(&packet)?,
+                Some(_) => continue,
                 None => {
-                    self.decoder.send_eof()?;
                     self.eof = true;
+                    self.resampler.flush()?
                 }
+            };
+            if let Some(chunk) = self.emit(output) {
+                return Ok(Some(chunk));
             }
         }
+        Ok(None)
     }
 
-    fn samples(&mut self, output: &frame::Audio, pts: Duration) -> (Vec<f32>, Duration) {
-        let count = output.samples() * self.channels as usize;
-        let mut samples = if count == 0 {
-            Vec::new()
-        } else {
-            // Packed f32 has samples × channels initialized values in plane zero.
-            unsafe {
-                std::slice::from_raw_parts(output.data(0).as_ptr().cast::<f32>(), count).to_vec()
-            }
+    /// Lines up one packet's samples with the timeline so far: silence for a
+    /// gap before it, its overlapping start dropped.
+    fn place(&mut self, mut samples: Vec<f32>, pts: Duration, length: Duration) -> Vec<f32> {
+        let channels = usize::from(self.input.channels);
+        let frames_in = |d: Duration| {
+            (d.as_secs_f64() * f64::from(self.input.rate)).round() as usize * channels
         };
-        self.next_pts = pts + Duration::from_secs_f64(output.samples() as f64 / self.rate as f64);
+        match self.expect {
+            None => self.anchor = Some(pts),
+            Some(expect) if pts > expect + MAX_JITTER => {
+                let mut padded = vec![0.0; frames_in(pts - expect)];
+                padded.append(&mut samples);
+                samples = padded;
+            }
+            Some(expect) if pts + MAX_JITTER < expect => {
+                let overlap = frames_in(expect - pts).min(samples.len());
+                samples.drain(..overlap);
+            }
+            Some(_) => {}
+        }
+        self.expect = Some(pts + length);
+        samples
+    }
+
+    /// Turns resampler output into a chunk, dropping warm-up and anything
+    /// before a seek target.
+    fn emit(&mut self, mut samples: Vec<f32>) -> Option<(Vec<f32>, Duration)> {
+        let channels = usize::from(self.output.channels);
+        let warmup = self.warmup.min(samples.len() / channels);
+        self.warmup -= warmup;
+        samples.drain(..warmup * channels);
+        let anchor = self.anchor?;
+        let rate = u64::from(self.output.rate);
+        let time = |frames: u64| anchor + Duration::from_nanos(frames * 1_000_000_000 / rate);
+        let mut pts = time(self.emitted);
+        self.emitted += (samples.len() / channels) as u64;
         if let Some(target) = self.skip_to {
-            if self.next_pts <= target {
-                return (Vec::new(), self.next_pts);
+            if time(self.emitted) <= target {
+                return None;
             }
             self.skip_to = None;
-            let skip = ((target.saturating_sub(pts).as_secs_f64() * self.rate as f64).round()
-                as usize)
-                .min(output.samples())
-                * self.channels as usize;
-            samples.drain(..skip);
-            return (samples, pts.max(target));
+            if target > pts {
+                let skip = ((target - pts).as_secs_f64() * rate as f64).round() as usize;
+                let skip = (skip * channels).min(samples.len());
+                samples.drain(..skip);
+                pts = target;
+            }
         }
-        (samples, pts)
+        (!samples.is_empty()).then_some((samples, pts))
     }
 }
 
@@ -480,16 +524,16 @@ pub fn thumbnail(path: &Path, max_side: u32) -> Result<Image> {
     let info = decoder.info();
     let scale = (max_side as f64 / info.width.max(info.height) as f64).min(1.0);
     let size = (
-        (info.width as f64 * scale).round() as u32,
-        (info.height as f64 * scale).round() as u32,
+        ((info.width as f64 * scale).round() as u32).max(1),
+        ((info.height as f64 * scale).round() as u32).max(1),
     );
     let middle = info.duration / 2;
     decoder.set_output_size(size.0, size.1);
     if middle > Duration::ZERO {
         decoder.seek(middle)?;
     }
-    match decoder.next_frame()? {
-        Some(frame) => Ok(frame.image),
-        None => bail!("Media has no decodable frames"),
-    }
+    decoder
+        .next_frame()?
+        .map(|frame| frame.image)
+        .context("Media has no decodable frames")
 }

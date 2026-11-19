@@ -10,7 +10,6 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use anyhow::{Context, Result, ensure};
-    use ffmpeg_next::{self as ffmpeg, ffi};
     use quikscope::{
         geom::IRect,
         platform::{self, Capture, Clipboard, RecordTarget, ScreenRecorder},
@@ -35,8 +34,15 @@ mod linux {
         }
     }
     pub fn run() -> Result<()> {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
         let args: Vec<_> = std::env::args().collect();
+        // Wayland recordings capture in a helper spawned from /proc/self/exe,
+        // which here is this example.
+        if args.get(1).map(String::as_str) == Some(platform::wlroots::helper::VERB) {
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+                .init();
+            return platform::wlroots::helper::helper_main(&args[2..]);
+        }
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
         let live = args.iter().any(|a| a == "--hyprland");
         let x11 = args.iter().any(|a| a == "--x11");
         if !live && !x11 && std::env::var("QUIKSCOPE_RECORD_PRIVATE").as_deref() != Ok("1") {
@@ -46,7 +52,6 @@ mod linux {
             live || std::env::var("QUIKSCOPE_RECORD_PRIVATE").as_deref() == Ok("1"),
             "refusing a non-private session without --hyprland"
         );
-        ffmpeg::init()?;
         let capture: Box<dyn Capture> = if x11 {
             Box::new(platform::x11::ScreenCapture::spawn()?)
         } else {
@@ -89,7 +94,6 @@ mod linux {
         let mut count = 0;
         let started = Instant::now();
         let cpu_start = cpu();
-        let mut dma = false;
         while started.elapsed() < Duration::from_secs(3) {
             let Some(frame) = source.next_frame(Duration::from_millis(50))? else {
                 continue;
@@ -99,27 +103,8 @@ mod linux {
                 source.size() == (frame.width(), frame.height()),
                 "frame size changed"
             );
-            let av = frame.into_av();
-            dma |= av.format() == ffmpeg::format::Pixel::DRM_PRIME;
             if !matched {
-                let mut downloaded = ffmpeg::frame::Video::empty();
-                let image = if av.format() == ffmpeg::format::Pixel::DRM_PRIME {
-                    let rc = unsafe {
-                        ffi::av_hwframe_transfer_data(downloaded.as_mut_ptr(), av.as_ptr(), 0)
-                    };
-                    ensure!(rc >= 0, "DRM download: {}", ffmpeg::Error::from(rc));
-                    &downloaded
-                } else {
-                    &av
-                };
-                ensure!(
-                    matches!(
-                        image.format(),
-                        ffmpeg::format::Pixel::BGRZ | ffmpeg::format::Pixel::BGRA
-                    ),
-                    "unexpected downloaded format {:?}",
-                    image.format()
-                );
+                let image = frame.to_image();
                 let reference = capture.capture(Some(std::slice::from_ref(&output.name)), false)?;
                 let reference = &reference.outputs[0].image;
                 let scale = reference.width as f64 / r.w as f64;
@@ -127,7 +112,7 @@ mod linux {
                 let oy = ((region.y - r.y) as f64 * scale).round() as usize;
                 if !live {
                     let x = ox - 1;
-                    let y = oy + image.height() as usize / 2;
+                    let y = oy + image.height as usize / 2;
                     ensure!(
                         reference.data[(y * reference.width as usize + x) * 4..][..3]
                             == [0xf2, 0x8c, 0x8f],
@@ -136,9 +121,9 @@ mod linux {
                     println!("outline: accent visible one pixel outside region");
                 }
                 let mut mismatches = 0usize;
-                for y in 0..image.height() as usize {
-                    for x in 0..image.width() as usize {
-                        let a = &image.data(0)[y * image.stride(0) + x * 4..][..3];
+                for y in 0..image.height as usize {
+                    for x in 0..image.width as usize {
+                        let a = &image.data[(y * image.width as usize + x) * 4..][..3];
                         let reference = if live { reference } else { &output.image };
                         let b = &reference.data
                             [((oy + y) * reference.width as usize + ox + x) * 4..][..3];
@@ -147,11 +132,11 @@ mod linux {
                         }
                     }
                 }
-                let fraction = mismatches as f64 / (image.width() as f64 * image.height() as f64);
+                let fraction = mismatches as f64 / (image.width as f64 * image.height as f64);
                 if live {
                     ensure!(
                         fraction < 0.1,
-                        "DRM/still reference differ at {:.2}% pixels",
+                        "frame/still reference differ at {:.2}% pixels",
                         fraction * 100.0
                     );
                 } else {
@@ -161,9 +146,9 @@ mod linux {
                     );
                 }
                 println!(
-                    "download/reference: {}x{}, differing pixels={mismatches} ({:.3}%)",
-                    image.width(),
-                    image.height(),
+                    "frame/reference: {}x{}, differing pixels={mismatches} ({:.3}%)",
+                    image.width,
+                    image.height,
                     fraction * 100.0
                 );
                 matched = true;
@@ -171,7 +156,7 @@ mod linux {
             count += 1;
         }
         println!(
-            "frames={count}, seconds={:.3}, fps={:.2}, process CPU/frame={:.3}ms, emitted_DRM_PRIME={dma} (capture transport is logged above)",
+            "frames={count}, seconds={:.3}, fps={:.2}, process CPU/frame={:.3}ms (capture transport is logged above)",
             started.elapsed().as_secs_f64(),
             count as f64 / started.elapsed().as_secs_f64(),
             (cpu() - cpu_start) * 1000.0 / count.max(1) as f64

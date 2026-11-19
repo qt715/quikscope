@@ -1,11 +1,12 @@
 //! Video and animation: recording sessions, encoding, decoding and export,
-//! on FFmpeg's libraries (libavcodec, libavformat, libavfilter, libavutil).
+//! on quikscope's own engine (no FFmpeg): H.264 through Vulkan Video or
+//! OpenH264 ([`codec`]), Opus audio, MP4/MOV/Matroska ([`container`]) and
+//! animated images ([`anim`]).
 //!
-//! Platform backends produce [`Frame`]s through a [`VideoSource`] and audio
-//! through [`AudioSource`]s; a [`record::Session`] timestamps, encodes and
-//! muxes them on its own threads. Frames may be CPU BGRA or hardware frames
-//! (DRM PRIME, D3D11, VideoToolbox); the encoder maps them to whichever
-//! encoder works (see `encode`).
+//! Platform backends produce CPU [`Frame`]s through a [`VideoSource`] and
+//! audio through [`AudioSource`]s; a [`record::Session`] timestamps, encodes
+//! and muxes them on its own threads. [`decode`] reads every format back and
+//! [`export`] re-encodes between them.
 
 use std::fmt;
 use std::path::Path;
@@ -19,7 +20,6 @@ pub mod codec;
 pub mod container;
 pub mod convert;
 pub mod decode;
-pub mod encode;
 pub mod export;
 mod frame;
 pub mod mix;
@@ -31,18 +31,6 @@ pub use frame::{Frame, PixelFormat, Pixels};
 pub const DEFAULT_OUTPUT: &str = "default-output";
 /// Audio device id meaning "the default microphone".
 pub const DEFAULT_INPUT: &str = "default-input";
-
-/// Initializes FFmpeg once (log routing into `log`, device registration).
-/// Cheap after the first call.
-pub fn init() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        if let Err(e) = ffmpeg_next::init() {
-            log::error!("FFmpeg initialization failed: {e}");
-        }
-        encode::route_logs();
-    });
-}
 
 /// What a recording produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -73,11 +61,11 @@ impl Kind {
 /// File format of a recording or export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OutputFormat {
-    /// H.264 + AAC in MP4.
+    /// H.264 + Opus in MP4.
     Mp4,
     /// H.264 + Opus in Matroska.
     Mkv,
-    /// H.264 + AAC in QuickTime.
+    /// H.264 + Opus in QuickTime.
     Mov,
     Gif,
     Webp,
@@ -246,17 +234,20 @@ pub struct AudioDevice {
 /// Facts about a media file, for opening it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MediaInfo {
+    /// Size of the decoded pictures (H.264 video is cropped to even sizes,
+    /// like everything quikscope decodes and encodes).
     pub width: u32,
     pub height: u32,
     pub duration: Duration,
     /// Average frame rate (0 when unknown).
     pub fps: f64,
-    /// Number of video frames when the container says so.
+    /// Number of frames, known for animations; `None` for videos.
     pub frames: Option<u64>,
     pub has_audio: bool,
-    /// `Video` for files with a video codec stream and/or audio,
+    /// `Video` for MP4/MOV/Matroska files with an H.264 track,
     /// `Animation` for animated image formats (GIF, animated WebP/AVIF/JXL,
-    /// APNG). A single still image probes as an animation with one frame.
+    /// APNG) and recording masters. A single still image probes as an
+    /// animation with one frame.
     pub kind: Kind,
 }
 

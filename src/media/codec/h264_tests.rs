@@ -245,6 +245,81 @@ fn vulkan_round_trips_and_cross_decodes_with_openh264() {
     check_decoded("Vulkan ← OpenH264", &decode(&mut decoder, &frames), &source);
 }
 
+/// Scrolling colour bars under a row of black/white blocks spelling `index`
+/// in binary: mostly skipped macroblocks with sharp changes in between, the
+/// kind of picture that exposed stale bitstream padding in gpu-video.
+fn index_pattern(width: u32, height: u32, index: usize) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let mut data = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let px = if y < 16 && x < 128 {
+                let level = if index >> (7 - x / 16) & 1 == 1 {
+                    255
+                } else {
+                    0
+                };
+                [level, level, level, 255]
+            } else {
+                match (x + index * 4) / 40 % 3 {
+                    0 => [40, 40, 200, 255],
+                    1 => [40, 200, 40, 255],
+                    _ => [200, 40, 40, 255],
+                }
+            };
+            data[(y * w + x) * 4..][..4].copy_from_slice(&px);
+        }
+    }
+    data
+}
+
+/// OpenH264's 4-slice pictures decode on the GPU exactly as OpenH264 decodes
+/// them, the same on every run.
+#[test]
+fn vulkan_decodes_multi_slice_streams_exactly() {
+    let _gpu = gpu_lock();
+    let (width, height) = (320, 240);
+    let mut encoder = h264_soft::Encoder::open(&config(width, height)).unwrap();
+    let source: Vec<Yuv420> = (0..90)
+        .map(|i| {
+            let bgra = index_pattern(width, height, i);
+            to_yuv420(
+                &bgra,
+                width as usize * 4,
+                PixelFormat::Bgrx,
+                width,
+                height,
+                YuvLayout::I420,
+            )
+        })
+        .collect();
+    let frames = encode(&mut encoder, &source, &[]);
+    assert_eq!(
+        nal_types(&frames[1].data),
+        [1, 1, 1, 1],
+        "4 slices per picture"
+    );
+    let reference: Vec<Vec<u8>> = decode(&mut h264_soft::Decoder::open().unwrap(), &frames)
+        .iter()
+        .map(|p| planar(&p.picture))
+        .collect();
+    for run in 0..5 {
+        let Some(mut decoder) = vulkan_decoder() else {
+            return;
+        };
+        let decoded = decode(&mut decoder, &frames);
+        assert_eq!(decoded.len(), reference.len(), "run {run}");
+        for (i, (picture, reference)) in decoded.iter().zip(&reference).enumerate() {
+            assert_eq!(picture.pts, pts(i), "run {run}");
+            assert!(
+                planar(&picture.picture) == *reference,
+                "run {run}: picture {i} differs from OpenH264's ({:.1} dB from the source)",
+                psnr(&picture.picture, &source[i])
+            );
+        }
+    }
+}
+
 #[test]
 fn edge_sizes_round_trip_through_the_chosen_codecs() {
     let _gpu = gpu_lock();
@@ -261,6 +336,75 @@ fn edge_sizes_round_trip_through_the_chosen_codecs() {
             let decoded = decode(decoder.as_mut(), &frames);
             check_decoded(&format!("{name} → {}", decoder.name()), &decoded, &source);
         }
+    }
+}
+
+/// Faint flat changes (a gray block stepping a few levels per picture next to
+/// scrolling content) must show up in the very picture they happen in.
+/// OpenH264's background detection used to skip them now and then.
+#[test]
+fn openh264_keeps_faint_changes() {
+    let (width, height) = (320u32, 240u32);
+    let (w, h) = (width as usize, height as usize);
+    for run in 0..6 {
+        let mut encoder = h264_soft::Encoder::open(&config(width, height)).unwrap();
+        let mut decoder = h264_soft::Decoder::open().unwrap();
+        for i in 0..16usize {
+            let level = (40 + 14 * i) as u8;
+            let mut bgra = vec![0u8; w * h * 4];
+            for y in 0..h {
+                for x in 0..w {
+                    let v = if (100..132).contains(&x) && (100..132).contains(&y) {
+                        level
+                    } else if (x + i * 3) / 8 % 2 == 0 && y > 180 {
+                        230
+                    } else {
+                        60
+                    };
+                    bgra[(y * w + x) * 4..][..4].copy_from_slice(&[v, v, v, 255]);
+                }
+            }
+            let picture = to_yuv420(
+                &bgra,
+                w * 4,
+                PixelFormat::Bgrx,
+                width,
+                height,
+                YuvLayout::I420,
+            );
+            let expected = f64::from(picture.data[110 * w + 110]);
+            let mut decoded = Vec::new();
+            for frame in encoder.encode(&picture, pts(i), false).unwrap() {
+                decoded.extend(decoder.decode(&frame.data, frame.pts).unwrap());
+            }
+            assert_eq!(decoded.len(), 1, "run {run}: picture {i} decoded at once");
+            let luma = &decoded[0].picture.data;
+            let block: f64 = (104..128)
+                .flat_map(|y| (104..128).map(move |x| f64::from(luma[y * w + x])))
+                .sum::<f64>()
+                / (24.0 * 24.0);
+            assert!(
+                (block - expected).abs() < 4.0,
+                "run {run}: picture {i} block at Y {block:.1}, want {expected}"
+            );
+        }
+    }
+}
+
+/// The same pictures always encode to the same bytes, whatever the timing
+/// of OpenH264's slice threads.
+#[test]
+fn openh264_output_is_deterministic() {
+    let (width, height) = (640, 360);
+    let source = pictures(width, height, 12, YuvLayout::I420);
+    let streams: Vec<Vec<EncodedFrame>> = (0..4)
+        .map(|_| {
+            let mut encoder = h264_soft::Encoder::open(&config(width, height)).unwrap();
+            encode(&mut encoder, &source, &[])
+        })
+        .collect();
+    for stream in &streams[1..] {
+        assert!(stream == &streams[0], "encodes differ");
     }
 }
 

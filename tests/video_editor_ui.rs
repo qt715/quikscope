@@ -3,8 +3,8 @@
 //!
 //! Timeline, format and help cases use a path that does not exist, so they
 //! run without any media engine. Cases that decode use a 5 s 1280×720
-//! H.264/AAC clip made by the `ffmpeg` command-line tool; they skip when it
-//! is not installed. Copies go to a temporary clip cache, never ~/.cache.
+//! H.264/Opus clip made by quikscope's own encoders (`support/fixtures.rs`).
+//! Copies go to a temporary clip cache, never ~/.cache.
 
 #![cfg(not(windows))]
 
@@ -22,6 +22,9 @@ use quikscope::media::{Kind, MediaInfo, OutputFormat};
 use quikscope::ui::Assets;
 use quikscope::ui::editor::EditorServices;
 use quikscope::ui::video_editor::{AnnotateFrame, VideoEditor};
+
+#[path = "support/fixtures.rs"]
+mod fixtures;
 
 /// Records files put on the clipboard.
 #[derive(Default)]
@@ -354,7 +357,7 @@ impl Ui {
 const FRAME: f64 = 1.0 / 30.0;
 
 /// Checks the container duration with the `ffprobe` tool too, when it is
-/// installed (it ships with the `ffmpeg` tool that made the fixture).
+/// installed.
 #[track_caller]
 fn assert_ffprobe_duration(path: &Path, expected: f64) {
     let Ok(out) = std::process::Command::new("ffprobe")
@@ -407,44 +410,40 @@ fn fake(path: &str, has_audio: bool) -> (PathBuf, MediaInfo) {
     )
 }
 
-/// Makes a 5 s 1280×720 30 fps H.264 + AAC clip with `audio` (an FFmpeg
-/// source filter) as its sound; `None` without the `ffmpeg` tool or any
-/// H.264 encoder (distribution builds ship libx264 or only OpenH264).
-fn make_clip(name: &str, audio: &str) -> Option<PathBuf> {
+/// Makes a 5 s 1280×720 30 fps H.264 + Opus clip of the test pattern with a
+/// 440 Hz tone at `amplitude`.
+fn make_clip(name: &str, amplitude: f32) -> PathBuf {
     let path = std::env::temp_dir().join(format!("quikscope-{name}-{}.mp4", std::process::id()));
-    let video = "testsrc2=size=1280x720:rate=30:duration=5";
-    let made = ["libx264", "libopenh264"].into_iter().any(|encoder| {
-        std::process::Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "quiet", "-y"])
-            .args(["-f", "lavfi", "-i", video, "-f", "lavfi", "-i", audio])
-            .args([
-                "-c:v", encoder, "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", "5",
-            ])
-            .arg(&path)
-            .status()
-            .is_ok_and(|s| s.success())
-    });
-    if !made {
-        eprintln!("skipping: the ffmpeg command-line tool could not make a test video");
-    }
-    made.then_some(path)
+    let length = Duration::from_secs(5);
+    let clip = fixtures::Clip {
+        width: 1280,
+        height: 720,
+        fps: 30,
+        frames: 150,
+        tone: Some(fixtures::Tone {
+            frequency: 440.0,
+            amplitude,
+            start: Duration::ZERO,
+            length,
+        }),
+    };
+    fixtures::video(&path, OutputFormat::Mp4, &clip).expect("making the test video");
+    path
 }
 
 /// A test pattern with a 440 Hz tone.
-static FIXTURE: LazyLock<Option<PathBuf>> =
-    LazyLock::new(|| make_clip("video-editor", "sine=frequency=440:sample_rate=48000"));
+static FIXTURE: LazyLock<PathBuf> = LazyLock::new(|| make_clip("video-editor", 0.2));
 /// The same pattern with silent audio, for cases that open a real audio
 /// output: nothing is ever heard.
-static SILENT: LazyLock<Option<PathBuf>> =
-    LazyLock::new(|| make_clip("video-editor-silent", "anullsrc=r=48000:cl=stereo"));
+static SILENT: LazyLock<PathBuf> = LazyLock::new(|| make_clip("video-editor-silent", 0.0));
 
-fn open_clip(clip: &LazyLock<Option<PathBuf>>) -> Option<(PathBuf, MediaInfo)> {
-    let path = LazyLock::force(clip).clone()?;
+fn open_clip(clip: &LazyLock<PathBuf>) -> (PathBuf, MediaInfo) {
+    let path = LazyLock::force(clip).clone();
     let info = quikscope::media::decode::probe(&path).expect("probing the test video");
-    Some((path, info))
+    (path, info)
 }
 
-fn fixture() -> Option<(PathBuf, MediaInfo)> {
+fn fixture() -> (PathBuf, MediaInfo) {
     open_clip(&FIXTURE)
 }
 
@@ -576,9 +575,7 @@ pub(super) fn mute_needs_audio_and_toggles_with_m() {
 }
 
 pub(super) fn real_video_seeks_steps_and_plays() {
-    let Some((path, info)) = fixture() else {
-        return;
-    };
+    let (path, info) = fixture();
     assert_eq!((info.width, info.height), (1280, 720));
     assert!(info.has_audio);
     let mut ui = Ui::open(&path, info);
@@ -657,9 +654,7 @@ pub(super) fn real_video_seeks_steps_and_plays() {
 }
 
 pub(super) fn real_video_exports_trimmed_gif_and_mp4() {
-    let Some((path, info)) = fixture() else {
-        return;
-    };
+    let (path, info) = fixture();
     let before = std::fs::metadata(&path).unwrap();
     let mut ui = Ui::open(&path, info);
     ui.wait_for("the first frame", |e| e.shown_pts().is_some());
@@ -720,9 +715,7 @@ pub(super) fn real_video_exports_trimmed_gif_and_mp4() {
 }
 
 pub(super) fn export_can_be_cancelled_and_leaves_no_file() {
-    let Some((path, info)) = fixture() else {
-        return;
-    };
+    let (path, info) = fixture();
     let mut ui = Ui::open(&path, info);
     ui.wait_for("the first frame", |e| e.shown_pts().is_some());
     ui.click_control("format");
@@ -742,9 +735,7 @@ pub(super) fn export_can_be_cancelled_and_leaves_no_file() {
 
 /// Saving an untouched video copies it as it is, byte for byte.
 pub(super) fn untouched_save_copies_the_source_exactly() {
-    let Some((path, info)) = fixture() else {
-        return;
-    };
+    let (path, info) = fixture();
     let mut ui = Ui::open(&path, info);
     let message = ui.export(|ui| ui.ctrl("s"));
     assert!(message.starts_with("Saved"), "{message}");
@@ -759,9 +750,7 @@ pub(super) fn untouched_save_copies_the_source_exactly() {
 /// Closing the window mid-export lets the export finish; a notification
 /// says so, since no window is left for a toast.
 pub(super) fn closing_the_window_lets_the_export_finish() {
-    let Some((path, info)) = fixture() else {
-        return;
-    };
+    let (path, info) = fixture();
     let mut ui = Ui::open(&path, info);
     ui.click_control("format");
     ui.click_control("format:gif");
@@ -782,9 +771,7 @@ pub(super) fn closing_the_window_lets_the_export_finish() {
 /// "Annotate frame" opens the frame through the clip cache: nothing lands
 /// in the screenshots folder unless the annotator saves.
 pub(super) fn annotate_frame_opens_a_full_size_png_from_the_clip_cache() {
-    let Some((path, info)) = fixture() else {
-        return;
-    };
+    let (path, info) = fixture();
     let mut ui = Ui::open(&path, info);
     ui.wait_for("the first frame", |e| e.shown_pts().is_some());
     let target = ui.at(2.5, 0.0);
@@ -833,9 +820,7 @@ pub(super) fn shortcut_help_opens_and_closes_without_side_effects() {
 }
 
 pub(super) fn audible_playback_opens_output_and_mute_closes_it() {
-    let Some((path, info)) = open_clip(&SILENT) else {
-        return;
-    };
+    let (path, info) = open_clip(&SILENT);
     assert!(info.has_audio);
     let mut ui = Ui::open(&path, info);
     ui.wait_for("the first frame", |e| e.shown_pts().is_some());

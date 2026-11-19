@@ -2,8 +2,6 @@
 
 use std::time::Instant;
 
-use ffmpeg_next as ffmpeg;
-
 use crate::raster::Image;
 
 /// Byte order of a 4-byte pixel. The `x` variants carry no alpha.
@@ -38,25 +36,20 @@ impl Pixels {
 }
 
 /// A captured frame: `height` rows of `width` 4-byte pixels, `stride` bytes
-/// apart.
+/// apart, in the storage the capture produced. A recording converts it once
+/// on its encoder thread and drops it right after, which hands a
+/// [`Pixels::Shared`] buffer back to its pool.
 pub struct Frame {
-    // Transitional: the FFmpeg engine still consumes AVFrames. The FFmpeg-free
-    // pipeline replaces this with the `Pixels` it was built from.
-    pub(crate) av: ffmpeg::frame::Video,
+    width: u32,
+    height: u32,
+    stride: usize,
+    format: PixelFormat,
+    pixels: Pixels,
     /// When the pixels were captured; the session derives timestamps from it.
     pub captured: Instant,
 }
 
-// SAFETY: an AVFrame is reference-counted data with no thread affinity; the
-// session moves each frame to its encoder thread exactly once.
-unsafe impl Send for Frame {}
-
 impl Frame {
-    /// Wraps a frame built by a platform source (hardware frames included).
-    pub fn from_av(av: ffmpeg::frame::Video, captured: Instant) -> Frame {
-        Frame { av, captured }
-    }
-
     /// Takes ownership of (or borrows from a pool) `height` rows of pixels.
     pub fn from_pixels(
         width: u32,
@@ -66,27 +59,20 @@ impl Frame {
         pixels: Pixels,
         captured: Instant,
     ) -> Frame {
-        let data = pixels.bytes();
         assert!(stride >= width as usize * 4, "stride shorter than a row");
         assert!(
-            data.len() >= stride * (height as usize).saturating_sub(1) + width as usize * 4,
+            pixels.bytes().len()
+                >= stride * (height as usize).saturating_sub(1) + width as usize * 4,
             "pixel buffer shorter than the frame"
         );
-        let pixel = match format {
-            PixelFormat::Bgra => ffmpeg::format::Pixel::BGRA,
-            PixelFormat::Bgrx => ffmpeg::format::Pixel::BGRZ,
-            PixelFormat::Rgba => ffmpeg::format::Pixel::RGBA,
-            PixelFormat::Rgbx => ffmpeg::format::Pixel::RGBZ,
-        };
-        let mut av = ffmpeg::frame::Video::new(pixel, width, height);
-        let dst_stride = av.stride(0);
-        let row = width as usize * 4;
-        let dst = av.data_mut(0);
-        for y in 0..height as usize {
-            dst[y * dst_stride..y * dst_stride + row]
-                .copy_from_slice(&data[y * stride..y * stride + row]);
+        Frame {
+            width,
+            height,
+            stride,
+            format,
+            pixels,
+            captured,
         }
-        Frame { av, captured }
     }
 
     /// Copies BGRA rows (`stride` bytes apart) into a new frame. `opaque`
@@ -126,18 +112,79 @@ impl Frame {
     }
 
     pub fn width(&self) -> u32 {
-        self.av.width()
+        self.width
     }
 
     pub fn height(&self) -> u32 {
-        self.av.height()
+        self.height
     }
 
-    pub fn av(&self) -> &ffmpeg::frame::Video {
-        &self.av
+    /// Bytes from one row to the next.
+    pub fn stride(&self) -> usize {
+        self.stride
     }
 
-    pub fn into_av(self) -> ffmpeg::frame::Video {
-        self.av
+    pub fn format(&self) -> PixelFormat {
+        self.format
+    }
+
+    /// The rows, `stride` bytes apart (the last row may end right after its
+    /// pixels).
+    pub fn pixels(&self) -> &[u8] {
+        self.pixels.bytes()
+    }
+
+    /// The frame as a straight-alpha BGRA image (opaque formats get alpha
+    /// 255).
+    pub fn to_image(&self) -> Image {
+        let row = self.width as usize * 4;
+        let mut data = Vec::with_capacity(row * self.height as usize);
+        let pixels = self.pixels();
+        for y in 0..self.height as usize {
+            data.extend_from_slice(&pixels[y * self.stride..y * self.stride + row]);
+        }
+        let swap = matches!(self.format, PixelFormat::Rgba | PixelFormat::Rgbx);
+        let opaque = self.format.is_opaque();
+        if swap || opaque {
+            for pixel in data.chunks_exact_mut(4) {
+                if swap {
+                    pixel.swap(0, 2);
+                }
+                if opaque {
+                    pixel[3] = 255;
+                }
+            }
+        }
+        Image {
+            width: self.width,
+            height: self.height,
+            data,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_image_honours_stride_and_byte_order() {
+        // 2×2 RGBX with 4 bytes of row padding; the X bytes are garbage.
+        let rows = vec![
+            1, 2, 3, 9, 4, 5, 6, 9, 0, 0, 0, 0, //
+            7, 8, 9, 9, 10, 11, 12, 9,
+        ];
+        let frame = Frame::from_pixels(
+            2,
+            2,
+            12,
+            PixelFormat::Rgbx,
+            Pixels::Shared(Box::new(rows)),
+            Instant::now(),
+        );
+        assert_eq!(
+            frame.to_image().data,
+            [3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255]
+        );
     }
 }

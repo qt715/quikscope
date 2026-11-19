@@ -161,6 +161,13 @@ impl Encoder {
         params.iComplexityMode = MEDIUM_COMPLEXITY;
         // 0 = one thread per core, capped by OpenH264 (and by `slices`).
         params.iMultipleThreadIdc = 0;
+        // Load balancing moves slice boundaries by how fast each thread
+        // happened to be, which makes the output (and rate control)
+        // differ from run to run; fixed slices keep it reproducible.
+        params.bUseLoadBalancing = false;
+        // Background detection codes blocks it deems static as skipped, which
+        // drops faint flat changes (fades, gray-on-gray UI) for a few pictures.
+        params.bEnableBackgroundDetection = false;
         params.iSpatialLayerNum = 1;
         params.iTemporalLayerNum = 1;
         let layer = &mut params.sSpatialLayers[0];

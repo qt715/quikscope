@@ -1636,8 +1636,8 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
     let p = path.clone();
     let image = cx
         .background_spawn(async move {
-            // The image crate covers PNG/JPEG/WebP; FFmpeg the remaining
-            // still formats (AVIF, JPEG XL, single-frame GIF).
+            // The image crate covers PNG/JPEG/WebP; the media decoders the
+            // remaining still formats (AVIF, JPEG XL, single-frame GIF).
             Image::load(&p).or_else(|e| record::first_frame(&p).map(|(i, _)| i).map_err(|_| e))
         })
         .await?;

@@ -391,7 +391,7 @@ impl VideoDecoder for Decoder {
     fn decode(&mut self, access_unit: &[u8], pts: Duration) -> Result<Vec<DecodedPicture>> {
         self.decoder
             .decode(EncodedInputChunk {
-                data: access_unit,
+                data: &aligned_access_unit(access_unit),
                 pts: Some(pts_to_u64(pts)?),
             })
             .context("Vulkan H.264 decode")?;
@@ -407,6 +407,64 @@ impl VideoDecoder for Decoder {
         self.decoder.flush().context("Vulkan H.264 decoder flush")?;
         self.drain()
     }
+}
+
+/// A multiple of every driver's `minBitstreamBufferSizeAlignment` (a power
+/// of two; gpu-video does not expose it).
+const BITSTREAM_ALIGNMENT: usize = 4096;
+/// 3⁻¹ modulo [`BITSTREAM_ALIGNMENT`].
+const INVERSE_OF_3: usize = 2731;
+const _: () = assert!(3 * INVERSE_OF_3 % BITSTREAM_ALIGNMENT == 1);
+
+/// `access_unit` with its last slice padded so that gpu-video uploads a
+/// bitstream of exactly a multiple of [`BITSTREAM_ALIGNMENT`] bytes.
+///
+/// gpu-video 0.5.0 concatenates the slices (4-byte start code each, trailing
+/// zero bytes stripped) into a pooled buffer and hands the GPU that length
+/// rounded up to the alignment, over stale bytes from earlier pictures
+/// (`upload_data` in wrappers/mem.rs). NVIDIA decodes those into pictures
+/// with several slices: stale or gray macroblocks, differently each run.
+/// The padding is `00 00 03` triplets (cabac_zero_words): they survive the
+/// zero stripping and read as zero bits after the slice's stop bit. 3 is
+/// invertible modulo a power of two, so whole triplets reach any length.
+fn aligned_access_unit(access_unit: &[u8]) -> Vec<u8> {
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i + 3 <= access_unit.len() {
+        if access_unit[i..i + 3] == [0, 0, 1] {
+            starts.push(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    let mut length = 0;
+    let mut last_slice_end = None;
+    for (n, &start) in starts.iter().enumerate() {
+        let next = starts
+            .get(n + 1)
+            .map_or(access_unit.len(), |&next| next - 3);
+        let nal = &access_unit[start..next];
+        let Some(last) = nal.iter().rposition(|&byte| byte != 0) else {
+            continue;
+        };
+        if matches!(nal[0] & 0x1f, 1 | 5) {
+            length += 4 + last + 1;
+            last_slice_end = Some(start + last + 1);
+        }
+    }
+    let Some(end) = last_slice_end else {
+        return access_unit.to_vec();
+    };
+    let missing = length.next_multiple_of(BITSTREAM_ALIGNMENT) - length;
+    let words = missing * INVERSE_OF_3 % BITSTREAM_ALIGNMENT;
+    let mut padded = Vec::with_capacity(access_unit.len() + words * 3);
+    padded.extend_from_slice(&access_unit[..end]);
+    for _ in 0..words {
+        padded.extend_from_slice(&[0, 0, 3]);
+    }
+    padded.extend_from_slice(&access_unit[end..]);
+    padded
 }
 
 /// Wraps gpu-video's NV12 output (luma rows `width` bytes, chroma rows
