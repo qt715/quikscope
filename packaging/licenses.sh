@@ -42,10 +42,11 @@ ASSETS = [
     ('Lucide icons — ISC and Feather MIT', 'assets/icons/LICENSE'),
 ]
 
-packages = json.loads(Path('THIRD-PARTY-LICENSES.metadata.tmp').read_text())['packages']
+# Windows Python defaults to the ANSI code page; every file here is UTF-8.
+packages = json.loads(Path('THIRD-PARTY-LICENSES.metadata.tmp').read_text(encoding='utf-8'))['packages']
 p = Path('THIRD-PARTY-LICENSES.html.tmp')
 # Escape the texts so the HTML contains the complete verbatim licences.
-with p.open('a') as out:
+with p.open('a', encoding='utf-8') as out:
     out.write('<h1>Bundled C and C++ libraries</h1>\n')
     for title, crate, file, extract in NATIVE:
         versions = sorted((pkg for pkg in packages if pkg['name'] == crate), key=lambda pkg: pkg['version'])
@@ -56,16 +57,16 @@ with p.open('a') as out:
             path = Path(pkg['manifest_path']).parent / file
             if not path.is_file():
                 sys.exit(f'{path} is missing: update NATIVE in packaging/licenses.sh')
-            texts.setdefault(extract(path.read_text()), []).append(f"{crate} {pkg['version']}")
+            texts.setdefault(extract(path.read_text(encoding='utf-8')), []).append(f"{crate} {pkg['version']}")
         for text, sources in texts.items():
             out.write('<h2>' + html.escape(title) + '</h2><p>Built from the source in '
                       + html.escape(', '.join(sources)) + '.</p><pre>' + html.escape(text) + '</pre>\n')
     out.write('<h1>Vendored Rust code</h1>\n')
     for title, path in VENDORED:
-        out.write('<h2>' + html.escape(title) + '</h2><pre>' + html.escape(Path(path).read_text()) + '</pre>\n')
+        out.write('<h2>' + html.escape(title) + '</h2><pre>' + html.escape(Path(path).read_text(encoding='utf-8')) + '</pre>\n')
     out.write('<h1>Bundled assets</h1>\n')
     for title, path in ASSETS:
-        out.write('<h2>' + html.escape(title) + '</h2><pre>' + html.escape(Path(path).read_text()) + '</pre>\n')
+        out.write('<h2>' + html.escape(title) + '</h2><pre>' + html.escape(Path(path).read_text(encoding='utf-8')) + '</pre>\n')
     out.write('</html>\n')
 p.replace('THIRD-PARTY-LICENSES.html')
 PY
