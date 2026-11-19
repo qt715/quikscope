@@ -1,0 +1,31 @@
+This directory is a modified copy of zune-jpegxl 0.5.2
+(https://crates.io/crates/zune-jpegxl/0.5.2, upstream
+https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpegxl,
+commit a019244c4a8a4eb713e85fa77f9e18f841d6271b), by Caleb Etemesi,
+licensed under MIT OR Apache-2.0 OR Zlib (LICENSE-MIT, LICENSE-APACHE,
+LICENSE-ZLIB). quikscope uses it under the same terms.
+
+It is compiled as a private module of quikscope (src/media/anim/jxl.rs
+includes src/lib.rs with #[path]) rather than as its own crate, so that
+quikscope can still be packaged and installed from crates.io. Hence there is
+no Cargo.toml here; it depends on zune-core 0.5 through quikscope.
+
+Changes from upstream:
+
+- Animation (src/encoder.rs): `JxlAnimation` and `JxlFrame` plus
+  `JxlSimpleEncoder::encode_frame`, which writes one frame of an animated
+  codestream. The first frame's image header carries the extra fields with
+  an AnimationHeader (ticks per second, loop count) and default tone
+  mapping; every frame header carries its duration, frames other than the
+  last are saved as reference frame 1, and a frame may cover only part of
+  the canvas (custom size and origin), replacing that region of reference
+  frame 1. The bit layout follows the JPEG XL codestream specification as
+  parsed by jxl-oxide (jxl-image ImageMetadata/AnimationHeader, jxl-frame
+  FrameHeader). The still-image path (`encode`) writes what it did before.
+- Threads: images with several groups are coded by a fixed number of
+  worker threads that take groups from a shared counter, instead of one
+  thread per group with the caller spinning while too many were running.
+  The no_std build path is gone.
+- Module form: `crate::` paths became `super::`, the crate-level
+  attributes, `extern crate` lines, std/threads feature gates, trace
+  logging and the doc examples (which named the crate) were removed.

@@ -1,10 +1,21 @@
-//! Resident per-output capture. DXGI is the default architectural choice: it
-//! retains duplication/device/staging resources and reuses unchanged frames.
-//! No hardware timing claim is implied. `new_with_backend` allows an external
-//! benchmark to compare DXGI (with availability fallback) against forced GDI.
-use super::desktop::{Monitor, PhysicalDpi, monitors};
+//! The capture worker: one thread owning every Desktop Duplication and GDI
+//! resource of the process. DXGI allows one duplication per output and
+//! process, so screenshots and recordings share it: a recording pulls its
+//! frames through this worker (see `record.rs`), and a screenshot taken
+//! meanwhile reads the same duplication's newest image. Outputs left unused
+//! for [`IDLE`] are released, duplication and D3D11 device included, unless a
+//! recording holds them; repeated screenshots within that time skip setup.
+//! `new_with_backend` allows an external benchmark to compare DXGI (with
+//! availability fallback) against forced GDI.
+use super::{
+    desktop::{Monitor, PhysicalDpi, monitors},
+    duplication::{Duplication, Update},
+};
 use crate::{
     capture::{OutputFrame, Snapshot},
+    geom::IRect,
+    media::{Frame, PixelFormat, Pixels},
+    platform::windows_pixels::{self as pixels, Rotation},
     raster::Image,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,27 +23,28 @@ use std::{
     collections::HashMap,
     ffi::c_void,
     mem::size_of,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HMODULE},
-        Graphics::{
-            Direct3D::D3D_DRIVER_TYPE_UNKNOWN,
-            Direct3D11::*,
-            Dxgi::{Common::*, *},
-            Gdi::*,
-        },
+        Foundation::HANDLE,
+        Graphics::Gdi::*,
         System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize},
         UI::WindowsAndMessaging::{
             CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, HICON,
             ICONINFO,
         },
     },
-    core::{Interface, PCWSTR, w},
+    core::{PCWSTR, w},
 };
+
+/// How long an output's capture resources outlive their last use.
+const IDLE: Duration = Duration::from_secs(10);
+/// Pause before retrying a duplication that could not be made (secure
+/// desktop, unsupported virtual output), so failures stay cheap.
+const RETRY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureBackend {
@@ -40,13 +52,34 @@ pub enum CaptureBackend {
     Gdi,
 }
 
-struct Request {
-    outputs: Option<Vec<String>>,
-    cursor: bool,
-    reply: mpsc::SyncSender<Result<Snapshot>>,
+pub(super) enum Request {
+    Snapshot {
+        outputs: Option<Vec<String>>,
+        cursor: bool,
+        reply: mpsc::SyncSender<Result<Snapshot>>,
+    },
+    /// Starts a recording stream of `region` (global physical pixels).
+    Open {
+        output: String,
+        region: IRect,
+        cursor: bool,
+        reply: mpsc::SyncSender<Result<u64>>,
+    },
+    /// The stream's next frame: waits up to `wait` for a change, or returns
+    /// the newest image regardless when `fresh`.
+    Frame {
+        stream: u64,
+        wait: Duration,
+        fresh: bool,
+        reply: mpsc::SyncSender<Result<Option<Frame>>>,
+    },
+    Close {
+        stream: u64,
+    },
 }
 
-/// Only messages cross threads; all COM and GDI objects stay on their owner.
+/// Only messages cross threads; all COM and GDI objects stay on the worker.
+#[derive(Clone)]
 pub struct WindowsCapture {
     requests: mpsc::Sender<Request>,
 }
@@ -74,11 +107,17 @@ impl WindowsCapture {
                 let mut worker = Worker {
                     backend,
                     outputs: HashMap::new(),
+                    streams: HashMap::new(),
+                    next_stream: 0,
                 };
                 let _ = ready.send(monitors().map(|_| ()));
-                for request in receiver {
-                    let result = worker.capture(request.outputs.as_deref(), request.cursor);
-                    let _ = request.reply.send(result);
+                loop {
+                    match receiver.recv_timeout(IDLE) {
+                        Ok(request) => worker.handle(request),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                    worker.release_idle();
                 }
                 drop(worker);
                 unsafe {
@@ -90,34 +129,157 @@ impl WindowsCapture {
             .context("capture worker exited during startup")??;
         Ok(Self { requests })
     }
+
+    /// Sends a request built around a reply channel and waits for the reply.
+    pub(super) fn call<T>(
+        &self,
+        request: impl FnOnce(mpsc::SyncSender<Result<T>>) -> Request,
+    ) -> Result<T> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.requests
+            .send(request(reply))
+            .map_err(|_| anyhow!("capture worker stopped"))?;
+        response.recv().context("capture worker stopped")?
+    }
+
+    pub(super) fn close(&self, stream: u64) {
+        let _ = self.requests.send(Request::Close { stream });
+    }
 }
 impl crate::platform::Capture for WindowsCapture {
     fn capture(&self, outputs: Option<&[String]>, cursor: bool) -> Result<Snapshot> {
-        let (reply, response) = mpsc::sync_channel(1);
-        self.requests
-            .send(Request {
-                outputs: outputs.map(<[String]>::to_vec),
-                cursor,
-                reply,
-            })
-            .map_err(|_| anyhow!("capture worker stopped"))?;
-        response.recv().context("capture worker stopped")?
+        self.call(|reply| Request::Snapshot {
+            outputs: outputs.map(<[String]>::to_vec),
+            cursor,
+            reply,
+        })
     }
 }
 
 struct Worker {
     backend: CaptureBackend,
     outputs: HashMap<String, Output>,
+    streams: HashMap<u64, Stream>,
+    next_stream: u64,
 }
 struct Output {
     monitor: Monitor,
-    gdi: Gdi,
+    gdi: Option<Gdi>,
     dxgi: Option<Duplication>,
     dxgi_retry: Option<Instant>,
+    used: Instant,
+    /// Counts desktop and pointer updates across duplication re-creations,
+    /// so each stream sees every change even when another reader acquired it.
+    desktop_updates: u64,
+    pointer_updates: u64,
 }
+impl Output {
+    fn new(monitor: Monitor) -> Self {
+        Self {
+            monitor,
+            gdi: None,
+            dxgi: None,
+            dxgi_retry: None,
+            used: Instant::now(),
+            desktop_updates: 0,
+            pointer_updates: 0,
+        }
+    }
+    /// The output's duplication, made on demand unless a recent attempt
+    /// failed.
+    fn duplication(&mut self) -> Option<&mut Duplication> {
+        if self.dxgi.is_none() && self.dxgi_retry.is_none_or(|retry| Instant::now() >= retry) {
+            match Duplication::new(&self.monitor) {
+                Ok(duplication) => {
+                    self.dxgi = Some(duplication);
+                    self.dxgi_retry = None;
+                }
+                Err(error) => {
+                    log::debug!("DXGI {} unavailable: {error:#}", self.monitor.name);
+                    self.dxgi_retry = Some(Instant::now() + RETRY);
+                }
+            }
+        }
+        self.dxgi.as_mut()
+    }
+    /// Acquires the next update into the duplication (made on demand). One
+    /// that fails is dropped so the next use re-creates factory, device,
+    /// duplication and textures; `dxgi` is `None` afterwards.
+    fn acquire(&mut self, wait: Duration) {
+        let Some(dxgi) = self.duplication() else {
+            return;
+        };
+        match dxgi.acquire(wait) {
+            Ok(Update { desktop, pointer }) => {
+                self.desktop_updates += u64::from(desktop);
+                self.pointer_updates += u64::from(pointer);
+            }
+            Err(error) => {
+                // Includes ACCESS_LOST (mode change, secure desktop) and
+                // device removal.
+                log::debug!("DXGI capture {} lost: {error:#}", self.monitor.name);
+                self.dxgi = None;
+            }
+        }
+    }
+}
+
+struct Stream {
+    output: String,
+    /// The output's rectangle when the stream opened; a mode or layout
+    /// change ends the recording rather than recording the wrong pixels.
+    monitor: IRect,
+    /// Desktop orientation, relative to the output.
+    region: IRect,
+    cursor: bool,
+    /// Update counts of the last delivered frame.
+    seen: Option<(u64, u64)>,
+    pool: Pool,
+}
+
 impl Worker {
+    fn handle(&mut self, request: Request) {
+        match request {
+            Request::Snapshot {
+                outputs,
+                cursor,
+                reply,
+            } => {
+                let _ = reply.send(self.capture(outputs.as_deref(), cursor));
+            }
+            Request::Open {
+                output,
+                region,
+                cursor,
+                reply,
+            } => {
+                let _ = reply.send(self.open(output, region, cursor));
+            }
+            Request::Frame {
+                stream,
+                wait,
+                fresh,
+                reply,
+            } => {
+                let _ = reply.send(self.frame(stream, wait, fresh));
+            }
+            Request::Close { stream } => {
+                self.streams.remove(&stream);
+            }
+        }
+    }
+
+    fn release_idle(&mut self) {
+        let streams = &self.streams;
+        self.outputs.retain(|name, output| {
+            output.used.elapsed() < IDLE || streams.values().any(|s| &s.output == name)
+        });
+    }
+
     fn capture(&mut self, selected: Option<&[String]>, cursor: bool) -> Result<Snapshot> {
         let monitors = monitors()?;
+        // A recording on a removed or changed output notices the missing or
+        // replaced entry itself and ends.
         self.outputs.retain(|name, output| {
             monitors
                 .iter()
@@ -128,69 +290,44 @@ impl Worker {
             if selected.is_some_and(|names| !names.contains(&monitor.name)) {
                 continue;
             }
-            if !self.outputs.contains_key(&monitor.name) {
-                let gdi = Gdi::new(&monitor)?;
-                self.outputs.insert(
-                    monitor.name.clone(),
-                    Output {
-                        monitor: monitor.clone(),
-                        gdi,
-                        dxgi: None,
-                        dxgi_retry: None,
-                    },
-                );
-            }
-            let output = self.outputs.get_mut(&monitor.name).unwrap();
-            let mut frame = None;
+            let output = self
+                .outputs
+                .entry(monitor.name.clone())
+                .or_insert_with(|| Output::new(monitor.clone()));
+            output.used = Instant::now();
+            let mut dxgi = None;
             if self.backend == CaptureBackend::Dxgi {
-                if output.dxgi.is_none()
-                    && output
-                        .dxgi_retry
-                        .is_none_or(|retry| Instant::now() >= retry)
-                {
-                    match Duplication::new(&monitor) {
-                        Ok(duplication) => {
-                            output.dxgi = Some(duplication);
-                            output.dxgi_retry = None;
-                        }
+                // A resident duplication need not wait for a change; a new one
+                // waits briefly for its first image.
+                let wait = if output.dxgi.as_ref().is_some_and(Duplication::has_image) {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(100)
+                };
+                output.acquire(wait);
+                if let Some(duplication) = &mut output.dxgi {
+                    let separate_pointer = duplication.separate_pointer();
+                    match duplication.image() {
+                        Ok(image) => dxgi = image.map(|image| (image, separate_pointer)),
                         Err(error) => {
-                            // An unsupported virtual output must not pay device
-                            // creation on every capture. Retry after a pause so
-                            // unlocking/switching desktops can recover.
-                            log::debug!("DXGI {} unavailable; using GDI: {error:#}", monitor.name);
-                            output.dxgi_retry = Some(Instant::now() + Duration::from_secs(1));
-                        }
-                    }
-                }
-                if let Some(dxgi) = &mut output.dxgi {
-                    match dxgi.frame() {
-                        Ok(Some((image, separate_pointer))) => {
-                            // An embedded software pointer cannot be removed from
-                            // DXGI pixels; GDI excludes it for cursor-free shots.
-                            if cursor || separate_pointer {
-                                frame = Some(if cursor && separate_pointer {
-                                    output.gdi.with_cursor(&image, &monitor)?
-                                } else {
-                                    image
-                                });
-                            }
-                        }
-                        Ok(None) => {} // no first DXGI frame yet: capture a fresh GDI frame
-                        Err(error) => {
-                            log::debug!(
-                                "DXGI capture {} unavailable, recreating: {error:#}",
-                                monitor.name
-                            );
-                            // Includes ACCESS_LOST/device removal; next request recreates
-                            // factory, adapter, device, duplication, and staging together.
+                            log::debug!("DXGI readback {} failed: {error:#}", monitor.name);
                             output.dxgi = None;
                         }
                     }
                 }
             }
-            let image = match frame {
-                Some(image) => image,
-                None => output.gdi.capture(&monitor, cursor)?,
+            let gdi = match &mut output.gdi {
+                Some(gdi) => gdi,
+                gdi => gdi.insert(Gdi::new(&monitor)?),
+            };
+            let image = match dxgi {
+                // An embedded software pointer cannot be removed from DXGI
+                // pixels; GDI excludes it for cursor-free shots.
+                Some((image, true)) if cursor => gdi.with_cursor(&image, &monitor)?,
+                Some((image, separate_pointer)) if cursor || separate_pointer => image,
+                // No first DXGI image yet, or a cursor-free shot of an
+                // embedded pointer: capture a fresh GDI frame.
+                _ => gdi.capture(&monitor, cursor)?,
             };
             snapshot.outputs.push(OutputFrame {
                 name: monitor.name,
@@ -203,151 +340,135 @@ impl Worker {
         }
         Ok(snapshot)
     }
+
+    fn open(&mut self, name: String, region: IRect, cursor: bool) -> Result<u64> {
+        let monitor = monitors()?
+            .into_iter()
+            .find(|m| m.name == name)
+            .context("recording monitor disconnected")?;
+        let m = monitor.physical;
+        anyhow::ensure!(
+            region.w > 0 && region.h > 0 && m.intersect(&region) == Some(region),
+            "recording region lies outside monitor"
+        );
+        let output = self
+            .outputs
+            .entry(name.clone())
+            .or_insert_with(|| Output::new(monitor.clone()));
+        if output.monitor != monitor {
+            *output = Output::new(monitor.clone());
+        }
+        output.used = Instant::now();
+        // Opening is the moment to report a missing duplication; later
+        // losses (secure desktop, mode switch) are retried while recording.
+        output.dxgi_retry = None;
+        output
+            .duplication()
+            .with_context(|| format!("Desktop Duplication of {name} unavailable"))?;
+        let id = self.next_stream;
+        self.next_stream += 1;
+        self.streams.insert(
+            id,
+            Stream {
+                output: name,
+                monitor: m,
+                region: IRect::new(region.x - m.x, region.y - m.y, region.w, region.h),
+                cursor,
+                seen: None,
+                pool: Pool::default(),
+            },
+        );
+        Ok(id)
+    }
+
+    fn frame(&mut self, id: u64, wait: Duration, fresh: bool) -> Result<Option<Frame>> {
+        let stream = self
+            .streams
+            .get_mut(&id)
+            .context("recording stream closed")?;
+        let output = self
+            .outputs
+            .get_mut(&stream.output)
+            .context("recording monitor disconnected")?;
+        if output.monitor.physical != stream.monitor {
+            bail!("recording monitor {} changed its layout", stream.output);
+        }
+        output.used = Instant::now();
+        output.acquire(wait);
+        let Some(dxgi) = output.dxgi.as_mut() else {
+            // No duplication right now (secure desktop, mode switch in
+            // progress): keep the recording, but notice a vanished monitor.
+            if !monitors()?
+                .iter()
+                .any(|m| m.name == stream.output && m.physical == stream.monitor)
+            {
+                bail!(
+                    "recording monitor {} disconnected or changed mode",
+                    stream.output
+                );
+            }
+            thread::sleep(wait);
+            return Ok(None);
+        };
+        let updates = (output.desktop_updates, output.pointer_updates);
+        let changed = stream.seen.is_none_or(|(desktop, pointer)| {
+            desktop != updates.0 || (stream.cursor && pointer != updates.1)
+        });
+        if !dxgi.has_image() || !(fresh || changed) {
+            return Ok(None);
+        }
+        let (width, height) = dxgi.desktop_size();
+        let region = stream.region;
+        if region.right() > width as i32 || region.bottom() > height as i32 {
+            bail!("recording monitor {} changed resolution", stream.output);
+        }
+        let mut pixels = stream.pool.take(region.w as usize * region.h as usize * 4);
+        if let Err(error) = dxgi.read_region(region, stream.cursor, &mut pixels) {
+            log::debug!("DXGI readback {} failed: {error:#}", stream.output);
+            output.dxgi = None;
+            return Ok(None);
+        }
+        stream.seen = Some(updates);
+        Ok(Some(Frame::from_pixels(
+            region.w as u32,
+            region.h as u32,
+            region.w as usize * 4,
+            PixelFormat::Bgrx,
+            Pixels::Shared(Box::new(Pooled {
+                pixels,
+                pool: stream.pool.clone(),
+            })),
+            Instant::now(),
+        )))
+    }
 }
 
-struct Duplication {
-    device: ID3D11Device,
-    context: ID3D11DeviceContext,
-    duplication: IDXGIOutputDuplication,
-    staging: Option<ID3D11Texture2D>,
-    size: (u32, u32),
-    rotation: DXGI_MODE_ROTATION,
-    cached: Option<Arc<Image>>,
-    separate_pointer: bool,
-}
-impl Duplication {
-    fn new(monitor: &Monitor) -> Result<Self> {
-        unsafe {
-            let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
-            let mut index = 0;
-            loop {
-                let adapter = match factory.EnumAdapters1(index) {
-                    Ok(adapter) => adapter,
-                    Err(e) if e.code() == DXGI_ERROR_NOT_FOUND => break,
-                    Err(e) => return Err(e.into()),
-                };
-                index += 1;
-                let mut output_index = 0;
-                loop {
-                    let output = match adapter.EnumOutputs(output_index) {
-                        Ok(output) => output,
-                        Err(e) if e.code() == DXGI_ERROR_NOT_FOUND => break,
-                        Err(e) => return Err(e.into()),
-                    };
-                    output_index += 1;
-                    let desc = output.GetDesc()?;
-                    let end = desc
-                        .DeviceName
-                        .iter()
-                        .position(|c| *c == 0)
-                        .unwrap_or(desc.DeviceName.len());
-                    if String::from_utf16_lossy(&desc.DeviceName[..end]) != monitor.name {
-                        continue;
-                    }
-                    let mut device = None;
-                    let mut context = None;
-                    D3D11CreateDevice(
-                        &adapter,
-                        D3D_DRIVER_TYPE_UNKNOWN,
-                        HMODULE::default(),
-                        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                        None,
-                        D3D11_SDK_VERSION,
-                        Some(&mut device),
-                        None,
-                        Some(&mut context),
-                    )?;
-                    let device = device.context("D3D11 returned no device")?;
-                    let duplication = output.cast::<IDXGIOutput1>()?.DuplicateOutput(&device)?;
-                    return Ok(Self {
-                        device,
-                        context: context.context("D3D11 returned no context")?,
-                        rotation: duplication.GetDesc().Rotation,
-                        duplication,
-                        staging: None,
-                        size: (0, 0),
-                        cached: None,
-                        separate_pointer: false,
-                    });
-                }
-            }
-        }
-        bail!("no DXGI output for {}", monitor.name)
+/// Reuses a recording's frame buffers once the pipeline drops them.
+#[derive(Clone, Default)]
+struct Pool(Arc<Mutex<Vec<Vec<u8>>>>);
+impl Pool {
+    /// Frames the pipeline may hold at once before buffers are freed.
+    const KEEP: usize = 4;
+    fn take(&self, len: usize) -> Vec<u8> {
+        let mut pixels = self.0.lock().unwrap().pop().unwrap_or_default();
+        pixels.resize(len, 0);
+        pixels
     }
-    fn frame(&mut self) -> Result<Option<(Arc<Image>, bool)>> {
-        unsafe {
-            let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
-            let mut resource = None;
-            // Resident duplication means idle desktops need not wait for a change.
-            match self.duplication.AcquireNextFrame(
-                if self.cached.is_some() { 0 } else { 100 },
-                &mut info,
-                &mut resource,
-            ) {
-                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
-                    return Ok(self
-                        .cached
-                        .clone()
-                        .map(|image| (image, self.separate_pointer)));
-                }
-                Err(e) => return Err(e.into()),
-                Ok(()) => {}
-            }
-            if info.LastMouseUpdateTime != 0 {
-                self.separate_pointer = info.PointerPosition.Visible.as_bool();
-            }
-            // Pointer-only updates have no new desktop pixels. In particular,
-            // a new duplication may deliver one before its first desktop frame;
-            // its texture must not be read or cached as a black desktop.
-            if info.LastPresentTime == 0 {
-                self.duplication.ReleaseFrame()?;
-                return Ok(self
-                    .cached
-                    .clone()
-                    .map(|image| (image, self.separate_pointer)));
-            }
-            let result = (|| -> Result<Arc<Image>> {
-                let texture: ID3D11Texture2D =
-                    resource.context("DXGI returned no frame")?.cast()?;
-                let mut desc = D3D11_TEXTURE2D_DESC::default();
-                texture.GetDesc(&mut desc);
-                if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
-                    bail!("unsupported duplication format");
-                }
-                if self.size != (desc.Width, desc.Height) {
-                    self.staging = None;
-                    desc.Usage = D3D11_USAGE_STAGING;
-                    desc.BindFlags = 0;
-                    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-                    desc.MiscFlags = 0;
-                    self.device
-                        .CreateTexture2D(&desc, None, Some(&mut self.staging))?;
-                    self.size = (desc.Width, desc.Height);
-                }
-                let staging = self.staging.as_ref().context("missing staging texture")?;
-                self.context.CopyResource(staging, &texture);
-                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                self.context
-                    .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-                let bytes = std::slice::from_raw_parts(
-                    mapped.pData as *const u8,
-                    mapped.RowPitch as usize * self.size.1 as usize,
-                );
-                let image = copy_bgra(
-                    bytes,
-                    mapped.RowPitch as usize,
-                    self.size.0,
-                    self.size.1,
-                    self.rotation,
-                );
-                self.context.Unmap(staging, 0);
-                Ok(Arc::new(image))
-            })();
-            let released = self.duplication.ReleaseFrame();
-            let image = result?;
-            released?;
-            self.cached = Some(image.clone());
-            Ok(Some((image, self.separate_pointer)))
+}
+struct Pooled {
+    pixels: Vec<u8>,
+    pool: Pool,
+}
+impl AsRef<[u8]> for Pooled {
+    fn as_ref(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+impl Drop for Pooled {
+    fn drop(&mut self) {
+        let mut pool = self.pool.0.lock().unwrap();
+        if pool.len() < Pool::KEEP {
+            pool.push(std::mem::take(&mut self.pixels));
         }
     }
 }
@@ -458,12 +579,12 @@ impl Gdi {
                 self.width as usize * self.height as usize * 4,
             )
         };
-        copy_bgra(
+        pixels::to_image(
             bytes,
             self.width as usize * 4,
             self.width,
             self.height,
-            DXGI_MODE_ROTATION_IDENTITY,
+            Rotation::Identity,
         )
     }
     fn draw_cursor(&self, monitor: &Monitor) -> Result<()> {
@@ -512,56 +633,6 @@ impl Drop for Gdi {
     }
 }
 
-fn copy_bgra(
-    bytes: &[u8],
-    pitch: usize,
-    width: u32,
-    height: u32,
-    rotation: DXGI_MODE_ROTATION,
-) -> Image {
-    let quarter =
-        rotation == DXGI_MODE_ROTATION_ROTATE90 || rotation == DXGI_MODE_ROTATION_ROTATE270;
-    let mut image = Image::new(
-        if quarter { height } else { width },
-        if quarter { width } else { height },
-    );
-    if rotation == DXGI_MODE_ROTATION_IDENTITY || rotation == DXGI_MODE_ROTATION_UNSPECIFIED {
-        let row_bytes = width as usize * 4;
-        for (source, target) in bytes
-            .chunks(pitch)
-            .zip(image.data.chunks_exact_mut(row_bytes))
-        {
-            target.copy_from_slice(&source[..row_bytes]);
-            for alpha in target.iter_mut().skip(3).step_by(4) {
-                *alpha = 255;
-            }
-        }
-        return image;
-    }
-    for y in 0..height {
-        for x in 0..width {
-            let (dx, dy) = if rotation == DXGI_MODE_ROTATION_ROTATE90 {
-                (height - 1 - y, x)
-            } else if rotation == DXGI_MODE_ROTATION_ROTATE180 {
-                (width - 1 - x, height - 1 - y)
-            } else if rotation == DXGI_MODE_ROTATION_ROTATE270 {
-                (y, width - 1 - x)
-            } else {
-                (x, y)
-            };
-            let src = y as usize * pitch + x as usize * 4;
-            let dst = (dy as usize * image.width as usize + dx as usize) * 4;
-            image.data[dst..dst + 4].copy_from_slice(&[
-                bytes[src],
-                bytes[src + 1],
-                bytes[src + 2],
-                255,
-            ]);
-        }
-    }
-    image
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,48 +664,6 @@ mod tests {
                 resolution.join(", "),
                 timings[50],
                 timings[95]
-            );
-        }
-    }
-
-    #[test]
-    fn pitched_bgra_stays_bgra_and_becomes_opaque() {
-        let image = copy_bgra(
-            &[
-                1, 2, 3, 0, 4, 5, 6, 0, 99, 99, 99, 99, 7, 8, 9, 0, 10, 11, 12, 0,
-            ],
-            12,
-            2,
-            2,
-            DXGI_MODE_ROTATION_IDENTITY,
-        );
-        assert_eq!(
-            image.data,
-            [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]
-        );
-    }
-    #[test]
-    fn all_rotations_preserve_pixel_positions() {
-        let bytes = [
-            1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0,
-        ];
-        for (rotation, dimensions, expected) in [
-            (DXGI_MODE_ROTATION_IDENTITY, (2, 3), vec![1, 2, 3, 4, 5, 6]),
-            (DXGI_MODE_ROTATION_ROTATE90, (3, 2), vec![5, 3, 1, 6, 4, 2]),
-            (DXGI_MODE_ROTATION_ROTATE180, (2, 3), vec![6, 5, 4, 3, 2, 1]),
-            (DXGI_MODE_ROTATION_ROTATE270, (3, 2), vec![2, 4, 6, 1, 3, 5]),
-        ] {
-            let image = copy_bgra(&bytes, 8, 2, 3, rotation);
-            assert_eq!((image.width, image.height), dimensions);
-            assert_eq!(
-                image
-                    .data
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|p| p[0])
-                    .collect::<Vec<_>>(),
-                expected
             );
         }
     }

@@ -80,7 +80,10 @@ impl StatusNotifier {
                     };
                     match command {
                         Some(Command::Update(state)) => {
-                            ticking = state.recording.as_ref().is_some_and(|r| !r.paused);
+                            ticking = state
+                                .recording
+                                .as_ref()
+                                .is_some_and(|r| !r.paused && !r.saving);
                             if handle
                                 .update(|item| {
                                     item.state = state;
@@ -132,6 +135,9 @@ struct Item {
 impl Item {
     fn recording_label(&self) -> Option<String> {
         let recording = self.state.recording.as_ref()?;
+        if recording.saving {
+            return Some("Saving recording…".into());
+        }
         let elapsed = recording.elapsed
             + if recording.paused {
                 Duration::ZERO
@@ -220,10 +226,10 @@ impl ksni::Tray for Item {
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: self.title(),
-            description: if self.state.recording.is_some() {
-                "Click to stop and save"
-            } else {
-                "Click to open last capture"
+            description: match &self.state.recording {
+                Some(r) if r.saving => "",
+                Some(_) => "Click to stop and save",
+                None => "Click to open last capture",
             }
             .into(),
             ..Default::default()
@@ -231,11 +237,16 @@ impl ksni::Tray for Item {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        (self.events)(Event::Request(if self.state.recording.is_some() {
-            Request::RecordControl(RecordAction::Stop)
-        } else {
-            Request::OpenLast
+        (self.events)(Event::Request(match &self.state.recording {
+            // Stopping again would only report that it is still saving.
+            Some(r) if r.saving => return,
+            Some(_) => Request::RecordControl(RecordAction::Stop),
+            None => Request::OpenLast,
         }));
+    }
+
+    fn menu_about_to_show(&mut self) {
+        (self.events)(Event::RefreshAudioDevices);
     }
 
     fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
@@ -246,27 +257,26 @@ impl ksni::Tray for Item {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut menu = if let Some(label) = self.recording_label() {
-            vec![
-                StandardItem {
-                    label,
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
+        let disabled = |label| -> MenuItem<Self> {
+            StandardItem {
+                label,
+                enabled: false,
+                ..Default::default()
+            }
+            .into()
+        };
+        let mut menu = match (&self.state.recording, self.recording_label()) {
+            (Some(r), Some(label)) if r.saving => vec![disabled(label)],
+            (Some(r), Some(label)) => vec![
+                disabled(label),
                 Self::action(
-                    if self.state.recording.as_ref().is_some_and(|r| r.paused) {
-                        "Resume"
-                    } else {
-                        "Pause"
-                    },
+                    if r.paused { "Resume" } else { "Pause" },
                     Request::RecordControl(RecordAction::TogglePause),
                 ),
                 Self::action("Stop and save", Request::RecordControl(RecordAction::Stop)),
                 Self::action("Discard", Request::RecordControl(RecordAction::Cancel)),
-            ]
-        } else {
-            vec![
+            ],
+            _ => vec![
                 Self::action(
                     "Record video",
                     Request::Record(RecordOptions::new(Kind::Video)),
@@ -275,7 +285,7 @@ impl ksni::Tray for Item {
                     "Record animation",
                     Request::Record(RecordOptions::new(Kind::Animation)),
                 ),
-            ]
+            ],
         };
         menu.push(MenuItem::Separator);
         menu.push(
@@ -324,7 +334,15 @@ impl ksni::Tray for Item {
             Self::action("Open last capture", Request::OpenLast),
             Self::action("Pick color", Request::Pick),
             Self::action("Settings…", Request::Settings),
-            Self::action("Quit", Request::Quit),
+            // Quit always stops and saves a recording first; say so.
+            Self::action(
+                if self.state.recording.is_some() {
+                    "Save recording and quit"
+                } else {
+                    "Quit"
+                },
+                Request::Quit,
+            ),
         ]);
         menu
     }
@@ -540,6 +558,7 @@ mod tests {
             elapsed: Duration::from_secs(12),
             at: Instant::now(),
             paused: false,
+            saving: false,
         });
         tray.update(&state);
         wait_for(|| label(&children(&menu, 0)[0]).starts_with("● Recording 0:12"));
@@ -569,6 +588,10 @@ mod tests {
             click(&menu, &find(&menu, 0, name));
             assert_eq!(receive(), Event::Request(Request::RecordControl(action)));
         }
+        click(&menu, &find(&menu, 0, "Save recording and quit"));
+        assert_eq!(receive(), Event::Request(Request::Quit));
+        let _: bool = menu.call("AboutToShow", &(0_i32,)).unwrap();
+        assert_eq!(receive(), Event::RefreshAudioDevices);
         let _: () = item.call("Activate", &(0_i32, 0_i32)).unwrap();
         assert_eq!(
             receive(),
@@ -601,6 +624,31 @@ mod tests {
             item.get_property::<String>("Title")
                 .unwrap()
                 .contains("Paused 0:12")
+        );
+        // Saving: no recording controls until the file is written, and the
+        // icon click no longer asks to stop again.
+        state.recording.as_mut().unwrap().saving = true;
+        tray.update(&state);
+        wait_for(|| label(&children(&menu, 0)[0]) == "Saving recording…");
+        let root = children(&menu, 0);
+        assert!(!bool::try_from(&root[0].1["enabled"]).unwrap());
+        for gone in [
+            "Resume",
+            "Pause",
+            "Stop and save",
+            "Discard",
+            "Record video",
+        ] {
+            assert!(root.iter().all(|node| label(node) != gone), "{gone}");
+        }
+        assert!(
+            root.iter()
+                .any(|node| label(node) == "Save recording and quit")
+        );
+        let _: () = item.call("Activate", &(0_i32, 0_i32)).unwrap();
+        assert!(
+            events.recv_timeout(Duration::from_millis(300)).is_err(),
+            "activating while saving sends nothing"
         );
         state.recording = None;
         tray.update(&state);

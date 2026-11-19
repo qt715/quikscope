@@ -8,21 +8,29 @@
   (selected over the live desktop), an output or the active window. Running the
   same command again stops and saves; `record pause|resume|cancel|status`
   control the running recording.
-- Videos: MP4, MKV or MOV (H.264 with AAC, or Opus in MKV), 60 fps by default,
+- Videos: MP4, MKV or MOV with H.264 picture and Opus sound, 60 fps by default,
   with desktop audio and any number of microphones or other devices mixed in
-  (`quikscope audio-devices` lists them). GPU encoders (NVENC, VAAPI, Quick Sync,
-  AMF, Media Foundation) are used when they work.
-- Animations: GIF (two-pass palette), WebP, AVIF or JPEG XL, 30 fps by default,
-  recorded losslessly first so annotating and re-exporting loses nothing.
+  (`quikscope audio-devices` lists them). H.264 is encoded on the GPU through
+  Vulkan Video (NVIDIA, AMD and Intel with recent drivers), otherwise by the
+  built-in OpenH264 software encoder.
+- MP4 recordings are fragmented by default, so a file stays playable up to its
+  last second if quikscope or the machine dies mid-recording;
+  `record.mp4_fragmented = false` writes a classic MP4 when recording ends.
+- Animations: GIF (palette per frame, dithered), WebP, AVIF or JPEG XL, 30 fps
+  by default, recorded losslessly first so annotating and re-exporting loses
+  nothing. Every frame keeps its exact display time.
 - A thin outline marks the recorded area without being recorded. Finished files
   go on the clipboard as files (paste into a chat or file manager) and show a
   notification with a thumbnail; clicking it opens the editor.
 - Linux system tray icon (StatusNotifierItem) with elapsed time, pause/resume,
   stop, discard, audio devices and frame rates; the same controls in the Windows
-  tray. New shortcuts on Windows (Ctrl+Shift+PrintScreen, Alt+Shift+PrintScreen).
-- On wlroots compositors frames are copied into GPU buffers (DMA-BUF), never
-  shared memory: Hyprland reads shared-memory captures back on its main thread,
-  which makes games stutter. Recording also works on X11, Windows (Desktop
+  tray. New shortcuts on Windows (Ctrl+Shift+PrintScreen, Ctrl+Alt+PrintScreen).
+- `record status` reports `saving` while a stopped recording is being
+  finished.
+- On wlroots compositors frames are copied into GPU buffers (DMA-BUF) whenever
+  the compositor offers them. Shared memory is only a fallback, with a warning
+  in the log: Hyprland reads shared-memory captures back on its main thread,
+  which can make games stutter. Recording also works on X11, Windows (Desktop
   Duplication) and, experimentally, through the ScreenCast portal on GNOME/KDE.
 
 ### Editors
@@ -47,12 +55,49 @@
   one. The desktop entry (`quikscope open %F`) registers PNG, JPEG, WebP, GIF,
   AVIF, JPEG XL, MP4, MKV, MOV and WebM, so file managers can open them in
   quikscope; the Windows installer adds quikscope to Explorer's Open with.
+- Videos must be H.264 (with AAC, Opus or no sound); HEVC, VP9 and AV1 videos
+  are not supported. Animated GIF, WebP, AVIF, JPEG XL and APNG files open in
+  the annotator.
+
+### Daemon
+
+- `quikscope version` prints the client's and the running daemon's versions
+  and warns when they differ (for example after an upgrade without restarting
+  the daemon).
+- `QUIKSCOPE_NO_PREWARM=1` on the daemon skips the GPU prewarm window at
+  start-up.
+- A 0.2 configuration whose shortcut equals one of the new recording defaults
+  stays valid: that default is left unbound instead of the whole file being
+  rejected.
 
 ### Packaging
 
-- quikscope now links FFmpeg. The .deb/.rpm and Windows installer
-  bundle an LGPL FFmpeg build; Arch and `cargo install` use the system FFmpeg
-  (and need its development files, libgbm, PipeWire and PulseAudio libraries).
+- No FFmpeg dependency: quikscope writes MP4, MOV and MKV itself and builds in
+  its codecs (H.264 through Vulkan Video or OpenH264, Opus, and native GIF,
+  WebP, AVIF and JPEG XL encoders). Packages ship and depend on no codec
+  libraries; building from source needs CMake and a C/C++ compiler (NASM
+  optional) besides the PipeWire, PulseAudio, ALSA and libgbm development files.
+
+### Fixed
+
+- Saving from two places at once (a recording finishing while the editor
+  saves, two editors, two exports of the same clip) writes separate files
+  instead of overwriting each other.
+- Quitting quikscope (`quikscope quit`, the tray's Quit, stopping its service
+  or logging out) while recording saves the recording instead of discarding it.
+- An unavailable or unplugged audio device is skipped with a warning instead
+  of keeping the recording from starting.
+- Regions with an odd width or height are recorded sharp (one pixel narrower)
+  instead of blurred.
+- Variable-delay GIFs keep their frame timing when annotated or re-exported.
+- Windows: recording works after a screenshot has been taken.
+- GNOME/KDE: recording through the ScreenCast portal works with the desktops'
+  real portals.
+- Recordings no longer swap red and blue on compositors that deliver
+  RGB-ordered frames.
+- `quikscope record gif` always records a GIF, whatever animation format is
+  configured.
+- Turning the tray off or on in Settings applies at once.
 
 ### Removed
 

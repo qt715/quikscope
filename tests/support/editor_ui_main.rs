@@ -5,6 +5,8 @@ mod main_thread;
 
 main_thread_tests![
     animation_scrubs_and_exports_annotations_on_every_frame,
+    animation_export_outlives_its_window_and_escape_cancels_it,
+    animation_strip_clears_the_chrome_image_and_toasts,
     input_method_composition_commits_into_the_text,
     formatting_shortcuts_apply_while_typing_and_to_selected_text,
     color_picker_drag_recolors_the_selection_as_one_undo_step,

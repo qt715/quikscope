@@ -14,6 +14,7 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
@@ -245,6 +246,8 @@ struct State {
     balloon_shot: Cell<Option<u64>>,
     tray: RefCell<TrayState>,
     drop_effect_format: u32,
+    /// Windows is ending the session and `end_session` is running.
+    ending: Cell<bool>,
 }
 
 unsafe fn run(
@@ -291,6 +294,7 @@ unsafe fn run(
             animation_fps: 30,
         }),
         drop_effect_format: unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) },
+        ending: Cell::new(false),
     });
     // A hidden top-level window (not HWND_MESSAGE) receives Explorer restart
     // broadcasts as well as clipboard and tray callbacks. It is never shown.
@@ -368,6 +372,37 @@ unsafe fn run(
 }
 
 impl State {
+    /// A stopped recording is still being written.
+    fn saving(&self) -> bool {
+        self.tray
+            .borrow()
+            .recording
+            .as_ref()
+            .is_some_and(|r| r.saving)
+    }
+
+    /// Logout or shutdown. Windows may end the process as soon as
+    /// WM_ENDSESSION returns, so the daemon quits (stopping and saving a
+    /// recording first) inside it, with messages still flowing for its
+    /// notifications, clipboard rendering and final `Command::Quit`.
+    unsafe fn end_session(&self) {
+        if self.ending.replace(true) {
+            return;
+        }
+        (self.events)(Event::Request(Request::Quit));
+        let mut message = MSG::default();
+        while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        // That loop consumed WM_QUIT; `run`'s loop must see one as well.
+        unsafe {
+            PostQuitMessage(0);
+        }
+    }
+
     unsafe fn update_hotkeys(&self, bindings: Vec<(i32, u32, u32, String)>) {
         let hwnd = self.hwnd.get();
         for id in self.hotkeys.borrow_mut().drain(..) {
@@ -427,13 +462,6 @@ impl State {
     }
 
     fn request(&self, id: usize) {
-        if id >= 1000 {
-            let tray = self.tray.borrow();
-            if let Some((device, enabled)) = tray.audio.get(id - 1000) {
-                (self.events)(Event::SetAudio(device.id.clone(), !enabled));
-            }
-            return;
-        }
         for (base, kind, choices) in [
             (100, Kind::Video, &VIDEO_FPS_CHOICES),
             (200, Kind::Animation, &ANIMATION_FPS_CHOICES),
@@ -473,69 +501,28 @@ impl State {
         }
         let menu = Menu(unsafe { CreatePopupMenu()? });
         let foreground = unsafe { GetForegroundWindow() };
-        for (id, text) in [
-            (1, "Capture region"),
-            (2, "Capture screen"),
-            (3, "Capture window"),
-            (4, "Open last"),
-            (8, "Pick color"),
-            (5, "Toggle notifications"),
-            (7, "Settings…"),
-            (6, "Quit"),
-        ] {
-            let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-            unsafe {
-                AppendMenuW(menu.0, MF_STRING, id, PCWSTR(text.as_ptr()))?;
-            }
-        }
+        // Lists devices plugged in since start-up next time; this menu is
+        // built from the current state.
+        (self.events)(Event::RefreshAudioDevices);
         let state = self.tray.borrow().clone();
-        unsafe {
-            if let Some(recording) = &state.recording {
-                append_item(menu.0, 0, &elapsed_label(recording), MF_DISABLED)?;
-                append_item(
-                    menu.0,
-                    11,
-                    if recording.paused { "Resume" } else { "Pause" },
-                    MF_STRING,
-                )?;
-                append_item(menu.0, 12, "Stop and save", MF_STRING)?;
-                append_item(menu.0, 13, "Discard", MF_STRING)?;
-            } else {
-                append_item(menu.0, 9, "Record video", MF_STRING)?;
-                append_item(menu.0, 10, "Record animation", MF_STRING)?;
-            }
-            let audio = CreatePopupMenu()?;
-            append_item(menu.0, audio.0 as usize, "Audio", MF_POPUP)?;
-            for (i, (device, enabled)) in state.audio.iter().enumerate() {
-                append_item(
-                    audio,
-                    1000 + i,
-                    &device.name,
-                    if *enabled { MF_CHECKED } else { MF_STRING },
-                )?;
-            }
-            for (label, base, selected, choices) in [
-                ("Video frame rate", 100, state.video_fps, &VIDEO_FPS_CHOICES),
-                (
-                    "Animation frame rate",
-                    200,
-                    state.animation_fps,
-                    &ANIMATION_FPS_CHOICES,
-                ),
-            ] {
-                let rates = CreatePopupMenu()?;
-                append_item(menu.0, rates.0 as usize, label, MF_POPUP)?;
-                for (i, fps) in choices.iter().enumerate() {
-                    append_item(
-                        rates,
-                        base + i,
-                        &format!("{fps} fps"),
-                        if *fps == selected {
-                            MF_CHECKED
-                        } else {
-                            MF_STRING
-                        },
-                    )?;
+        for entry in menu_entries(&state) {
+            unsafe {
+                match entry {
+                    Entry::Action(id, text) => append_item(menu.0, id, &text, MF_STRING)?,
+                    Entry::Label(text) => append_item(menu.0, 0, &text, MF_DISABLED)?,
+                    Entry::Separator => AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null())?,
+                    Entry::Submenu(text, items) => {
+                        let submenu = CreatePopupMenu()?;
+                        append_item(menu.0, submenu.0 as usize, &text, MF_POPUP)?;
+                        for (id, text, checked) in items {
+                            append_item(
+                                submenu,
+                                id,
+                                &text,
+                                if checked { MF_CHECKED } else { MF_STRING },
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -568,7 +555,17 @@ impl State {
                     let _ = SetForegroundWindow(foreground);
                 }
             }
-            self.request(selected as usize);
+            // The modal menu loop may already have applied a newer tray
+            // state; audio rows refer to the device list this menu showed.
+            match (selected as usize)
+                .checked_sub(1000)
+                .and_then(|i| state.audio.get(i))
+            {
+                Some((device, enabled)) => {
+                    (self.events)(Event::SetAudio(device.id.clone(), !enabled))
+                }
+                None => self.request(selected as usize),
+            }
         }
         Ok(())
     }
@@ -602,7 +599,10 @@ impl State {
                     self.tray.replace(state);
                     unsafe {
                         self.update_tip();
-                        if self.tray.borrow().recording.is_some() {
+                        // The label is static while paused or saving.
+                        if (self.tray.borrow().recording.as_ref())
+                            .is_some_and(|r| !r.paused && !r.saving)
+                        {
                             SetTimer(self.hwnd.get(), RECORDING_TIMER, 1000, None);
                         } else {
                             let _ = KillTimer(self.hwnd.get(), RECORDING_TIMER);
@@ -799,7 +799,8 @@ unsafe extern "system" fn window_proc(
                     log::error!("tray menu: {error:#}");
                 }
             }
-            WM_LBUTTONDBLCLK => state.request(4),
+            // Opening captures waits until the recording is written.
+            WM_LBUTTONDBLCLK if !state.saving() => state.request(4),
             NIN_BALLOONUSERCLICK => {
                 if let Some(shot) = state.balloon_shot.take() {
                     (state.events)(Event::OpenShot(shot));
@@ -812,6 +813,23 @@ unsafe extern "system" fn window_proc(
         },
         WM_CLOSE => unsafe {
             PostQuitMessage(0);
+        },
+        WM_QUERYENDSESSION => {
+            if state.tray.borrow().recording.is_some() {
+                // Shown by Windows' "apps are preventing shutdown" screen
+                // while `end_session` saves the recording.
+                unsafe {
+                    let _ = ShutdownBlockReasonCreate(hwnd, w!("Saving the screen recording"));
+                }
+            }
+            return LRESULT(1);
+        }
+        WM_ENDSESSION if wparam.0 == 0 => unsafe {
+            // Another application cancelled the shutdown.
+            let _ = ShutdownBlockReasonDestroy(hwnd);
+        },
+        WM_ENDSESSION => unsafe {
+            state.end_session();
         },
         WM_NCDESTROY => {
             unsafe {
@@ -871,7 +889,87 @@ unsafe fn append_item(menu: HMENU, id: usize, text: &str, flags: MENU_ITEM_FLAGS
     Ok(())
 }
 
+/// One tray menu row; ids are those `State::request` handles.
+#[derive(Debug, PartialEq)]
+enum Entry {
+    Action(usize, String),
+    Label(String),
+    Separator,
+    /// Checkable `(id, text, checked)` items.
+    Submenu(String, Vec<(usize, String, bool)>),
+}
+
+/// The tray menu in the Linux tray's order: recording controls first, Quit
+/// last.
+fn menu_entries(state: &TrayState) -> Vec<Entry> {
+    let action = |id, text: &str| Entry::Action(id, text.into());
+    let mut entries = match &state.recording {
+        // No controls until it is written; stopping again would only
+        // report that it is still saving.
+        Some(recording) if recording.saving => vec![Entry::Label("Saving recording…".into())],
+        Some(recording) => vec![
+            Entry::Label(elapsed_label(recording)),
+            action(11, if recording.paused { "Resume" } else { "Pause" }),
+            action(12, "Stop and save"),
+            action(13, "Discard"),
+        ],
+        None => vec![action(9, "Record video"), action(10, "Record animation")],
+    };
+    entries.push(Entry::Separator);
+    entries.push(Entry::Submenu(
+        "Audio".into(),
+        state
+            .audio
+            .iter()
+            .enumerate()
+            .map(|(i, (device, enabled))| (1000 + i, device.name.clone(), *enabled))
+            .collect(),
+    ));
+    for (label, base, selected, choices) in [
+        ("Video frame rate", 100, state.video_fps, &VIDEO_FPS_CHOICES),
+        (
+            "Animation frame rate",
+            200,
+            state.animation_fps,
+            &ANIMATION_FPS_CHOICES,
+        ),
+    ] {
+        entries.push(Entry::Submenu(
+            label.into(),
+            choices
+                .iter()
+                .enumerate()
+                .map(|(i, fps)| (base + i, format!("{fps} fps"), *fps == selected))
+                .collect(),
+        ));
+    }
+    entries.extend([
+        Entry::Separator,
+        action(1, "Capture region"),
+        action(2, "Capture screen"),
+        action(3, "Capture window"),
+        action(4, "Open last"),
+        action(8, "Pick color"),
+        action(5, "Toggle notifications"),
+        Entry::Separator,
+        action(7, "Settings…"),
+        // The daemon's quit stops and saves a recording first.
+        action(
+            6,
+            if state.recording.is_some() {
+                "Save recording and quit"
+            } else {
+                "Quit"
+            },
+        ),
+    ]);
+    entries
+}
+
 fn elapsed_label(recording: &crate::platform::RecordingStatus) -> String {
+    if recording.saving {
+        return "quikscope — saving recording…".into();
+    }
     let elapsed = recording.elapsed
         + if recording.paused {
             std::time::Duration::ZERO
@@ -986,6 +1084,68 @@ mod tests {
         let bindings = hotkey_bindings(&Hotkeys::default()).unwrap();
         assert!(bindings.iter().any(|(id, _, _, _)| *id == 9));
         assert!(bindings.iter().any(|(id, _, _, _)| *id == 10));
+    }
+
+    #[test]
+    fn tray_recording_controls_come_before_quit() {
+        let status = |paused, saving| crate::platform::RecordingStatus {
+            kind: Kind::Video,
+            elapsed: std::time::Duration::from_secs(75),
+            at: std::time::Instant::now(),
+            paused,
+            saving,
+        };
+        let ids = |recording| {
+            menu_entries(&TrayState {
+                recording,
+                audio: Vec::new(),
+                video_fps: 60,
+                animation_fps: 30,
+            })
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Action(id, _) => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+        };
+        for (recording, controls) in [
+            (None, vec![9, 10]),
+            (Some(status(false, false)), vec![11, 12, 13]),
+            (Some(status(true, false)), vec![11, 12, 13]),
+            (Some(status(false, true)), vec![]),
+        ] {
+            let ids = ids(recording);
+            assert_eq!(&ids[..controls.len()], controls.as_slice());
+            assert_eq!(ids.last(), Some(&6), "Quit is last");
+            assert!(!ids[controls.len()..].iter().any(|id| (9..=13).contains(id)));
+        }
+        let paused = menu_entries(&TrayState {
+            recording: Some(status(true, false)),
+            audio: Vec::new(),
+            video_fps: 60,
+            animation_fps: 30,
+        });
+        assert_eq!(paused[0], Entry::Label("quikscope — 01:15 (paused)".into()));
+        assert_eq!(paused[1], Entry::Action(11, "Resume".into()));
+        assert_eq!(
+            paused.last(),
+            Some(&Entry::Action(6, "Save recording and quit".into()))
+        );
+        let saving = menu_entries(&TrayState {
+            recording: Some(status(true, true)),
+            audio: Vec::new(),
+            video_fps: 60,
+            animation_fps: 30,
+        });
+        assert_eq!(saving[0], Entry::Label("Saving recording…".into()));
+        let idle = menu_entries(&TrayState {
+            recording: None,
+            audio: Vec::new(),
+            video_fps: 60,
+            animation_fps: 30,
+        });
+        assert_eq!(idle.last(), Some(&Entry::Action(6, "Quit".into())));
     }
 
     #[test]

@@ -1,179 +1,171 @@
-//! DDA stays in FFmpeg: its source owns duplication/device recovery and returns
-//! reference-counted D3D11 frames, avoiding a second staging readback per frame.
+//! Screen recording through the capture worker's Desktop Duplication (see
+//! `capture.rs`): DXGI allows one duplication per output and process, so the
+//! recorder shares it with screenshots instead of opening its own.
+use super::capture::{Request, WindowsCapture};
 use crate::{
     geom::IRect,
     media::{Frame, VideoSource},
     platform::{RecordTarget, ScreenRecorder},
 };
-use anyhow::{Context, Result, bail};
-use ffmpeg_next as ffmpeg;
+use anyhow::{Result, bail};
 use std::{
-    sync::mpsc,
+    sync::{LazyLock, mpsc},
     thread,
     time::{Duration, Instant},
 };
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM},
+        Graphics::Gdi::CreateSolidBrush,
+        System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
-    core::w,
+    core::{PCWSTR, w},
 };
 
-pub struct WindowsRecorder;
-struct Source {
-    graph: ffmpeg::filter::Graph,
-    size: (u32, u32),
-    period: Duration,
-    next: Instant,
+/// Longest single wait inside the capture worker, so screenshots taken
+/// during a recording of a static screen are not held up.
+const POLL: Duration = Duration::from_millis(20);
+
+pub struct WindowsRecorder {
+    capture: WindowsCapture,
+}
+impl WindowsRecorder {
+    pub fn new(capture: WindowsCapture) -> Self {
+        Self { capture }
+    }
 }
 impl ScreenRecorder for WindowsRecorder {
     fn open(&self, target: &RecordTarget, fps: u32, cursor: bool) -> Result<Box<dyn VideoSource>> {
         anyhow::ensure!(fps > 0, "recording frame rate must be positive");
-        crate::media::init();
-        let monitor = super::desktop::monitors()?
-            .into_iter()
-            .find(|m| m.name == target.output)
-            .context("recording monitor disconnected")?;
-        let r = target.region;
-        let m = monitor.physical;
-        anyhow::ensure!(
-            r.w > 0
-                && r.h > 0
-                && r.x >= m.x
-                && r.y >= m.y
-                && r.x as i64 + r.w as i64 <= m.x as i64 + m.w as i64
-                && r.y as i64 + r.h as i64 <= m.y as i64 + m.h as i64,
-            "recording region lies outside monitor"
-        );
-        // EnumDisplayMonitors ordering is unrelated to DXGI output_idx. Match
-        // the GDI device name against DXGI's actual adapter/output enumeration.
-        let (adapter, index) = output_index(&monitor.name)?;
-        let mut graph = ffmpeg::filter::Graph::new();
-        graph.add(
-            &ffmpeg::filter::find("buffersink").context("FFmpeg buffersink unavailable")?,
-            "out",
-            "",
-        )?;
-        let options = std::ffi::CString::new(format!(
-            "output_idx={index}:offset_x={}:offset_y={}:video_size={}x{}:framerate={fps}:draw_mouse={}",
-            r.x - m.x,
-            r.y - m.y,
-            r.w,
-            r.h,
-            u8::from(cursor)
-        ))?;
-        unsafe {
-            use ffmpeg::ffi::*;
-            let filter = avfilter_get_by_name(c"ddagrab".as_ptr());
-            anyhow::ensure!(!filter.is_null(), "FFmpeg ddagrab source unavailable");
-            let source =
-                avfilter_graph_alloc_filter(graph.as_mut_ptr(), filter, c"desktop".as_ptr());
-            anyhow::ensure!(!source.is_null(), "allocating DDA filter failed");
-            let device_name = std::ffi::CString::new(adapter.to_string())?;
-            let mut device = std::ptr::null_mut();
-            let result = av_hwdevice_ctx_create(
-                &mut device,
-                AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-                device_name.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-            );
-            anyhow::ensure!(
-                result >= 0,
-                "opening recording D3D11 device: {}",
-                ffmpeg::Error::from(result)
-            );
-            (*source).hw_device_ctx = device;
-            let result = avfilter_init_str(source, options.as_ptr());
-            anyhow::ensure!(
-                result >= 0,
-                "initializing DDA capture: {}",
-                ffmpeg::Error::from(result)
-            );
-            let sink = graph
-                .get("out")
-                .context("missing capture sink")?
-                .as_mut_ptr();
-            let result = avfilter_link(source, 0, sink, 0);
-            anyhow::ensure!(
-                result >= 0,
-                "linking DDA capture: {}",
-                ffmpeg::Error::from(result)
-            );
-        }
-        graph.validate().context(
-            "opening FFmpeg ddagrab (requires a shared build with ddagrab/D3D11 enabled)",
-        )?;
+        // Windows' logical desktop coordinates are its physical pixels.
+        let region = target.region;
+        let stream = self.capture.call(|reply| Request::Open {
+            output: target.output.clone(),
+            region,
+            cursor,
+            reply,
+        })?;
         Ok(Box::new(Source {
-            graph,
-            size: (r.w as u32, r.h as u32),
+            capture: self.capture.clone(),
+            stream,
+            size: (region.w as u32, region.h as u32),
             period: Duration::from_secs_f64(1.0 / fps as f64),
             next: Instant::now(),
+            paused: false,
+            fresh: true,
         }))
     }
     fn outline(&self, region: IRect) -> Result<Box<dyn Send>> {
         Ok(Box::new(Outline::open(region)?))
     }
 }
-fn output_index(name: &str) -> Result<(u32, u32)> {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
-    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
-    let mut adapter_index = 0;
-    while let Ok(adapter) = unsafe { factory.EnumAdapters1(adapter_index) } {
-        let mut index = 0;
-        while let Ok(output) = unsafe { adapter.EnumOutputs(index) } {
-            let desc = unsafe { output.GetDesc()? };
-            let len = desc
-                .DeviceName
-                .iter()
-                .position(|c| *c == 0)
-                .unwrap_or(desc.DeviceName.len());
-            if String::from_utf16_lossy(&desc.DeviceName[..len]) == name {
-                return Ok((adapter_index, index));
-            }
-            index += 1;
-        }
-        adapter_index += 1;
-    }
-    bail!("recording monitor {name} has no DXGI output")
+
+struct Source {
+    capture: WindowsCapture,
+    stream: u64,
+    size: (u32, u32),
+    period: Duration,
+    /// Earliest moment of the next frame.
+    next: Instant,
+    paused: bool,
+    /// The next frame is delivered even if nothing changed (after opening
+    /// and resuming).
+    fresh: bool,
 }
 impl VideoSource for Source {
     fn size(&self) -> (u32, u32) {
         self.size
     }
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
-        let now = Instant::now();
-        let wait = self.next.saturating_duration_since(now);
-        if wait > timeout {
+        let deadline = Instant::now() + timeout;
+        if self.paused || self.next > deadline {
             thread::sleep(timeout);
             return Ok(None);
         }
-        thread::sleep(wait);
-        let mut frame = ffmpeg::frame::Video::empty();
-        match self
-            .graph
-            .get("out")
-            .context("missing capture sink")?
-            .sink()
-            .frame(&mut frame)
-        {
-            Ok(()) => {
-                let captured = Instant::now();
-                self.next = captured + self.period;
-                Ok(Some(Frame::from_av(frame, captured)))
+        thread::sleep(self.next.saturating_duration_since(Instant::now()));
+        loop {
+            let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
+            let frame = self.capture.call(|reply| Request::Frame {
+                stream: self.stream,
+                wait,
+                fresh: self.fresh,
+                reply,
+            })?;
+            if let Some(frame) = frame {
+                self.fresh = false;
+                // Keep the frame grid while on time; after waiting for a
+                // change of a static screen, start a new grid.
+                self.next += self.period;
+                if self.next < frame.captured {
+                    self.next = frame.captured + self.period;
+                }
+                return Ok(Some(frame));
             }
-            Err(ffmpeg::Error::Other { errno: 11 }) => Ok(None),
-            Err(error) => Err(error.into()),
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
         }
     }
+    fn set_paused(&mut self, paused: bool) {
+        if self.paused && !paused {
+            self.fresh = true;
+            self.next = Instant::now();
+        }
+        self.paused = paused;
+    }
 }
+impl Drop for Source {
+    fn drop(&mut self) {
+        self.capture.close(self.stream);
+    }
+}
+
+/// The app accent, as the outline on the other platforms.
+const OUTLINE_COLOR: COLORREF = COLORREF(0x00f2_8c8f); // 0x00BBGGRR of #8f8cf2
+/// Opacity of the outline strips (of 255).
+const OUTLINE_ALPHA: u8 = 220;
+/// Strip thickness in physical pixels.
+const OUTLINE_WIDTH: i32 = 2;
+const OUTLINE_CLASS: PCWSTR = w!("quikscope-recording-outline");
+const OUTLINE_QUIT: u32 = WM_APP + 20;
+
+/// Registers the outline window class once per process: plain windows whose
+/// class background brush paints them in the outline color.
+fn outline_class() -> Result<()> {
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+    static REGISTERED: LazyLock<std::result::Result<(), String>> = LazyLock::new(|| unsafe {
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(proc),
+            hInstance: GetModuleHandleW(None).map_err(|e| e.to_string())?.into(),
+            lpszClassName: OUTLINE_CLASS,
+            hbrBackground: CreateSolidBrush(OUTLINE_COLOR),
+            ..Default::default()
+        };
+        if RegisterClassW(&class) == 0 {
+            return Err(windows::core::Error::from_win32().to_string());
+        }
+        Ok(())
+    });
+    REGISTERED
+        .clone()
+        .map_err(|e| anyhow::anyhow!("registering the outline window class: {e}"))
+}
+
 struct Outline {
     hwnd: usize,
     thread: Option<thread::JoinHandle<()>>,
 }
 impl Outline {
     fn open(r: IRect) -> Result<Self> {
+        outline_class()?;
         let (ready, receive) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
             .name("quikscope-outline".into())
@@ -181,11 +173,12 @@ impl Outline {
                 let _dpi = super::desktop::PhysicalDpi::enter();
                 let mut windows = Vec::new();
                 let result: Result<()> = (|| {
+                    let t = OUTLINE_WIDTH;
                     for (x, y, w, h) in [
-                        (r.x - 2, r.y - 2, r.w + 4, 2),
-                        (r.x - 2, r.y + r.h, r.w + 4, 2),
-                        (r.x - 2, r.y, 2, r.h),
-                        (r.x + r.w, r.y, 2, r.h),
+                        (r.x - t, r.y - t, r.w + 2 * t, t),
+                        (r.x - t, r.y + r.h, r.w + 2 * t, t),
+                        (r.x - t, r.y, t, r.h),
+                        (r.x + r.w, r.y, t, r.h),
                     ] {
                         let hwnd = unsafe {
                             CreateWindowExW(
@@ -193,9 +186,9 @@ impl Outline {
                                     | WS_EX_TRANSPARENT
                                     | WS_EX_TOOLWINDOW
                                     | WS_EX_NOACTIVATE,
-                                w!("STATIC"),
+                                OUTLINE_CLASS,
                                 w!("quikscope recording outline"),
-                                WS_POPUP | WINDOW_STYLE(6),
+                                WS_POPUP,
                                 x,
                                 y,
                                 w,
@@ -210,8 +203,8 @@ impl Outline {
                         unsafe {
                             SetLayeredWindowAttributes(
                                 hwnd,
-                                windows::Win32::Foundation::COLORREF(0),
-                                220,
+                                COLORREF(0),
+                                OUTLINE_ALPHA,
                                 LWA_ALPHA,
                             )?;
                             SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)?;
@@ -234,7 +227,7 @@ impl Outline {
                     let _ = ready.send(Ok(windows[0].0 as usize));
                     let mut message = MSG::default();
                     while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
-                        if message.message == WM_APP + 20 {
+                        if message.message == OUTLINE_QUIT {
                             break;
                         }
                         unsafe {
@@ -264,7 +257,7 @@ impl Outline {
 impl Drop for Outline {
     fn drop(&mut self) {
         unsafe {
-            let _ = PostMessageW(HWND(self.hwnd as _), WM_APP + 20, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(HWND(self.hwnd as _), OUTLINE_QUIT, WPARAM(0), LPARAM(0));
         }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -275,43 +268,64 @@ impl Drop for Outline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::Capture as _;
+    use windows::Win32::Graphics::Gdi::{GetPixel, GetWindowDC, ReleaseDC};
+
+    /// Native acceptance: DXGI allows one duplication per output and
+    /// process, so this covers recording after a screenshot (whose
+    /// duplication stays resident), a screenshot during the recording,
+    /// pausing, resuming and a second recording of the same output.
     #[test]
     #[ignore = "requires an unlocked native Windows desktop and DDA"]
-    fn native_recording_frames_and_outline() -> Result<()> {
+    fn native_recording_shares_duplication_with_screenshots() -> Result<()> {
         let monitor = super::super::desktop::monitors()?.remove(0);
-        let region = IRect::new(monitor.physical.x + 32, monitor.physical.y + 32, 320, 240);
+        let capture = WindowsCapture::new()?;
+        let before = capture.capture(Some(std::slice::from_ref(&monitor.name)), false)?;
+        let region = IRect::new(monitor.physical.x + 32, monitor.physical.y + 48, 320, 240);
         let outline = Outline::open(region)?;
         unsafe {
+            let hwnd = HWND(outline.hwnd as _);
             let mut affinity = 0;
-            GetWindowDisplayAffinity(HWND(outline.hwnd as _), &mut affinity)?;
+            GetWindowDisplayAffinity(hwnd, &mut affinity)?;
             assert_eq!(affinity, WDA_EXCLUDEFROMCAPTURE.0);
-            assert!(IsWindowVisible(HWND(outline.hwnd as _)).as_bool());
+            assert!(IsWindowVisible(hwnd).as_bool());
+            let dc = GetWindowDC(hwnd);
+            assert_eq!(GetPixel(dc, 0, 0), OUTLINE_COLOR);
+            ReleaseDC(hwnd, dc);
         }
-        let mut source = WindowsRecorder.open(
-            &RecordTarget {
-                output: monitor.name,
-                output_rect: monitor.logical,
-                region,
-            },
-            30,
-            false,
-        )?;
-        assert_eq!(source.size(), (320, 240));
-        let frame = source
-            .next_frame(Duration::from_secs(2))?
-            .context("no DDA frame")?;
-        assert_eq!((frame.width(), frame.height()), (320, 240));
-        let mut cpu = ffmpeg::frame::Video::empty();
-        let result = unsafe {
-            ffmpeg::ffi::av_hwframe_transfer_data(cpu.as_mut_ptr(), frame.av().as_ptr(), 0)
+        let recorder = WindowsRecorder::new(capture.clone());
+        let target = RecordTarget {
+            output: monitor.name.clone(),
+            output_rect: monitor.logical,
+            region,
         };
-        anyhow::ensure!(result >= 0, "D3D11 download failed: {result}");
-        assert!(
-            cpu.data(0)
-                .chunks_exact(4)
-                .any(|p| p[0] != 0 || p[1] != 0 || p[2] != 0),
-            "DDA returned black pixels"
+        let mut source = recorder.open(&target, 30, true)?;
+        assert_eq!(source.size(), (320, 240));
+        // The first frame arrives even on a static screen.
+        let first = source.next_frame(Duration::from_secs(2))?;
+        let first = first.expect("no first DDA frame");
+        assert_eq!((first.width(), first.height()), (320, 240));
+        let during = capture.capture(Some(std::slice::from_ref(&monitor.name)), false)?;
+        assert_eq!(
+            (
+                during.outputs[0].image.width,
+                during.outputs[0].image.height
+            ),
+            (
+                before.outputs[0].image.width,
+                before.outputs[0].image.height
+            )
         );
+        source.set_paused(true);
+        assert!(source.next_frame(Duration::from_millis(100))?.is_none());
+        source.set_paused(false);
+        assert!(
+            source.next_frame(Duration::from_secs(1))?.is_some(),
+            "no frame right after resuming"
+        );
+        drop(source);
+        let mut again = recorder.open(&target, 60, false)?;
+        assert!(again.next_frame(Duration::from_secs(2))?.is_some());
         drop(outline);
         Ok(())
     }

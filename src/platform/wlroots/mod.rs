@@ -2,6 +2,7 @@
 //! `wlr-screencopy` for pixels and `wlr-data-control` for the clipboard.
 
 pub mod data_control;
+mod gpu;
 pub mod helper;
 pub mod record;
 pub mod screencopy;

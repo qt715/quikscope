@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -14,7 +14,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 use super::{DEST, PATH, TOKEN};
 use crate::geom::IRect;
-use crate::media::{Frame, VideoSource};
+use crate::media::{Frame, PixelFormat, Pixels, VideoSource};
 use crate::platform::{RecordTarget, ScreenRecorder};
 
 const INTERFACE: &str = "org.freedesktop.portal.ScreenCast";
@@ -49,10 +49,10 @@ impl ScreenCast {
         let options =
             HashMap::from([("session_handle_token", Value::from(session_token.as_str()))]);
         let mut created = request(&self.connection, &proxy, "CreateSession", &(options,))?;
-        let path: OwnedObjectPath = created
+        let handle = created
             .remove("session_handle")
-            .context("ScreenCast CreateSession omitted session_handle")?
-            .try_into()?;
+            .context("ScreenCast CreateSession omitted session_handle")?;
+        let path = session_path(&handle)?;
         let session = Session {
             connection: self.connection.clone(),
             path,
@@ -106,6 +106,21 @@ fn token() -> String {
         std::process::id(),
         TOKEN.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// The session object of a CreateSession response. The portal spec types
+/// `session_handle` as a string (`s`), which is what GNOME's and KDE's
+/// portals send; an object path (`o`) is accepted as well.
+fn session_path(handle: &Value<'_>) -> Result<OwnedObjectPath> {
+    match handle {
+        Value::Str(path) => Ok(OwnedObjectPath::try_from(path.as_str())
+            .context("ScreenCast session_handle is not an object path")?),
+        Value::ObjectPath(path) => Ok(path.clone().into()),
+        other => bail!(
+            "ScreenCast session_handle has type {}",
+            other.value_signature()
+        ),
+    }
 }
 
 // Each call subscribes before invoking the method: some backends reply immediately.
@@ -213,17 +228,23 @@ impl ScreenRecorder for ScreenCast {
             "recording region must be inside its output"
         );
         let (session, node, fd) = self.start(target, cursor)?;
-        let stop = Arc::new(AtomicBool::new(false));
+        let control = Arc::new(Control::default());
         let (frames_tx, frames) = mpsc::sync_channel(2);
         let (ready_tx, ready) = mpsc::sync_channel(1);
-        let thread_stop = stop.clone();
+        let thread_control = control.clone();
         let target = target.clone();
         let worker = std::thread::Builder::new()
             .name("quikscope-portal-video".into())
             .spawn(move || {
-                if let Err(error) =
-                    consume(fd, node, target, fps, thread_stop, &ready_tx, &frames_tx)
-                {
+                if let Err(error) = consume(
+                    fd,
+                    node,
+                    target,
+                    fps,
+                    &thread_control,
+                    &ready_tx,
+                    &frames_tx,
+                ) {
                     let text = format!("{error:#}");
                     let _ = ready_tx.try_send(Err(anyhow!(text.clone())));
                     let _ = frames_tx.try_send(Err(anyhow!(text)));
@@ -231,10 +252,11 @@ impl ScreenRecorder for ScreenCast {
             })?;
         let mut source = Source {
             session: Some(session),
-            stop,
+            control,
             worker: Some(worker),
             frames,
             size: (0, 0),
+            epoch: 0,
         };
         source.size = ready
             .recv_timeout(Duration::from_secs(15))
@@ -250,28 +272,74 @@ impl ScreenRecorder for ScreenCast {
     }
 }
 
+/// State the PipeWire thread shares with its [`Source`].
+#[derive(Default)]
+struct Control {
+    stop: AtomicBool,
+    paused: AtomicBool,
+    /// Number of resumes; frames carry the value they were captured under.
+    epoch: AtomicU64,
+}
+
+/// Cropped pixels from the PipeWire thread; turned into a [`Frame`] on the
+/// session's thread.
+struct Captured {
+    epoch: u64,
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    at: Instant,
+}
+
 struct Source {
     session: Option<Session>,
-    stop: Arc<AtomicBool>,
+    control: Arc<Control>,
     worker: Option<JoinHandle<()>>,
-    frames: mpsc::Receiver<Result<Frame>>,
+    frames: mpsc::Receiver<Result<Captured>>,
     size: (u32, u32),
+    epoch: u64,
 }
 impl VideoSource for Source {
     fn size(&self) -> (u32, u32) {
         self.size
     }
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
-        match self.frames.recv_timeout(timeout) {
-            Ok(frame) => frame.map(Some),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            Err(_) => bail!("portal video stream disconnected"),
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self
+                .frames
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                // Captured before the last resume.
+                Ok(Ok(c)) if c.epoch != self.epoch => {}
+                Ok(Ok(c)) => {
+                    return Ok(Some(Frame::from_pixels(
+                        c.width,
+                        c.height,
+                        c.width as usize * 4,
+                        c.format,
+                        Pixels::Owned(c.pixels),
+                        c.at,
+                    )));
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(_) => bail!("portal video stream disconnected"),
+            }
         }
+    }
+    fn set_paused(&mut self, paused: bool) {
+        if !paused {
+            // Frames tagged before this point are pre-pause pictures.
+            self.epoch = self.control.epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        }
+        self.control.paused.store(paused, Ordering::Relaxed);
     }
 }
 impl Drop for Source {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.control.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -295,14 +363,72 @@ fn crop(target: &RecordTarget, width: u32, height: u32) -> Result<(usize, usize,
     Ok((x, y, (right - x) as u32, (bottom - y) as u32))
 }
 
+/// The `w`×`h` pixels at (`x`, `y`) of rows `stride` bytes apart, tightly
+/// packed; `None` when `bytes` ends before the last of them.
+fn crop_rows(
+    bytes: &[u8],
+    stride: usize,
+    (x, y, w, h): (usize, usize, u32, u32),
+) -> Option<Vec<u8>> {
+    let row = w as usize * 4;
+    if h == 0 || stride < x * 4 + row {
+        return None;
+    }
+    let end = (y + h as usize - 1) * stride + x * 4 + row;
+    if bytes.len() < end {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity(row * h as usize);
+    for line in bytes[y * stride..end].chunks(stride) {
+        pixels.extend_from_slice(&line[x * 4..x * 4 + row]);
+    }
+    Some(pixels)
+}
+
+/// Picks frames from a stream that runs at the compositor's rate so they
+/// average `fps`: each accepted frame books the next slot one period later,
+/// and a frame up to half a period early still takes its slot, so jitter
+/// around the slot never drops frames that are on time.
+struct Throttle {
+    period: Duration,
+    next: Option<Instant>,
+}
+
+impl Throttle {
+    fn new(fps: u32) -> Throttle {
+        Throttle {
+            period: Duration::from_secs_f64(1.0 / f64::from(fps)),
+            next: None,
+        }
+    }
+
+    fn accept(&mut self, now: Instant) -> bool {
+        if self.next.is_some_and(|next| now + self.period / 2 < next) {
+            return false;
+        }
+        // More than a period behind (nothing changed on screen for a while):
+        // start a new schedule instead of accepting a burst.
+        let slot = self
+            .next
+            .filter(|&next| next + self.period > now)
+            .unwrap_or(now);
+        self.next = Some(slot + self.period);
+        true
+    }
+
+    fn restart(&mut self) {
+        self.next = None;
+    }
+}
+
 fn consume(
     fd: OwnedFd,
     node: u32,
     target: RecordTarget,
     fps: u32,
-    stop: Arc<AtomicBool>,
+    control: &Arc<Control>,
     ready: &mpsc::SyncSender<Result<(u32, u32)>>,
-    frames: &mpsc::SyncSender<Result<Frame>>,
+    frames: &mpsc::SyncSender<Result<Captured>>,
 ) -> Result<()> {
     use spa::param::{
         ParamType,
@@ -322,9 +448,11 @@ fn consume(
     )?;
     struct Data {
         format: VideoInfoRaw,
-        last: Option<Instant>,
+        pixel: Option<PixelFormat>,
         size: Option<(u32, u32)>,
         error: Option<String>,
+        throttle: Throttle,
+        epoch: u64,
     }
     let error = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
     let state_error = error.clone();
@@ -332,12 +460,15 @@ fn consume(
     let ready = ready.clone();
     let frames = frames.clone();
     let format_target = target.clone();
+    let process_control = control.clone();
     let _listener = stream
         .add_local_listener_with_user_data(Data {
             format: VideoInfoRaw::default(),
-            last: None,
+            pixel: None,
             size: None,
             error: None,
+            throttle: Throttle::new(fps),
+            epoch: 0,
         })
         .state_changed(move |_, _, old, state| match state {
             pw::stream::StreamState::Error(message) => {
@@ -361,10 +492,12 @@ fn consume(
                 data.format
                     .parse(param)
                     .map_err(|e| anyhow!("invalid PipeWire format: {e:?}"))?;
-                ensure!(
-                    data.format.format() == VideoFormat::BGRx,
-                    "portal negotiated a non-BGRx format"
-                );
+                // A monitor has no transparency: alpha is not image content.
+                data.pixel = Some(match data.format.format() {
+                    VideoFormat::BGRx | VideoFormat::BGRA => PixelFormat::Bgrx,
+                    VideoFormat::RGBx | VideoFormat::RGBA => PixelFormat::Rgbx,
+                    other => bail!("portal negotiated unsupported video format {other:?}"),
+                });
                 let size = data.format.size();
                 let (_, _, w, h) = crop(&format_target, size.width, size.height)?;
                 if let Some(old) = data.size {
@@ -387,69 +520,84 @@ fn consume(
                 *callback_error.borrow_mut() = Some(e);
                 return;
             }
-            let now = Instant::now();
-            if data.last.is_some_and(|last| {
-                now.duration_since(last) < Duration::from_secs_f64(1.0 / fps as f64)
-            }) {
+            if process_control.paused.load(Ordering::Relaxed) {
                 return;
             }
-            let Some(plane) = buffer.datas_mut().first_mut() else {
+            let epoch = process_control.epoch.load(Ordering::Relaxed);
+            if epoch != data.epoch {
+                data.epoch = epoch;
+                data.throttle.restart();
+            }
+            let (Some(format), Some(plane)) = (data.pixel, buffer.datas_mut().first_mut()) else {
                 return;
             };
             let size = data.format.size();
-            let result = (|| -> Result<Frame> {
-                let (x, y, w, h) = crop(&target, size.width, size.height)?;
-                let chunk = plane.chunk();
-                ensure!(
-                    !chunk.flags().contains(spa::buffer::ChunkFlags::CORRUPTED),
-                    "corrupt PipeWire video buffer"
-                );
-                let stride = usize::try_from(chunk.stride()).context("negative PipeWire stride")?;
-                ensure!(stride >= size.width as usize * 4, "invalid PipeWire stride");
-                let offset = chunk.offset() as usize;
-                let available = chunk.size() as usize;
-                let start = y * stride + x * 4;
-                let end = start + (h as usize - 1) * stride + w as usize * 4;
-                let bytes = plane
-                    .data()
-                    .context("portal did not provide mapped CPU video buffers")?;
-                ensure!(
-                    end <= available
-                        && offset
-                            .checked_add(end)
-                            .is_some_and(|end| end <= bytes.len()),
-                    "short PipeWire video buffer"
-                );
-                Ok(Frame::from_bgra(
-                    w,
-                    h,
-                    stride,
-                    &bytes[offset + start..offset + end],
-                    true,
-                    now,
-                ))
-            })();
-            match result {
-                Ok(frame) => {
-                    if frames.try_send(Ok(frame)).is_ok() {
-                        data.last = Some(now);
-                    }
-                }
+            let region = match crop(&target, size.width, size.height) {
+                Ok(region) => region,
                 Err(e) => {
                     *callback_error.borrow_mut() = Some(format!("{e:#}"));
+                    return;
                 }
+            };
+            let chunk = plane.chunk();
+            let (offset, len) = (chunk.offset() as usize, chunk.size() as usize);
+            // Metadata-only updates (a moved cursor) come as empty buffers,
+            // and a corrupted buffer is one bad frame: neither ends the
+            // recording.
+            if len == 0 || chunk.flags().contains(spa::buffer::ChunkFlags::CORRUPTED) {
+                return;
             }
+            let Ok(stride) = usize::try_from(chunk.stride()) else {
+                return;
+            };
+            let Some(bytes) = plane.data() else {
+                *callback_error.borrow_mut() =
+                    Some("portal did not provide mapped CPU video buffers".into());
+                return;
+            };
+            let now = Instant::now();
+            if !data.throttle.accept(now) {
+                return;
+            }
+            let Some(pixels) = bytes
+                .get(offset..)
+                .and_then(|b| b.get(..len))
+                .and_then(|b| crop_rows(b, stride, region))
+            else {
+                log::debug!("portal video: skipped a short buffer ({len} bytes, stride {stride})");
+                return;
+            };
+            let (width, height) = (region.2, region.3);
+            // A full queue means the encoder is behind: drop this frame.
+            let _ = frames.try_send(Ok(Captured {
+                epoch,
+                pixels,
+                width,
+                height,
+                format,
+                at: now,
+            }));
         })
         .register()?;
     // No modifier property and no DMA-BUF data type: negotiate mapped MemFd /
-    // MemPtr BGRx instead. Portal backends own GPU readback; importing arbitrary
-    // desktop DMA-BUF modifiers into FFmpeg is deliberately not assumed here.
+    // MemPtr buffers. Portal backends do the GPU readback, so arbitrary
+    // desktop DMA-BUF modifiers never need importing here.
     let object = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamFormat,
         ParamType::EnumFormat,
         spa::pod::property!(FormatProperties::MediaType, Id, MediaType::Video),
         spa::pod::property!(FormatProperties::MediaSubtype, Id, MediaSubtype::Raw),
-        spa::pod::property!(FormatProperties::VideoFormat, Id, VideoFormat::BGRx)
+        spa::pod::property!(
+            FormatProperties::VideoFormat,
+            Choice,
+            Enum,
+            Id,
+            VideoFormat::BGRx,
+            VideoFormat::BGRx,
+            VideoFormat::BGRA,
+            VideoFormat::RGBx,
+            VideoFormat::RGBA
+        )
     );
     let serialized = spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
@@ -464,7 +612,16 @@ fn consume(
         pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
         &mut params,
     )?;
-    while !stop.load(Ordering::Relaxed) {
+    let mut active = true;
+    while !control.stop.load(Ordering::Relaxed) {
+        // An inactive stream makes the compositor stop producing frames (no
+        // copies while paused); compositors send a new frame when a stream
+        // starts streaming again, so a resume never shows a stale picture.
+        let paused = control.paused.load(Ordering::Relaxed);
+        if paused == active {
+            stream.set_active(!paused)?;
+            active = !paused;
+        }
         mainloop
             .loop_()
             .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
@@ -524,16 +681,12 @@ mod tests {
             respond(
                 connection,
                 header,
+                // The portal spec types session_handle as a string.
                 HashMap::from([(
                     "session_handle".into(),
-                    Value::from(
-                        OwnedObjectPath::try_from(
-                            "/org/freedesktop/portal/desktop/session/quikscope/test",
-                        )
+                    Value::from("/org/freedesktop/portal/desktop/session/quikscope/test")
+                        .try_into()
                         .unwrap(),
-                    )
-                    .try_into()
-                    .unwrap(),
                 )]),
             )
             .await
@@ -721,6 +874,59 @@ mod tests {
         assert_eq!(crop(&target, 1600, 1200).unwrap(), (40, 60, 400, 200));
     }
 
+    #[test]
+    fn session_handle_is_a_string() {
+        let path = "/org/freedesktop/portal/desktop/session/1_42/quikscope_1";
+        assert_eq!(session_path(&Value::from(path)).unwrap().as_str(), path);
+        let object = zbus::zvariant::ObjectPath::try_from(path).unwrap();
+        assert_eq!(session_path(&Value::from(object)).unwrap().as_str(), path);
+        assert!(session_path(&Value::from("not a path")).is_err());
+        assert!(session_path(&Value::from(7u32)).is_err());
+    }
+
+    #[test]
+    fn crops_rows_tightly() {
+        // 3x3 pixels, rows padded to 16 bytes; take the 2x2 block at (1, 1).
+        let bytes: Vec<u8> = (0..48).collect();
+        let pixels = crop_rows(&bytes, 16, (1, 1, 2, 2)).unwrap();
+        assert_eq!(pixels[..8], bytes[20..28]);
+        assert_eq!(pixels[8..], bytes[36..44]);
+        // The last row only needs to reach the crop, not the full stride.
+        assert!(crop_rows(&bytes[..44], 16, (1, 1, 2, 2)).is_some());
+        assert!(crop_rows(&bytes[..43], 16, (1, 1, 2, 2)).is_none());
+        assert!(crop_rows(&bytes, 8, (1, 1, 2, 2)).is_none());
+        assert!(crop_rows(&bytes, 16, (0, 0, 2, 0)).is_none());
+    }
+
+    #[test]
+    fn throttle_keeps_on_time_frames() {
+        let start = Instant::now();
+        let count = |fps: u32, source_hz: f64, jitter: f64| {
+            let mut throttle = Throttle::new(fps);
+            (0..(source_hz as usize * 10))
+                .filter(|&i| {
+                    // Alternate early and late arrivals around the source's ticks.
+                    let offset = if i % 2 == 0 { jitter } else { -jitter };
+                    let t = (i as f64 / source_hz + offset).max(0.0);
+                    throttle.accept(start + Duration::from_secs_f64(t))
+                })
+                .count()
+        };
+        // 10 s of a jittery 60 Hz stream at 60 fps keeps every frame (a
+        // "since the last frame" check dropped about half of them).
+        assert_eq!(count(60, 60.0, 0.002), 600);
+        // A 144 Hz stream is thinned to 60 fps on average.
+        assert!((595..=605).contains(&count(60, 144.0, 0.0)));
+        assert!((295..=305).contains(&count(30, 60.0, 0.001)));
+        // After a pause in the stream the schedule restarts, no burst.
+        let mut throttle = Throttle::new(10);
+        assert!(throttle.accept(start));
+        assert!(throttle.accept(start + Duration::from_secs(5)));
+        assert!(!throttle.accept(start + Duration::from_millis(5010)));
+        throttle.restart();
+        assert!(throttle.accept(start + Duration::from_millis(5020)));
+    }
+
     /// Requires pipewire, WirePlumber, pw-dump and GStreamer's PipeWire plugin.
     /// Every process has a private runtime and bus; no real monitor is captured.
     #[test]
@@ -835,20 +1041,64 @@ mod tests {
         };
         let mut source = recorder.open(&target, 10, true).unwrap();
         assert_eq!(source.size(), (200, 100));
-        let mut previous = None;
-        for _ in 0..3 {
-            let frame = source
-                .next_frame(Duration::from_secs(5))
-                .unwrap()
-                .expect("test source frame");
-            assert_eq!((frame.width(), frame.height()), (200, 100));
-            assert_eq!(&frame.av().data(0)[..3], &[0x56, 0x34, 0x12]);
-            if let Some(previous) = previous {
-                assert!(frame.captured.duration_since(previous) >= Duration::from_millis(100));
-            }
-            previous = Some(frame.captured);
-        }
+        let frame = source
+            .next_frame(Duration::from_secs(5))
+            .unwrap()
+            .expect("test source frame");
+        assert_eq!((frame.width(), frame.height()), (200, 100));
         drop(source);
         assert_eq!(calls.lock().unwrap().last().unwrap(), "close");
+        // GStreamer's pipewiresink needs a moment before it negotiates with
+        // a new consumer (real portals create a node per session).
+        std::thread::sleep(Duration::from_secs(2));
+
+        // The consumer itself: pixels, frame rate, pause.
+        let (session, node, fd) = recorder.start(&target, true).unwrap();
+        let control = Arc::new(Control::default());
+        let (ready_tx, ready) = mpsc::sync_channel(1);
+        let (frames_tx, frames) = mpsc::sync_channel(2);
+        let worker = {
+            let (control, target) = (control.clone(), target.clone());
+            std::thread::spawn(move || {
+                consume(fd, node, target, 10, &control, &ready_tx, &frames_tx).unwrap()
+            })
+        };
+        assert_eq!(
+            ready.recv_timeout(Duration::from_secs(5)).unwrap().unwrap(),
+            (200, 100)
+        );
+        let next = || {
+            frames
+                .recv_timeout(Duration::from_secs(5))
+                .expect("test source frame")
+                .unwrap()
+        };
+        let first = next();
+        let mut last = first.at;
+        for _ in 0..4 {
+            let c = next();
+            assert_eq!((c.width, c.height, c.format), (200, 100, PixelFormat::Bgrx));
+            assert_eq!(c.pixels.len(), 200 * 100 * 4);
+            // videotestsrc foreground-color 0xff123456 in BGRx byte order.
+            assert_eq!(&c.pixels[..3], &[0x56, 0x34, 0x12]);
+            assert_eq!(c.epoch, 0);
+            last = c.at;
+        }
+        // 10 fps from a 30 Hz producer: about 100 ms apart on average.
+        let spacing = last.duration_since(first.at) / 4;
+        assert!(
+            (Duration::from_millis(80)..Duration::from_millis(120)).contains(&spacing),
+            "{spacing:?}"
+        );
+        control.paused.store(true, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(300));
+        while frames.try_recv().is_ok() {}
+        assert!(frames.recv_timeout(Duration::from_millis(500)).is_err());
+        control.epoch.store(1, Ordering::Relaxed);
+        control.paused.store(false, Ordering::Relaxed);
+        assert_eq!(next().epoch, 1);
+        control.stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+        drop(session);
     }
 }

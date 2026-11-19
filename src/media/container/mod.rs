@@ -9,14 +9,23 @@
 //! - Timestamps are relative to the file's presentation start, shared by all
 //!   tracks (edit lists and per-track start offsets applied), so an audio
 //!   track that starts two seconds after the picture still does.
+//! - Opus packet times count the encoder's pre-skip as part of the stream
+//!   (see [`crate::media::codec::opus`]): muxers store the pre-skip (MP4 edit
+//!   list and `dOps`, Matroska `CodecDelay`) without shifting packets, and
+//!   demuxers do not shift Opus packets by it either; the decoder trims it.
 
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 pub mod mkv;
 pub mod mp4;
+mod nal;
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Codec {
@@ -83,8 +92,9 @@ pub trait Muxer: Send {
 /// Creates `path` (normally an [`crate::output::OutputFile::part`]).
 pub fn create_muxer(path: &Path, container: Container, tracks: &[Track]) -> Result<Box<dyn Muxer>> {
     match container {
-        Container::Mp4 { .. } | Container::Mov => mp4::Mp4Muxer::create(path, container, tracks)
-            .map(|m| Box::new(m) as Box<dyn Muxer>),
+        Container::Mp4 { .. } | Container::Mov => {
+            mp4::Mp4Muxer::create(path, container, tracks).map(|m| Box::new(m) as Box<dyn Muxer>)
+        }
         Container::Mkv => {
             mkv::MkvMuxer::create(path, tracks).map(|m| Box::new(m) as Box<dyn Muxer>)
         }
@@ -106,6 +116,62 @@ pub trait Demuxer: Send {
 /// Opens an MP4/MOV/M4V or Matroska/WebM file by content (not extension).
 /// `Ok(None)` when the file is neither.
 pub fn open_demuxer(path: &Path) -> Result<Option<Box<dyn Demuxer>>> {
-    let _ = path;
-    todo!("Containers: sniff ftyp/EBML magic, open mp4::Mp4Demuxer or mkv::MkvDemuxer")
+    let mut head = [0u8; 8];
+    let mut file = File::open(path).with_context(|| format!("Opening {}", path.display()))?;
+    let mut filled = 0;
+    while filled < head.len() {
+        match file.read(&mut head[filled..])? {
+            0 => return Ok(None),
+            n => filled += n,
+        }
+    }
+    drop(file);
+    Ok(match sniff(&head) {
+        Some(Format::Mp4) => Some(Box::new(mp4::Mp4Demuxer::open(path)?)),
+        Some(Format::Matroska) => Some(Box::new(mkv::MkvDemuxer::open(path)?)),
+        None => None,
+    })
+}
+
+#[derive(Debug, PartialEq)]
+enum Format {
+    Mp4,
+    Matroska,
+}
+
+/// Recognises the first eight bytes of a file: the EBML magic, or a first
+/// ISO BMFF box that files start with (QuickTime files may open with
+/// `wide`/`free`/`mdat` instead of `ftyp`).
+fn sniff(head: &[u8; 8]) -> Option<Format> {
+    if head[..4] == [0x1A, 0x45, 0xDF, 0xA3] {
+        return Some(Format::Matroska);
+    }
+    let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+    let kind = &head[4..8];
+    // Size 1 announces a 64-bit size; 0 runs to the end of the file.
+    let plausible = size == 0 || size == 1 || size >= 8;
+    let known = [
+        b"ftyp", b"moov", b"wide", b"free", b"skip", b"mdat", b"styp",
+    ];
+    (plausible && known.iter().any(|k| kind == *k)).then_some(Format::Mp4)
+}
+
+/// `d` in units of `1 / timescale`, rounded to nearest.
+fn to_ticks(d: Duration, timescale: u32) -> u64 {
+    let ticks = (d.as_nanos() * u128::from(timescale) + 500_000_000) / 1_000_000_000;
+    u64::try_from(ticks).unwrap_or(u64::MAX)
+}
+
+/// Signed `ticks / timescale` in nanoseconds.
+fn ticks_to_nanos(ticks: i128, timescale: u32) -> i128 {
+    ticks * 1_000_000_000 / i128::from(timescale.max(1))
+}
+
+/// A non-negative nanosecond count as a [`Duration`] (negative clamps to 0).
+fn nanos(ns: i128) -> Duration {
+    let ns = u128::try_from(ns).unwrap_or(0);
+    Duration::new(
+        u64::try_from(ns / 1_000_000_000).unwrap_or(u64::MAX),
+        (ns % 1_000_000_000) as u32,
+    )
 }

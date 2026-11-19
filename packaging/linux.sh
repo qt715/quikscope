@@ -10,18 +10,11 @@ mkdir -p dist
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 install -Dm755 "$binary" "$stage/usr/bin/quikscope"
-# Distributions ship FFmpeg under different sonames (and Fedora without H.264
-# encoders), so packages carry the LGPL build the binary was linked against
-# (packaging/ffmpeg.sh; the release build sets RUNPATH=/usr/lib/quikscope).
-bundled=()
-if [ -n "${FFMPEG_DIR:-}" ]; then
-  install -d "$stage/usr/lib/quikscope"
-  for lib in avcodec avdevice avfilter avformat avutil swresample swscale; do
-    soname=$(readelf -d "$FFMPEG_DIR/lib/lib$lib.so" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')
-    install -m644 "$(readlink -f "$FFMPEG_DIR/lib/$soname")" "$stage/usr/lib/quikscope/$soname"
-    bundled+=("$soname")
-  done
-  install -Dm644 "$FFMPEG_DIR/LICENSE.txt" "$stage/usr/share/licenses/quikscope/FFMPEG-LICENSE.txt"
+# Codecs (OpenH264, libopus, libwebp, zstd) are compiled in; a stray FFmpeg
+# link would make every package depend on a distribution FFmpeg again.
+if readelf -d "$stage/usr/bin/quikscope" | grep -E 'NEEDED.*\[lib(avcodec|avformat|avfilter|avdevice|avutil|swscale|swresample)\.'; then
+  echo "$binary links FFmpeg; quikscope must not" >&2
+  exit 1
 fi
 install -Dm644 packaging/quikscope.desktop "$stage/usr/share/applications/quikscope.desktop"
 install -Dm644 packaging/quikscope.service "$stage/usr/lib/systemd/user/quikscope.service"
@@ -34,23 +27,20 @@ done
 for file in README.md CHANGELOG.md docs/*.md; do
   install -Dm644 "$file" "$stage/usr/share/doc/quikscope/$(basename "$file")"
 done
-# Debian's scanner resolves DT_NEEDED into distro/version-specific package names.
+# Debian's scanner resolves DT_NEEDED (ALSA, PulseAudio, PipeWire, GBM, …)
+# into distro/version-specific package names.
 mkdir -p "$stage/debian"
 printf 'Source: quikscope\nSection: graphics\nPriority: optional\nMaintainer: quikscope contributors <212748636+qt715@users.noreply.github.com>\n\nPackage: quikscope\nArchitecture: amd64\nDescription: screenshot daemon and annotation editor\n' > "$stage/debian/control"
-# Bundled FFmpeg libraries resolve from the package itself, so they are
-# searched (-l) but have no package to depend on.
-elves=(usr/bin/quikscope "${bundled[@]/#/usr/lib/quikscope/}")
-debdeps=$(cd "$stage" && dpkg-shlibdeps -O -lusr/lib/quikscope --ignore-missing-info "${elves[@]}" | cut -d= -f2-)
+debdeps=$(cd "$stage" && dpkg-shlibdeps -O --ignore-missing-info usr/bin/quikscope | cut -d= -f2-)
 # RPM records ELF soname and GLIBC symbol requirements, rather than guessing
 # Fedora/openSUSE package names. The binary is identical to the .deb binary.
-rpmrequires=$(printf "$stage/%s\n" "${elves[@]}" | /usr/lib/rpm/find-requires)
-for soname in "${bundled[@]}"; do
-  rpmrequires=$(printf '%s\n' "$rpmrequires" | grep -v "^${soname}(" || true)
-done
+rpmrequires=$(echo "$stage/usr/bin/quikscope" | /usr/lib/rpm/find-requires)
 python3 - "$stage" "$version" "$debdeps" "$rpmrequires" <<'PY'
 import json, pathlib, sys
 stage, version, debdeps, rpmdeps = sys.argv[1:]
 # JSON is a YAML subset accepted by nFPM.
+# Wayland and the Vulkan loader (rendering and Vulkan Video H.264) are
+# opened at run time, so DT_NEEDED does not name them.
 config = dict(name='quikscope', arch='amd64', platform='linux', version=version,
     maintainer='quikscope contributors <212748636+qt715@users.noreply.github.com>',
     description='Screenshot daemon and GPUI annotation editor', homepage='https://github.com/qt715/quikscope',

@@ -422,7 +422,8 @@ impl Owner {
                     "text/uri-list"
                 } else if request.target == self.atoms.GNOME_FILES {
                     "x-special/gnome-copied-files"
-                } else if request.target == self.atoms.TEXT_MIME {
+                } else if self.file_text_targets().contains(&request.target) {
+                    // Text editors and terminals paste the path(s).
                     "text/plain"
                 } else {
                     return self.notify(request, NONE);
@@ -444,16 +445,23 @@ impl Owner {
         ]
     }
 
+    fn file_text_targets(&self) -> [Atom; 3] {
+        [
+            self.atoms.UTF8_STRING,
+            self.atoms.UTF8_MIME,
+            self.atoms.TEXT_MIME,
+        ]
+    }
+
     fn targets(&self, content: &Content) -> Vec<Atom> {
         let mut result = vec![self.atoms.TARGETS];
         match content {
             Content::Png(..) => result.push(self.atoms.PNG),
             Content::Text(_) => result.extend(self.text_targets()),
-            Content::Files(_) => result.extend([
-                self.atoms.URI_LIST,
-                self.atoms.GNOME_FILES,
-                self.atoms.TEXT_MIME,
-            ]),
+            Content::Files(_) => {
+                result.extend([self.atoms.URI_LIST, self.atoms.GNOME_FILES]);
+                result.extend(self.file_text_targets());
+            }
         }
         result
     }

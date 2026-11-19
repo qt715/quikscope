@@ -5,7 +5,8 @@ On Windows: `%APPDATA%\quikscope\config.toml`; the default save directory
 is the Pictures known folder plus `Screenshots`, and `~` means `%USERPROFILE%`.
 Every key is optional; unknown keys are rejected so typos do not pass
 silently. The daemon reads the file at start-up; hand edits require
-`quikscope quit` to reload, but changes through `quikscope settings` apply
+`quikscope quit` to reload (it stops and saves a running recording first, as
+SIGTERM does), but changes through `quikscope settings` apply
 immediately to the running daemon and future captures/editors.
 
 ```toml
@@ -61,8 +62,14 @@ languages = []
 # strftime-style without extension.
 save_dir = "~/Videos/Screencasts"
 filename = "recording_%Y%m%d_%H%M%S"
-# "mp4", "mkv" or "mov" (H.264; AAC audio, Opus in MKV).
+# "mp4", "mkv" or "mov": H.264 video with Opus audio.
 video_format = "mp4"
+# MP4 layout. Fragmented (the default) keeps everything recorded so far
+# playable if quikscope or the machine dies mid-recording; false writes
+# fragments while recording and rewrites them as a classic MP4 with its index
+# at the front when the recording ends (some older players need that). MOV
+# always ends classic; MKV is always playable up to its last cluster.
+mp4_fragmented = true
 # "gif", "webp", "avif" or "jxl".
 animation_format = "gif"
 # Frames per second: 1–240 for video, 1–60 for animations.
@@ -82,24 +89,30 @@ copy_to_clipboard = true
 notify = true
 # Open the video editor / annotator as soon as a recording stops.
 open_editor = false
-# "auto" uses a GPU encoder when one works (NVENC, VAAPI, QSV, AMF, Media
-# Foundation); "software" never does.
+# "auto" encodes H.264 on the GPU through Vulkan Video (NVIDIA, AMD, Intel)
+# when that works, else with OpenH264 in software; "software" always uses
+# OpenH264.
 encoder = "auto"
-# Linux: status-notifier tray icon with recording controls.
+# Linux: status-notifier tray icon with recording controls. Changing it in
+# Settings shows or removes the icon at once.
 tray = true
 
 [hotkeys]
 # Windows only (unused on Linux).
 # Empty string disables a shortcut. Modifiers: Ctrl, Alt, Shift, Win.
-# Keys: PrintScreen, F1–F24, A–Z, 0–9. Duplicate bindings are rejected.
+# Keys: PrintScreen, F1–F24, A–Z, 0–9. Two shortcuts this file sets to the
+# same keys are rejected; a shortcut it leaves out whose default is already
+# bound here to something else (an older config predating the recording
+# shortcuts) is left unbound instead.
 region = "PrintScreen"
 screen = "Ctrl+PrintScreen"
 window = "Alt+PrintScreen"
 open_last = "Shift+PrintScreen"
 # Press again to stop. Win+Shift+R (Snipping Tool) and Win+Alt+R (Game Bar)
-# belong to Windows' own recorders.
+# belong to Windows' own recorders, Alt+Shift+PrintScreen toggles High
+# Contrast.
 record_video = "Ctrl+Shift+PrintScreen"
-record_animation = "Alt+Shift+PrintScreen"
+record_animation = "Ctrl+Alt+PrintScreen"
 ```
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,
@@ -152,3 +165,4 @@ until it is repaired.
 | `HYPRLAND_INSTANCE_SIGNATURE` | Hyprland instance to query; when unset, a single running instance is found automatically. |
 | `APPDATA`, `LOCALAPPDATA`, `USERPROFILE` | Windows config, cache/IPC and home locations. |
 | `QUIKSCOPE_WINDOWS_CAPTURE` | Windows capture method: `dxgi` (default with GDI availability fallback) or forced `gdi`, for measurements. |
+| `QUIKSCOPE_NO_PREWARM` | `1` skips the invisible window the daemon opens for 250 ms at start-up to create its GPU device and compile shaders before the first capture. The first selection overlay or editor then opens more slowly, but the idle daemon holds no GPU device until a window needs one: for A/B tests of GPU residency (e.g. alongside games). |

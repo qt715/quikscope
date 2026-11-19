@@ -95,18 +95,18 @@ impl Ui {
             click_count: 1,
         }));
     }
-    fn click(&mut self, id: &str) {
-        let position = self
-            .cx
+    fn bounds(&mut self, id: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.cx
             .update_window(self.any(), |view, _, cx| {
                 view.downcast::<Settings>()
                     .unwrap()
                     .read(cx)
                     .control_bounds(id)
-                    .unwrap()
-                    .center()
             })
-            .unwrap();
+            .unwrap()
+    }
+    fn click(&mut self, id: &str) {
+        let position = self.bounds(id).unwrap().center();
         self.click_at(position);
         self.frame();
     }
@@ -264,6 +264,20 @@ pub(super) fn welcome_refuses_config_that_became_invalid_while_open() {
 
 pub(super) fn recording_section_writes_record_values() {
     let mut ui = Ui::with_height(Some("# keep this comment\n"), false, 2600.);
+    // The MP4 layout choice shows only while MP4 is the video format.
+    assert!(Config::default().record.mp4_fragmented);
+    ui.click("record-mp4-fragmented");
+    assert!(ui.error().is_none(), "{:?}", ui.error());
+    assert!(!ui.saved().record.mp4_fragmented);
+    assert!(
+        !ui.applied
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .record
+            .mp4_fragmented
+    );
     for (id, check) in [
         (
             "record-video-format:mkv",
@@ -294,6 +308,8 @@ pub(super) fn recording_section_writes_record_values() {
         assert!(check(&ui.saved()), "{id} was not written");
         assert!(check(ui.applied.lock().unwrap().last().unwrap()), "{id}");
     }
+    // MKV (chosen above) has no MP4 layout to choose.
+    assert!(ui.bounds("record-mp4-fragmented").is_none());
     #[cfg(target_os = "linux")]
     {
         ui.click("record-tray");

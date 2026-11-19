@@ -9,6 +9,8 @@
 //! pick                                         ->  ok color #0067ed
 //! record video region                          ->  ok recording video 1280x720
 //! record video                                 ->  ok recorded 4 1280x720 5120 /path/rec.mp4
+//! record status                                ->  ok record video 5120 running | ok record saving | ok record idle
+//! version                                      ->  ok version 0.3.0
 //! ping                                         ->  ok pong
 //! ```
 
@@ -154,6 +156,17 @@ impl RecordOptions {
             geometry: None,
         }
     }
+
+    /// Options for `record NAME`: `video`, `animation` (`anim`) and `gif`.
+    /// `gif` also fixes the format; the other animation names use
+    /// `record.animation_format`.
+    pub fn named(name: &str) -> Option<RecordOptions> {
+        let mut options = RecordOptions::new(Kind::parse(name)?);
+        if name == "gif" {
+            options.format = Some(OutputFormat::Gif);
+        }
+        Some(options)
+    }
 }
 
 /// Controls the running recording.
@@ -201,6 +214,17 @@ pub struct RecordState {
     pub paused: bool,
 }
 
+/// The recording slot as `record status` reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecordStatus {
+    /// Nothing recorded or being saved (also while a recording is starting).
+    Idle,
+    Recording(RecordState),
+    /// A stopped or discarded recording is still being written or torn
+    /// down; a new recording cannot start yet.
+    Saving,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Capture(Mode, CaptureOptions),
@@ -220,6 +244,8 @@ pub enum Request {
     RecordControl(RecordAction),
     /// List recordable audio devices.
     AudioDevices,
+    /// The daemon's version, so a client can tell an older daemon apart.
+    Version,
     Ping,
     Quit,
 }
@@ -258,9 +284,11 @@ pub enum Response {
         duration_ms: u64,
         path: PathBuf,
     },
-    /// `record status` (and pause/resume): the running recording, if any.
-    RecordStatus(Option<RecordState>),
+    /// `record status` (and pause/resume/cancel): the recording slot.
+    RecordStatus(RecordStatus),
     AudioDevices(Vec<AudioDevice>),
+    /// The daemon's `CARGO_PKG_VERSION`.
+    Version(String),
     Cancelled,
     Error(String),
 }
@@ -311,9 +339,9 @@ impl Request {
                 if let Some(action) = RecordAction::parse(first) {
                     Request::RecordControl(action)
                 } else {
-                    let kind = Kind::parse(first)
+                    let mut o = RecordOptions::named(first)
                         .ok_or_else(|| format!("unknown recording kind {first:?}"))?;
-                    let mut o = RecordOptions::new(kind);
+                    let kind = o.kind;
                     for w in words.by_ref() {
                         if let Some(mode) = Mode::parse(w) {
                             o.mode = mode;
@@ -393,6 +421,7 @@ impl Request {
                         .ok_or_else(|| format!("unknown notifications setting {s:?}"))?,
                 )
             }
+            "version" => Request::Version,
             "ping" => Request::Ping,
             "quit" => Request::Quit,
             other => return Err(format!("unknown command {other:?}")),
@@ -476,6 +505,7 @@ impl fmt::Display for Request {
             }
             Request::RecordControl(action) => write!(f, "record {}", action.as_str()),
             Request::AudioDevices => write!(f, "audio-devices"),
+            Request::Version => write!(f, "version"),
             Request::Ping => write!(f, "ping"),
             Request::Quit => write!(f, "quit"),
         }
@@ -521,9 +551,14 @@ impl Response {
                 .map(Response::AudioDevices)
                 .map_err(|e| format!("malformed audio device list: {e}"));
         }
+        if let Some(version) = line.strip_prefix("ok version ") {
+            return Ok(Response::Version(version.to_string()));
+        }
         if let Some(rest) = line.strip_prefix("ok record ") {
-            if rest == "idle" {
-                return Ok(Response::RecordStatus(None));
+            match rest {
+                "idle" => return Ok(Response::RecordStatus(RecordStatus::Idle)),
+                "saving" => return Ok(Response::RecordStatus(RecordStatus::Saving)),
+                _ => {}
             }
             let malformed = || format!("malformed record status {line:?}");
             let mut parts = rest.split(' ');
@@ -537,11 +572,13 @@ impl Response {
                 Some("running") => false,
                 _ => return Err(malformed()),
             };
-            return Ok(Response::RecordStatus(Some(RecordState {
-                kind,
-                elapsed_ms,
-                paused,
-            })));
+            return Ok(Response::RecordStatus(RecordStatus::Recording(
+                RecordState {
+                    kind,
+                    elapsed_ms,
+                    paused,
+                },
+            )));
         }
         if let Some(rest) = line.strip_prefix("ok recording ") {
             let malformed = || format!("malformed recording response {line:?}");
@@ -676,14 +713,16 @@ impl fmt::Display for Response {
                 "ok recorded {id} {width}x{height} {duration_ms} {}",
                 path.display()
             ),
-            Response::RecordStatus(None) => write!(f, "ok record idle"),
-            Response::RecordStatus(Some(s)) => write!(
+            Response::RecordStatus(RecordStatus::Idle) => write!(f, "ok record idle"),
+            Response::RecordStatus(RecordStatus::Saving) => write!(f, "ok record saving"),
+            Response::RecordStatus(RecordStatus::Recording(s)) => write!(
                 f,
                 "ok record {} {} {}",
                 s.kind.as_str(),
                 s.elapsed_ms,
                 if s.paused { "paused" } else { "running" }
             ),
+            Response::Version(version) => write!(f, "ok version {version}"),
             Response::AudioDevices(devices) => write!(
                 f,
                 "ok audio {}",
@@ -852,6 +891,7 @@ mod tests {
             Request::Notifications(Switch::Status),
             Request::Ping,
             Request::Pick,
+            Request::Version,
             Request::Quit,
         ];
         for req in cases {
@@ -930,6 +970,14 @@ mod tests {
             Response::Pong,
             Response::Cancelled,
             Response::Error("no outputs".into()),
+            Response::Version("0.3.0".into()),
+            Response::RecordStatus(RecordStatus::Idle),
+            Response::RecordStatus(RecordStatus::Saving),
+            Response::RecordStatus(RecordStatus::Recording(RecordState {
+                kind: Kind::Animation,
+                elapsed_ms: 5120,
+                paused: true,
+            })),
             Response::Notifications(true),
             Response::Notifications(false),
             Response::Color(Rgba {
@@ -956,6 +1004,59 @@ mod tests {
         for r in cases {
             assert_eq!(Response::parse(&format!("{r}\n")), Ok(r.clone()));
         }
+    }
+
+    #[test]
+    fn record_status_lines_are_stable() {
+        // Scripts parse these; an older client reading `saving` fails loudly
+        // instead of misreporting idle.
+        assert_eq!(
+            Response::RecordStatus(RecordStatus::Saving).to_string(),
+            "ok record saving"
+        );
+        assert_eq!(
+            Response::RecordStatus(RecordStatus::Recording(RecordState {
+                kind: Kind::Video,
+                elapsed_ms: 1500,
+                paused: false,
+            }))
+            .to_string(),
+            "ok record video 1500 running"
+        );
+        assert_eq!(
+            Response::Version(env!("CARGO_PKG_VERSION").into()).to_string(),
+            format!("ok version {}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn record_gif_fixes_the_format_but_other_animation_names_do_not() {
+        let Ok(Request::Record(gif)) = Request::parse("record gif region") else {
+            panic!()
+        };
+        assert_eq!(
+            (gif.kind, gif.format),
+            (Kind::Animation, Some(OutputFormat::Gif))
+        );
+        assert_eq!(
+            Request::parse(&Request::Record(gif.clone()).to_string()),
+            Ok(Request::Record(gif))
+        );
+        for name in ["animation", "anim"] {
+            let Ok(Request::Record(o)) = Request::parse(&format!("record {name}")) else {
+                panic!()
+            };
+            assert_eq!((o.kind, o.format), (Kind::Animation, None), "{name}");
+        }
+        assert!(
+            Request::parse("record gif format=webp").is_ok_and(|r| matches!(
+                r,
+                Request::Record(RecordOptions {
+                    format: Some(OutputFormat::Webp),
+                    ..
+                })
+            ))
+        );
     }
 
     #[test]

@@ -6,11 +6,12 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail, ensure};
 
 use crate::geom::IRect;
+use crate::output::OutputFile;
 
 /// BGRA8 image, rows packed with no padding (`stride == width * 4`).
 /// Alpha is straight (not premultiplied); captures are always opaque.
@@ -401,18 +402,27 @@ impl Image {
         Ok(())
     }
 
-    /// Writes the image to `path` atomically (temp file + rename) so a crash
+    /// Writes the image to `path`, replacing it in one rename so a crash
     /// mid-write never leaves a truncated screenshot behind.
     pub fn save_png(&self, path: &Path, compression: Compression) -> Result<()> {
-        let dir = path.parent().context("save path has no parent directory")?;
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        write_atomic(path, |file| {
-            let mut w = BufWriter::with_capacity(1 << 20, file);
-            self.write_png(&mut w, compression)?;
-            w.flush()?;
-            Ok(())
-        })
-        .with_context(|| format!("writing {}", path.display()))
+        self.save_png_to(OutputFile::replace(path)?, compression)
+            .map(drop)
+    }
+
+    /// Writes the image into `file` and publishes it under its final name.
+    /// With [`OutputFile::reserve`], saves that derive the same name (two in
+    /// one second) get distinct files instead of replacing each other.
+    pub fn save_png_to(&self, file: OutputFile, compression: Compression) -> Result<PathBuf> {
+        File::create(file.part())
+            .map_err(anyhow::Error::from)
+            .and_then(|part| {
+                let mut w = BufWriter::with_capacity(1 << 20, part);
+                self.write_png(&mut w, compression)?;
+                w.flush()?;
+                Ok(())
+            })
+            .with_context(|| format!("writing {}", file.path().display()))?;
+        file.commit()
     }
 
     /// Decodes PNG/JPEG/WebP into BGRA.
@@ -691,5 +701,48 @@ mod tests {
         assert!(images.contains(&back), "file is one complete write");
         let entries = std::fs::read_dir(dir.path()).unwrap().count();
         assert_eq!(entries, 1, "no temp files left");
+    }
+
+    #[test]
+    fn concurrent_saves_with_one_name_get_distinct_complete_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // What two captures in the same second derive from the filename pattern.
+        let candidate = dir.path().join("screenshot_20261119_120000.png");
+        let images: Vec<Image> = (1..=6u8)
+            .map(|i| Image::filled(40 + i as u32, 30, [i, 2 * i, 3 * i, 255]))
+            .collect();
+        let saved: Vec<PathBuf> = std::thread::scope(|s| {
+            let saves: Vec<_> = images
+                .iter()
+                .map(|img| {
+                    let candidate = &candidate;
+                    s.spawn(move || {
+                        img.save_png_to(OutputFile::reserve(candidate).unwrap(), Compression::Fast)
+                            .unwrap()
+                    })
+                })
+                .collect();
+            saves.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        for (img, path) in images.iter().zip(&saved) {
+            assert_eq!(&Image::load(path).unwrap(), img, "{}", path.display());
+        }
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "screenshot_20261119_120000-1.png",
+                "screenshot_20261119_120000-2.png",
+                "screenshot_20261119_120000-3.png",
+                "screenshot_20261119_120000-4.png",
+                "screenshot_20261119_120000-5.png",
+                "screenshot_20261119_120000.png",
+            ],
+            "one file per save, no partial files left"
+        );
     }
 }

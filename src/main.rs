@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use quikscope::config;
 use quikscope::ipc::{
-    self, CaptureOptions, Mode, RecordAction, RecordOptions, Request, Response, Switch,
+    self, CaptureOptions, Mode, RecordAction, RecordOptions, RecordStatus, Request, Response,
+    Switch,
 };
-use quikscope::media::{Kind, OutputFormat};
+use quikscope::media::OutputFormat;
 
 /// Hidden verb of the Wayland recording capture helper (Linux).
 const RECORD_HELPER: &str = "__record-helper";
@@ -18,7 +19,7 @@ quikscope — screenshot and screen recording daemon with annotation editors
 
 USAGE:
     quikscope capture <region|output|window|screen> [OPTIONS]
-    quikscope record <video|animation> [region|output|window] [RECORD OPTIONS]
+    quikscope record <video|animation|gif> [region|output|window] [RECORD OPTIONS]
     quikscope record <stop|pause|resume|toggle-pause|cancel|status>
     quikscope audio-devices
     quikscope open-last
@@ -27,7 +28,7 @@ USAGE:
     quikscope settings
     quikscope notifications <on|off|toggle|status>
     quikscope daemon
-    quikscope ping | quit
+    quikscope version | ping | quit
 
 CAPTURE OPTIONS:
     --edit / --no-edit           Open the editor right away (default: on notification click)
@@ -48,7 +49,9 @@ RECORD OPTIONS:
     --edit, --notify, --clipboard, --cursor (and --no-…), -o, -g as for capture
 
 `record video` starts recording; running it again (or `record stop`) stops and
-saves. `pick` freezes the screen and magnifies the pointer: click any pixel to
+saves; `record gif` records a GIF whatever `record.animation_format` says.
+`quit` (like SIGTERM) stops and saves a running recording first.
+`pick` freezes the screen and magnifies the pointer: click any pixel to
 print its hex color and open a window that copies it as HEX, RGB, CMYK, HSV or HSL.
 `open` opens images and animations in the annotator and videos in the video
 editor; without a file it opens the latest capture.
@@ -182,14 +185,24 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             no_extra(&rest)?;
             Request::Ping
         }
+        "version" => {
+            no_extra(&rest)?;
+            println!("quikscope {}", env!("CARGO_PKG_VERSION"));
+            // Never start a daemon just to ask its version.
+            return match ipc::send(&socket, &Request::Version, Some(Duration::from_secs(5))) {
+                Ok(response) => report(Ok(response)),
+                Err(_) => {
+                    println!("daemon not running");
+                    Ok(ExitCode::SUCCESS)
+                }
+            };
+        }
         "quit" => {
             no_extra(&rest)?;
-            // Never start a daemon just to stop it.
-            return report(ipc::send(
-                &socket,
-                &Request::Quit,
-                Some(Duration::from_secs(5)),
-            ));
+            // Never start a daemon just to stop it. No timeout: the daemon
+            // replies once a running recording is saved (a long GIF takes a
+            // while), so the reply means it is safe to restart.
+            return report(ipc::send(&socket, &Request::Quit, None));
         }
         other => anyhow::bail!("unknown command {other:?}; see `quikscope --help`"),
     };
@@ -252,11 +265,15 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             println!("{}", path.display());
             Ok(ExitCode::SUCCESS)
         }
-        Response::RecordStatus(None) => {
+        Response::RecordStatus(RecordStatus::Idle) => {
             println!("idle");
             Ok(ExitCode::SUCCESS)
         }
-        Response::RecordStatus(Some(s)) => {
+        Response::RecordStatus(RecordStatus::Saving) => {
+            println!("saving");
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::RecordStatus(RecordStatus::Recording(s)) => {
             let secs = s.elapsed_ms / 1000;
             println!(
                 "{} {}:{:02} {}",
@@ -265,6 +282,15 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
                 secs % 60,
                 if s.paused { "paused" } else { "recording" }
             );
+            Ok(ExitCode::SUCCESS)
+        }
+        Response::Version(daemon) => {
+            println!("daemon {daemon}");
+            if daemon != env!("CARGO_PKG_VERSION") {
+                eprintln!(
+                    "quikscope: the running daemon is {daemon}; restart it with `quikscope quit`"
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Response::AudioDevices(devices) => {
@@ -277,6 +303,10 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
         Response::Cancelled => {
             eprintln!("quikscope: cancelled");
             Ok(ExitCode::from(1))
+        }
+        // This client knew the command, so a daemon that does not is older.
+        Response::Error(e) if e.starts_with("unknown command") => {
+            anyhow::bail!("{e}: the running daemon is older; restart it with `quikscope quit`")
         }
         Response::Error(e) => anyhow::bail!(e),
     }
@@ -295,7 +325,7 @@ fn parse_settings(args: &[String]) -> anyhow::Result<Request> {
 }
 
 fn parse_record(args: &[String]) -> anyhow::Result<Request> {
-    const USAGE: &str = "usage: quikscope record <video|animation> [region|output|window] [OPTIONS] \
+    const USAGE: &str = "usage: quikscope record <video|animation|gif> [region|output|window] [OPTIONS] \
                          or quikscope record <stop|pause|resume|toggle-pause|cancel|status>";
     let Some((first, rest)) = args.split_first() else {
         anyhow::bail!(USAGE);
@@ -304,8 +334,8 @@ fn parse_record(args: &[String]) -> anyhow::Result<Request> {
         no_extra(rest)?;
         return Ok(Request::RecordControl(action));
     }
-    let kind = Kind::parse(first).ok_or_else(|| anyhow::anyhow!(USAGE))?;
-    let mut o = RecordOptions::new(kind);
+    let mut o = RecordOptions::named(first).ok_or_else(|| anyhow::anyhow!(USAGE))?;
+    let kind = o.kind;
     let mut audio: Option<Vec<String>> = None;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
@@ -480,5 +510,35 @@ mod tests {
         assert!(parse_capture(&args("region --bogus")).is_err());
         assert!(parse_capture(&args("region --output")).is_err());
         assert!(parse_capture(&args("everything")).is_err());
+    }
+
+    #[test]
+    fn record_gif_records_gif_and_animation_keeps_the_configured_format() {
+        let Request::Record(gif) = parse_record(&args("gif output")).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(gif.kind, quikscope::media::Kind::Animation);
+        assert_eq!(gif.format, Some(OutputFormat::Gif));
+        assert_eq!(gif.mode, Mode::Output);
+        let Request::Record(animation) = parse_record(&args("animation")).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(animation.format, None);
+        assert!(parse_record(&args("gif --format mp4")).is_err());
+    }
+
+    #[test]
+    fn an_older_daemon_rejecting_a_command_gets_a_restart_hint() {
+        let error = report(Ok(Response::Error("unknown command \"version\"".into())))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the running daemon is older; restart it with `quikscope quit`"),
+            "{error}"
+        );
+        let error = report(Ok(Response::Error("no outputs".into())))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "no outputs");
     }
 }

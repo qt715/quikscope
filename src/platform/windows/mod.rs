@@ -3,6 +3,7 @@
 
 mod capture;
 mod desktop;
+mod duplication;
 mod record;
 mod shell;
 
@@ -57,8 +58,9 @@ pub fn initialize() -> Result<()> {
 }
 
 pub(super) fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
+    // Screenshots and recordings share one capture worker: DXGI allows a
+    // single Desktop Duplication per output and process.
     let capture = capture::WindowsCapture::new()
-        .map(|c| Arc::new(c) as Arc<dyn Capture>)
         .map_err(|e| log::error!("screen capture unavailable: {e:#}"))
         .ok();
     let shell = shell::spawn(events, &config.hotkeys)
@@ -66,7 +68,7 @@ pub(super) fn connect(events: EventSink, config: &crate::config::Config) -> Plat
         .ok();
     Platform {
         name: "windows",
-        capture,
+        capture: capture.clone().map(|c| Arc::new(c) as Arc<dyn Capture>),
         desktop: Arc::new(desktop::WindowsDesktop) as Arc<dyn Desktop>,
         clipboard: shell.as_ref().map(|s| s.clone() as Arc<dyn Clipboard>),
         notifier: shell.as_ref().map(|s| s.clone() as Arc<dyn Notifier>),
@@ -74,7 +76,8 @@ pub(super) fn connect(events: EventSink, config: &crate::config::Config) -> Plat
         shell,
         surfaces: Surfaces::Windows,
         capture_may_prompt: false,
-        recorder: Some(Arc::new(record::WindowsRecorder)),
+        recorder: capture
+            .map(|c| Arc::new(record::WindowsRecorder::new(c)) as Arc<dyn super::ScreenRecorder>),
     }
 }
 

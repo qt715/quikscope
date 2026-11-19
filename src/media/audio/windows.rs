@@ -1,5 +1,7 @@
 //! WASAPI clients never leave their COM apartment. A bounded queue prevents
 //! a paused or stalled encoder from retaining minutes of microphone data.
+//! A lost endpoint (unplugged, disabled) only silences its own track while
+//! it is retried; the default ids follow Windows' current default endpoint.
 use crate::media::{
     AudioChunk, AudioDevice, AudioSource, AudioSpec, DEFAULT_INPUT, DEFAULT_OUTPUT,
 };
@@ -16,7 +18,7 @@ use std::{
 use windows::{
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
-        Media::Audio::*,
+        Media::{Audio::*, Multimedia::WAVE_FORMAT_IEEE_FLOAT},
         System::{Com::*, Performance::*},
     },
     core::{Interface, PCWSTR},
@@ -91,9 +93,13 @@ pub(super) fn devices() -> Result<Vec<AudioDevice>> {
     .map_err(|_| anyhow!("WASAPI enumeration thread panicked"))?
 }
 
+/// Pause between attempts to reach a lost endpoint, and between checks for
+/// a new default endpoint.
+const REOPEN: Duration = Duration::from_millis(500);
+
 struct Source {
     spec: AudioSpec,
-    receive: mpsc::Receiver<Result<AudioChunk>>,
+    receive: mpsc::Receiver<AudioChunk>,
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -103,9 +109,14 @@ impl AudioSource for Source {
     }
     fn read(&mut self, timeout: Duration) -> Result<Option<AudioChunk>> {
         match self.receive.recv_timeout(timeout) {
-            Ok(chunk) => chunk.map(Some),
+            Ok(chunk) => Ok(Some(chunk)),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            Err(_) => Err(anyhow!("WASAPI capture thread stopped")),
+            // The capture thread already logged why it stopped; one lost
+            // device ends its own track, not the whole recording.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                thread::sleep(timeout);
+                Ok(None)
+            }
         }
     }
 }
@@ -126,11 +137,9 @@ pub(super) fn open(id: &str) -> Result<Box<dyn AudioSource>> {
     let thread = thread::Builder::new()
         .name("quikscope-wasapi".into())
         .spawn(move || {
-            let result = capture(&id, &stopping, &ready, &send);
-            if let Err(error) = result {
-                let message = format!("{error:#}");
-                let _ = ready.send(Err(message.clone()));
-                let _ = send.try_send(Err(anyhow!(message)));
+            // Only startup fails; later losses are retried in `capture`.
+            if let Err(error) = capture(&id, &stopping, &ready, &send) {
+                let _ = ready.send(Err(format!("{error:#}")));
             }
         })?;
     match started
@@ -149,74 +158,147 @@ pub(super) fn open(id: &str) -> Result<Box<dyn AudioSource>> {
         }
     }
 }
+
 fn capture(
     id: &str,
     stop: &AtomicBool,
     ready: &mpsc::SyncSender<std::result::Result<AudioSpec, String>>,
-    send: &mpsc::SyncSender<Result<AudioChunk>>,
+    send: &mpsc::SyncSender<AudioChunk>,
 ) -> Result<()> {
     let _com = Apartment::enter()?;
     let enumeration = enumerator()?;
-    let device = unsafe {
-        match id {
+    let stream = Stream::open(&endpoint(&enumeration, id)?, None)?;
+    let spec = stream.spec;
+    let clock = Clock::new()?;
+    let _ = ready.send(Ok(spec));
+    // From here on a lost endpoint is retried instead of ending the
+    // recording.
+    let mut stream = Some(stream);
+    let mut checked = Instant::now();
+    while !stop.load(Ordering::Relaxed) {
+        if let Some(open) = &mut stream {
+            match open.drain(&clock, send) {
+                Ok(true) => {}
+                Ok(false) => return Ok(()), // the recording dropped its source
+                Err(error) => {
+                    // AUDCLNT_E_DEVICE_INVALIDATED when unplugged, disabled
+                    // or its format changed.
+                    log::warn!("audio device {id} lost: {error:#}");
+                    stream = None;
+                }
+            }
+        }
+        if checked.elapsed() >= REOPEN {
+            checked = Instant::now();
+            let current = stream.as_ref().map(|s| s.endpoint.as_str());
+            match endpoint(&enumeration, id) {
+                // The default endpoint changed, or the lost one is back.
+                Ok(device) if current != endpoint_id(&device).ok().as_deref() => {
+                    match Stream::open(&device, Some(spec)) {
+                        Ok(open) => {
+                            log::info!("audio device {id} now captures {}", open.endpoint);
+                            stream = Some(open);
+                        }
+                        Err(error) if stream.is_none() => {
+                            log::debug!("audio device {id} still unavailable: {error:#}");
+                        }
+                        Err(error) => {
+                            log::warn!("audio device {id} cannot follow the default: {error:#}");
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => log::debug!("audio device {id} has no endpoint: {error:#}"),
+            }
+        }
+        thread::sleep(Duration::from_millis(3));
+    }
+    Ok(())
+}
+
+/// The endpoint `id` stands for right now.
+fn endpoint(enumeration: &IMMDeviceEnumerator, id: &str) -> Result<IMMDevice> {
+    unsafe {
+        Ok(match id {
             DEFAULT_OUTPUT => enumeration.GetDefaultAudioEndpoint(eRender, eConsole)?,
             DEFAULT_INPUT => enumeration.GetDefaultAudioEndpoint(eCapture, eConsole)?,
             _ => {
                 let wide: Vec<u16> = id.encode_utf16().chain(Some(0)).collect();
                 enumeration.GetDevice(PCWSTR(wide.as_ptr()))?
             }
-        }
-    };
-    let endpoint: IMMEndpoint = device.cast()?;
-    let output = unsafe { endpoint.GetDataFlow()? } == eRender;
-    let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
-    let mix = unsafe { client.GetMixFormat()? };
-    let rate = unsafe { (*mix).nSamplesPerSec };
-    let channels = unsafe { (*mix).nChannels };
-    unsafe {
-        CoTaskMemFree(Some(mix.cast()));
+        })
     }
-    let spec = AudioSpec { rate, channels };
-    let format = WAVEFORMATEX {
-        wFormatTag: 3,
-        nChannels: channels,
-        nSamplesPerSec: rate,
-        nAvgBytesPerSec: rate * u32::from(channels) * 4,
-        nBlockAlign: channels * 4,
-        wBitsPerSample: 32,
-        cbSize: 0,
-    };
-    let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-        | if output {
-            AUDCLNT_STREAMFLAGS_LOOPBACK
-        } else {
-            0
+}
+
+/// One started WASAPI client of one endpoint.
+struct Stream {
+    client: IAudioClient,
+    capture: IAudioCaptureClient,
+    endpoint: String,
+    spec: AudioSpec,
+    /// Capture time just past the previous packet, for packets whose
+    /// timestamp WASAPI flags as wrong.
+    next: Option<Instant>,
+}
+impl Stream {
+    /// Captures `device` as 32-bit float in `spec` (its own mix format when
+    /// `None`); the shared-mode engine converts rate and channels, so a
+    /// replacement endpoint keeps the source's original spec.
+    fn open(device: &IMMDevice, spec: Option<AudioSpec>) -> Result<Self> {
+        let endpoint = endpoint_id(device)?;
+        let output = unsafe { device.cast::<IMMEndpoint>()?.GetDataFlow()? } == eRender;
+        let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
+        let spec = match spec {
+            Some(spec) => spec,
+            None => unsafe {
+                let mix = client.GetMixFormat()?;
+                let spec = AudioSpec {
+                    rate: (*mix).nSamplesPerSec,
+                    channels: (*mix).nChannels,
+                };
+                CoTaskMemFree(Some(mix.cast()));
+                spec
+            },
         };
-    unsafe {
-        client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 1_000_000, 0, &format, None)?;
+        let format = WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_IEEE_FLOAT as u16,
+            nChannels: spec.channels,
+            nSamplesPerSec: spec.rate,
+            nAvgBytesPerSec: spec.rate * u32::from(spec.channels) * 4,
+            nBlockAlign: spec.channels * 4,
+            wBitsPerSample: 32,
+            cbSize: 0,
+        };
+        let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+            | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY
+            | if output {
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+            } else {
+                0
+            };
+        unsafe {
+            client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 1_000_000, 0, &format, None)?;
+        }
+        let capture: IAudioCaptureClient = unsafe { client.GetService()? };
+        unsafe {
+            client.Start()?;
+        }
+        Ok(Self {
+            client,
+            capture,
+            endpoint,
+            spec,
+            next: None,
+        })
     }
-    let capture: IAudioCaptureClient = unsafe { client.GetService()? };
-    let mut frequency = 0;
-    let mut qpc = 0;
-    unsafe {
-        QueryPerformanceFrequency(&mut frequency)?;
-        QueryPerformanceCounter(&mut qpc)?;
-    }
-    let epoch = Instant::now();
-    let qpc_epoch = qpc as f64 / frequency as f64;
-    unsafe {
-        client.Start()?;
-    }
-    let _ = ready.send(Ok(spec));
-    let result = (|| -> Result<()> {
-        while !stop.load(Ordering::Relaxed) {
-            if unsafe { capture.GetNextPacketSize()? } == 0 {
-                thread::sleep(Duration::from_millis(3));
-                continue;
-            }
+
+    /// Sends every waiting packet; `false` once the receiver is gone.
+    fn drain(&mut self, clock: &Clock, send: &mpsc::SyncSender<AudioChunk>) -> Result<bool> {
+        let channels = usize::from(self.spec.channels);
+        while unsafe { self.capture.GetNextPacketSize()? } > 0 {
             let (mut data, mut frames, mut flags, mut position) = (std::ptr::null_mut(), 0, 0, 0);
             unsafe {
-                capture.GetBuffer(
+                self.capture.GetBuffer(
                     &mut data,
                     &mut frames,
                     &mut flags,
@@ -224,38 +306,82 @@ fn capture(
                     Some(&mut position),
                 )?;
             }
-            let count = frames as usize * channels as usize;
+            let count = frames as usize * channels;
             let samples = if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
                 vec![0.0; count]
             } else {
                 unsafe { std::slice::from_raw_parts(data.cast::<f32>(), count) }.to_vec()
             };
-            // WASAPI returns QPC time converted to 100 ns units, not raw ticks.
-            let delta = position as f64 / 10_000_000.0 - qpc_epoch;
-            let captured = if flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 != 0 {
-                Instant::now()
-            } else if delta >= 0.0 {
-                epoch + Duration::from_secs_f64(delta)
-            } else {
-                epoch
-                    .checked_sub(Duration::from_secs_f64(-delta))
-                    .unwrap_or(epoch)
-            };
             unsafe {
-                capture.ReleaseBuffer(frames)?;
+                self.capture.ReleaseBuffer(frames)?;
             }
-            if let Err(mpsc::TrySendError::Disconnected(_)) =
-                send.try_send(Ok(AudioChunk { samples, captured }))
-            {
-                break;
+            let length = Duration::from_secs_f64(f64::from(frames) / f64::from(self.spec.rate));
+            // The QPC position belongs to the packet's first sample; the
+            // mixer places later samples by count from there.
+            let captured = if flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 != 0 {
+                self.next.unwrap_or_else(|| {
+                    Instant::now()
+                        .checked_sub(length)
+                        .unwrap_or_else(Instant::now)
+                })
+            } else {
+                clock.at(position)
+            };
+            self.next = Some(captured + length);
+            match send.try_send(AudioChunk { samples, captured }) {
+                Err(mpsc::TrySendError::Disconnected(_)) => return Ok(false),
+                // A stalled consumer loses this packet; the mixer bridges
+                // the gap from the next packet's timestamp.
+                Err(mpsc::TrySendError::Full(_)) | Ok(()) => {}
             }
         }
-        Ok(())
-    })();
-    unsafe {
-        client.Stop()?;
+        Ok(true)
     }
-    result
+}
+impl Drop for Stream {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.client.Stop();
+        }
+    }
+}
+
+/// Maps WASAPI's QPC positions (100 ns units) onto `Instant`. Rust's
+/// `Instant` reads the same counter on Windows, so one pairing taken
+/// between two counter reads holds for the whole recording.
+struct Clock {
+    instant: Instant,
+    /// The counter at `instant`, in 100 ns units.
+    position: i128,
+}
+impl Clock {
+    fn new() -> Result<Self> {
+        let mut frequency = 0;
+        let (mut before, mut after) = (0, 0);
+        unsafe {
+            QueryPerformanceFrequency(&mut frequency)?;
+            QueryPerformanceCounter(&mut before)?;
+        }
+        let instant = Instant::now();
+        unsafe {
+            QueryPerformanceCounter(&mut after)?;
+        }
+        let ticks = (i128::from(before) + i128::from(after)) / 2;
+        Ok(Self {
+            instant,
+            position: ticks * 10_000_000 / i128::from(frequency),
+        })
+    }
+
+    fn at(&self, position: u64) -> Instant {
+        let delta = i128::from(position) - self.position;
+        let offset = Duration::from_nanos((delta.unsigned_abs() * 100) as u64);
+        if delta >= 0 {
+            self.instant + offset
+        } else {
+            self.instant.checked_sub(offset).unwrap_or(self.instant)
+        }
+    }
 }
 
 #[cfg(test)]

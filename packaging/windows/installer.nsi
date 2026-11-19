@@ -13,9 +13,6 @@ Unicode true
 !ifndef OUTPUT
   !define OUTPUT "${SOURCE}/dist/quikscope-${VERSION}-windows-x86_64-installer.exe"
 !endif
-!ifndef FFMPEG
-  !error "Pass /DFFMPEG=<directory printed by packaging/ffmpeg.sh win64>"
-!endif
 
 !macro OpenWith EXT
   WriteRegStr HKCU "Software\Classes\${EXT}\OpenWithProgids" "quikscope.media" ""
@@ -84,15 +81,6 @@ Section "quikscope (required)" Main
   File "${SOURCE}\README.md"
   File "${SOURCE}\assets\fonts\INTER-LICENSE.txt"
   File /oname=LUCIDE-LICENSE.txt "${SOURCE}\assets\icons\LICENSE"
-  # LGPL FFmpeg the executable links (packaging/ffmpeg.sh win64).
-  File "${FFMPEG}\bin\avcodec-*.dll"
-  File "${FFMPEG}\bin\avdevice-*.dll"
-  File "${FFMPEG}\bin\avfilter-*.dll"
-  File "${FFMPEG}\bin\avformat-*.dll"
-  File "${FFMPEG}\bin\avutil-*.dll"
-  File "${FFMPEG}\bin\swresample-*.dll"
-  File "${FFMPEG}\bin\swscale-*.dll"
-  File /oname=FFMPEG-LICENSE.txt "${FFMPEG}\LICENSE.txt"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\quikscope.lnk" "$INSTDIR\quikscope.exe" "daemon" "$INSTDIR\quikscope.ico"
   # Explorer's "Open with" list: images, animations and videos. Defaults
@@ -164,14 +152,6 @@ Section "Uninstall"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\INTER-LICENSE.txt"
   Delete "$INSTDIR\LUCIDE-LICENSE.txt"
-  Delete "$INSTDIR\FFMPEG-LICENSE.txt"
-  Delete "$INSTDIR\avcodec-*.dll"
-  Delete "$INSTDIR\avdevice-*.dll"
-  Delete "$INSTDIR\avfilter-*.dll"
-  Delete "$INSTDIR\avformat-*.dll"
-  Delete "$INSTDIR\avutil-*.dll"
-  Delete "$INSTDIR\swresample-*.dll"
-  Delete "$INSTDIR\swscale-*.dll"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   # User configuration and screenshots intentionally remain untouched.

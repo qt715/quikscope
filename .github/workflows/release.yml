@@ -22,17 +22,11 @@ jobs:
       - run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.4
       - run: cargo install cargo-about --locked --version 0.8.4
       - run: packaging/licenses.sh
-      - name: Fetch the bundled LGPL FFmpeg build
-        run: echo "FFMPEG_BUNDLE=$(packaging/ffmpeg.sh linux64)" >> "$GITHUB_ENV"
       - name: Build once for both Linux formats
         env:
-          FFMPEG_DIR: ${{ env.FFMPEG_BUNDLE }}
-          # The packages install the bundled FFmpeg here (packaging/linux.sh).
-          RUSTFLAGS: -D warnings -C link-arg=-Wl,-rpath,/usr/lib/quikscope
+          RUSTFLAGS: -D warnings
         run: cargo build --frozen --release --bin quikscope
       - run: packaging/linux.sh
-        env:
-          FFMPEG_DIR: ${{ env.FFMPEG_BUNDLE }}
       - name: Release source archive and AUR-ready recipe
         shell: bash
         run: |
@@ -84,9 +78,13 @@ jobs:
       - name: Generate licence report
         shell: bash
         run: packaging/licenses.sh
-      - name: Fetch the bundled LGPL FFmpeg build
-        shell: bash
-        run: echo "FFMPEG_DIR=$(packaging/ffmpeg.sh win64)" >> "$GITHUB_ENV"
+      # NASM gives OpenH264 (the software H.264 fallback) its SIMD paths;
+      # CMake (libopus) is already on the runner image.
+      - name: NASM for OpenH264
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          "$env:ProgramFiles\NASM" >> $env:GITHUB_PATH
       - name: Build native executable and record Cargo's output path
         id: native
         shell: pwsh
@@ -101,7 +99,7 @@ jobs:
           if ($artifacts.Count -ne 1) { throw 'Cargo did not report exactly one quikscope executable' }
           $binary = (Resolve-Path -LiteralPath $artifacts[0].executable).Path
           "binary=$binary" >> $env:GITHUB_OUTPUT
-      - name: Assert the executable needs no Visual C++ runtime DLLs
+      - name: Assert the executable needs no Visual C++ runtime or FFmpeg DLLs
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -109,16 +107,17 @@ jobs:
           if (!$dumpbin) { throw 'Cannot find MSVC dumpbin for the runtime import audit' }
           $imports = & $dumpbin /nologo /imports '${{ steps.native.outputs.binary }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $runtime = @($imports | Where-Object { $_ -match '^\s*(VCRUNTIME\S*|MSVCP\S*|api-ms-win-crt-\S*)\.dll\s*$' })
-          if ($runtime.Count) { throw "Unexpected runtime DLL imports: $($runtime -join ', ')" }
-          Write-Output 'PASS: no VCRUNTIME, MSVCP or api-ms-win-crt DLL imports'
+          # The installer ships quikscope.exe alone, without runtime or codec DLLs beside it.
+          $unexpected = @($imports | Where-Object { $_ -match '^\s*(VCRUNTIME\S*|MSVCP\S*|api-ms-win-crt-\S*|avcodec\S*|avformat\S*|avfilter\S*|avdevice\S*|avutil\S*|swscale\S*|swresample\S*)\.dll\s*$' })
+          if ($unexpected.Count) { throw "Unexpected DLL imports: $($unexpected -join ', ')" }
+          Write-Output 'PASS: no VCRUNTIME, MSVCP, api-ms-win-crt or FFmpeg DLL imports'
       - run: choco install nsis --no-progress -y
       - name: Build per-user installer
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           New-Item -ItemType Directory -Force dist | Out-Null
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /WX "/DVERSION=$version" "/DSOURCE=$pwd" "/DBINARY=${{ steps.native.outputs.binary }}" "/DFFMPEG=$env:FFMPEG_DIR" packaging/windows/installer.nsi
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /WX "/DVERSION=$version" "/DSOURCE=$pwd" "/DBINARY=${{ steps.native.outputs.binary }}" packaging/windows/installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:

@@ -1,16 +1,20 @@
-//! Region screencopy with GBM DMA-BUFs and off-compositor Vulkan detiling.
-//! SHM is allowed only without a DMA-BUF offer: compositor readbacks cause judder.
+//! wlroots screencopy recording: the Wayland side of the capture helper
+//! (`helper.rs` runs it in a child process) and the recording outline.
+//!
+//! The compositor copies each frame into one of a few buffers we own: GBM
+//! DMA-BUFs read back through Vulkan (`gpu.rs`), or shared memory only when
+//! the compositor offers no DMA-BUF at all, because an SHM screencopy makes
+//! the compositor read the frame back on its own render path.
 use crate::{
     geom::IRect,
-    media::{Frame, VideoSource},
+    media::{PixelFormat, VideoSource},
     platform::{RecordTarget, ScreenRecorder},
 };
 use anyhow::{Context, Result, bail, ensure};
-use ffmpeg_next::{self as ffmpeg, ffi};
 use memmap2::MmapMut;
 use std::{
     fs::File,
-    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    os::fd::{AsFd, BorrowedFd},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -37,226 +41,470 @@ use wayland_protocols_wlr::{
     screencopy::v1::client::{zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1},
 };
 
+use super::gpu::{self, fourcc_name};
+
 pub struct Recorder;
 impl Recorder {
-    /// Diagnostic only: force output damage so a static desktop measures the
-    /// pipeline's throughput, not how often the user's content changes.
+    /// Diagnostic only: every frame is a full copy, so a static desktop
+    /// measures the pipeline's throughput, not how often content changes.
     pub fn open_benchmark(
         &self,
         target: &RecordTarget,
         fps: u32,
         cursor: bool,
     ) -> Result<Box<dyn VideoSource>> {
-        open_local(target, fps, cursor, true)
-    }
-}
-struct Source {
-    rx: mpsc::Receiver<Result<Frame>>,
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    size: (u32, u32),
-}
-impl VideoSource for Source {
-    fn size(&self) -> (u32, u32) {
-        self.size
-    }
-    fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
-        match self.rx.recv_timeout(timeout) {
-            Ok(f) => f.map(Some),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            Err(_) => bail!("Wayland recording source stopped"),
-        }
-    }
-}
-impl Drop for Source {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+        super::helper::spawn(target, fps, cursor, true)
     }
 }
 impl ScreenRecorder for Recorder {
     /// Captures in a helper process (see `helper.rs` for the NVIDIA reason).
     fn open(&self, target: &RecordTarget, fps: u32, cursor: bool) -> Result<Box<dyn VideoSource>> {
-        super::helper::open(target, fps, cursor)
+        super::helper::spawn(target, fps, cursor, false)
     }
     fn outline(&self, region: IRect) -> Result<Box<dyn Send>> {
         outline(region)
     }
 }
-/// Captures in this process. Only for processes without a GPUI renderer:
-/// the capture helper and diagnostics.
-pub(super) fn open_local(
-    target: &RecordTarget,
-    fps: u32,
-    cursor: bool,
-    force_copy: bool,
-) -> Result<Box<dyn VideoSource>> {
-    ensure!(fps > 0 && fps <= 240, "recording fps must be in 1..=240");
-    ensure!(
-        target.region.w > 0 && target.region.h > 0,
-        "empty recording region"
-    );
-    let target = target.clone();
-    let (tx, rx) = mpsc::sync_channel(4);
-    let (ready, started) = mpsc::sync_channel(1);
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopping = stop.clone();
-    let thread = std::thread::Builder::new().name("quikscope-wlr-record".into()).spawn(move || {
-            let setup = (|| -> Result<(Client, Frame)> {
-                let mut client = Client::connect()?;
-                let output = client.state.outputs.iter().position(|o| o.name == target.output).context("recording output disappeared")?;
-                ensure!(client.state.outputs[output].transform == 0, "recording rotated/flipped Wayland outputs is not supported");
-                client.output = output; client.target = Some(target); client.cursor = cursor; client.force_copy=force_copy;
-                let first = client.capture(&stopping)?.context("recording stopped during startup")?;
-                Ok((client, first))
-            })();
-            let (mut client, first) = match setup { Ok(v) => v, Err(e) => { let _ = ready.send(Err(e)); return; } };
-            let _ = ready.send(Ok((first.width(), first.height())));
-            if tx.send(Ok(first)).is_err() { return; }
-            let period = Duration::from_secs_f64(1.0/f64::from(fps));
-            let mut next = Instant::now() + period;
-            let mut count=0usize;let mut capture_cpu=0.0;
-            while !stopping.load(Ordering::Relaxed) {
-                std::thread::sleep(next.saturating_duration_since(Instant::now()));
-                let cpu_started=thread_cpu();
-                let result = client.capture(&stopping);
-                capture_cpu+=thread_cpu()-cpu_started;
-                match result {
-                    Ok(Some(frame)) => { count+=1; if matches!(tx.try_send(Ok(frame)), Err(mpsc::TrySendError::Disconnected(_))) { break; } }
-                    Ok(None) => {}
-                    Err(e) => { let _ = tx.try_send(Err(e)); break; }
-                }
-                next = (next + period).max(Instant::now());
-            }
-            log::info!("Wayland recording: capture-thread CPU/frame={:.3}ms, frames={} (startup and still reference excluded)",capture_cpu*1000.0/count.max(1)as f64,count);
-        })?;
-    let size = started
-        .recv()
-        .context("Wayland recorder stopped during startup")??;
-    Ok(Box::new(Source {
-        rx,
-        stop,
-        thread: Some(thread),
-        size,
-    }))
+
+/// Buffers per recording: one the compositor copies into while up to two
+/// earlier frames are read back.
+const BUFFERS: usize = 3;
+/// How long the compositor may take to offer buffers for a requested frame.
+const OFFER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Size and DRM fourcc of the frames the compositor copies.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct Spec {
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
-fn thread_cpu() -> f64 {
-    unsafe {
-        let mut ts: libc::timespec = std::mem::zeroed();
-        libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts);
-        ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9
+impl std::fmt::Display for Spec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}x{} {}",
+            self.width,
+            self.height,
+            fourcc_name(self.format)
+        )
     }
 }
-// Keep the GBM device alive until the final encoder reference to its BO dies.
-#[link(name = "gbm")]
-unsafe extern "C" {
-    fn gbm_create_device(fd: i32) -> *mut libc::c_void;
-    fn gbm_device_destroy(device: *mut libc::c_void);
-    fn gbm_bo_create_with_modifiers2(
-        device: *mut libc::c_void,
-        width: u32,
-        height: u32,
-        format: u32,
-        modifiers: *const u64,
-        count: u32,
-        flags: u32,
-    ) -> *mut libc::c_void;
-    fn gbm_bo_create(
-        device: *mut libc::c_void,
-        width: u32,
-        height: u32,
-        format: u32,
-        flags: u32,
-    ) -> *mut libc::c_void;
-    fn gbm_bo_destroy(bo: *mut libc::c_void);
-    fn gbm_bo_get_fd(bo: *mut libc::c_void) -> i32;
-    fn gbm_bo_get_stride(bo: *mut libc::c_void) -> u32;
-    fn gbm_bo_get_offset(bo: *mut libc::c_void, plane: i32) -> u32;
-    fn gbm_bo_get_modifier(bo: *mut libc::c_void) -> u64;
+
+/// What the compositor offered for one frame.
+#[derive(Clone, Copy, Debug)]
+enum Offer {
+    Dma(Spec),
+    Shm {
+        spec: Spec,
+        stride: u32,
+        format: wl_shm::Format,
+    },
 }
-struct Device {
-    ptr: *mut libc::c_void,
-    _file: File,
-    node: String,
+
+/// Where a buffer's pixels are read from.
+enum Store {
+    Vulkan { copy: gpu::VkCopy, bo: gpu::Bo },
+    Mapped { map: gpu::Mapped, bo: gpu::Bo },
+    Shm(Shm),
 }
-unsafe impl Send for Device {}
-unsafe impl Sync for Device {}
-impl Drop for Device {
-    fn drop(&mut self) {
-        unsafe {
-            gbm_device_destroy(self.ptr);
+
+/// The buffers frames are copied into, shared with the readback thread.
+pub(super) struct Buffers {
+    pub spec: Spec,
+    /// Byte order of the pixels `read` hands out.
+    pub format: PixelFormat,
+    dma: bool,
+    stores: Vec<Store>,
+}
+
+impl Buffers {
+    /// Calls `f` with the pixels of buffer `index` (rows `stride` bytes
+    /// apart) once the compositor's copy into it has finished. One caller
+    /// at a time per buffer.
+    pub fn read<R>(&self, index: usize, f: impl FnOnce(&[u8], usize) -> R) -> Result<R> {
+        match &self.stores[index] {
+            Store::Vulkan { copy, bo } => {
+                copy.read(bo.fd(), |pixels| f(pixels, self.spec.width as usize * 4))
+            }
+            Store::Mapped { map, bo } => {
+                map.read(bo.offset as usize, |pixels| f(pixels, bo.stride as usize))
+            }
+            Store::Shm(shm) => Ok(f(&shm.map, shm.stride as usize)),
         }
     }
 }
-struct Dma {
-    bo: *mut libc::c_void,
-    fd: OwnedFd,
-    size: usize,
-    stride: u32,
-    offset: u32,
-    modifier: u64,
-    _device: Arc<Device>,
-    busy: AtomicBool,
+
+/// A finished compositor copy.
+pub(super) struct Ready {
+    pub buffer: usize,
+    pub captured: Instant,
+    /// Rows arrived bottom-up.
+    pub inverted: bool,
 }
-// Allocations are immutable; only the compositor writes pixels, and the atomic
-// lease prevents it from writing while an AVFrame is held by an encoder.
-unsafe impl Send for Dma {}
-unsafe impl Sync for Dma {}
-impl Drop for Dma {
+
+/// The one screencopy request in flight.
+struct Pending {
+    frame: zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
+    buffer: Option<usize>,
+    requested: Instant,
+}
+
+/// Region screencopy of one output, one request at a time.
+pub(super) struct Capturer {
+    client: Client,
+    output: wl_output::WlOutput,
+    /// Output-relative logical rectangle.
+    region: IRect,
+    cursor: bool,
+    force_copy: bool,
+    /// The next copy must not wait for damage: just opened or resumed.
+    fresh: bool,
+    pending: Option<Pending>,
+    wl: Vec<wl_buffer::WlBuffer>,
+    busy: Vec<bool>,
+    buffers: Option<Arc<Buffers>>,
+}
+
+impl Drop for Capturer {
     fn drop(&mut self) {
-        unsafe {
-            gbm_bo_destroy(self.bo);
+        if let Some(pending) = self.pending.take() {
+            pending.frame.destroy();
         }
-    }
-}
-struct Slot {
-    allocation: Arc<Dma>,
-    wl: wl_buffer::WlBuffer,
-}
-impl Drop for Slot {
-    fn drop(&mut self) {
-        self.wl.destroy();
-    }
-}
-struct Lease {
-    descriptor: ffi::AVDRMFrameDescriptor,
-    allocation: Arc<Dma>,
-    return_to_pool: bool,
-}
-unsafe extern "C" fn release(opaque: *mut libc::c_void, _: *mut u8) {
-    let lease = unsafe { Box::from_raw(opaque.cast::<Lease>()) };
-    if lease.return_to_pool {
-        lease.allocation.busy.store(false, Ordering::Release);
-    }
-}
-struct Hw(*mut ffi::AVBufferRef);
-impl Drop for Hw {
-    fn drop(&mut self) {
-        unsafe {
-            ffi::av_buffer_unref(&mut self.0);
+        for wl in self.wl.drain(..) {
+            wl.destroy();
         }
+        let _ = self.client.conn.flush();
     }
 }
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct Spec {
-    format: u32,
-    width: u32,
-    height: u32,
+
+impl Capturer {
+    pub fn connect(target: &RecordTarget, cursor: bool, force_copy: bool) -> Result<Capturer> {
+        ensure!(
+            target.region.w > 0 && target.region.h > 0,
+            "empty recording region"
+        );
+        let client = Client::connect()?;
+        let output = client
+            .state
+            .outputs
+            .iter()
+            .find(|o| o.name == target.output)
+            .context("recording output disappeared")?;
+        ensure!(
+            output.transform == 0,
+            "recording rotated/flipped Wayland outputs is not supported"
+        );
+        let wl = output.wl.clone().context("output removed")?;
+        let (r, o) = (target.region, target.output_rect);
+        Ok(Capturer {
+            client,
+            output: wl,
+            region: IRect::new(r.x - o.x, r.y - o.y, r.w, r.h),
+            cursor,
+            force_copy,
+            fresh: true,
+            pending: None,
+            wl: Vec::new(),
+            busy: Vec::new(),
+            buffers: None,
+        })
+    }
+
+    /// The buffers, once the first frame's offer allocated them.
+    pub fn buffers(&self) -> Option<&Arc<Buffers>> {
+        self.buffers.as_ref()
+    }
+
+    /// No request is in flight and a buffer is free for the next one.
+    pub fn can_request(&self) -> bool {
+        self.pending.is_none() && (self.buffers.is_none() || self.busy.contains(&false))
+    }
+
+    /// Asks the compositor for the next frame (see [`progress`](Self::progress)).
+    pub fn request(&mut self) {
+        debug_assert!(self.can_request());
+        let s = &mut self.client.state;
+        s.frame += 1;
+        s.dma_offer = None;
+        s.shm_offer = None;
+        s.offers_done = false;
+        s.ready = false;
+        s.failed = false;
+        s.invert = false;
+        let r = self.region;
+        let frame = s.manager.capture_output_region(
+            self.cursor as i32,
+            &self.output,
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            &self.client.queue.handle(),
+            s.frame,
+        );
+        self.pending = Some(Pending {
+            frame,
+            buffer: None,
+            requested: Instant::now(),
+        });
+    }
+
+    /// Drops the request in flight, if any; the next copy will not wait
+    /// for damage, so resuming starts with the current picture.
+    pub fn pause(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            pending.frame.destroy();
+            if let Some(buffer) = pending.buffer {
+                self.busy[buffer] = false;
+            }
+        }
+        self.fresh = true;
+    }
+
+    /// `buffer` was read back and may be copied into again.
+    pub fn release(&mut self, buffer: usize) {
+        self.busy[buffer] = false;
+    }
+
+    /// Waits up to `timeout` for Wayland events (and dispatches them) or for
+    /// one of `others` to become readable; reports which of `others` are.
+    pub fn wait<const N: usize>(
+        &mut self,
+        others: [BorrowedFd<'_>; N],
+        timeout: Duration,
+    ) -> Result<[bool; N]> {
+        self.client.wait(others, timeout)
+    }
+
+    /// Advances the request in flight after events were dispatched: picks
+    /// a buffer once the compositor offered its formats, and returns the
+    /// frame once it is copied. The buffer stays busy until
+    /// [`release`](Self::release).
+    pub fn progress(&mut self) -> Result<Option<Ready>> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(None);
+        };
+        let s = &self.client.state;
+        if s.failed {
+            pending.frame.destroy();
+            if let Some(buffer) = pending.buffer {
+                self.busy[buffer] = false;
+            }
+            bail!("the compositor failed to copy the recorded region");
+        }
+        if s.ready {
+            pending.frame.destroy();
+            let buffer = pending.buffer.context("screencopy ready before copy")?;
+            return Ok(Some(Ready {
+                buffer,
+                captured: s.captured,
+                inverted: s.invert,
+            }));
+        }
+        if pending.buffer.is_some() || !s.offers_done {
+            if pending.buffer.is_none() && pending.requested.elapsed() > OFFER_TIMEOUT {
+                pending.frame.destroy();
+                bail!("the compositor offered no screencopy buffer");
+            }
+            self.pending = Some(pending);
+            return Ok(None);
+        }
+        let offer = match (s.dma_offer, s.shm_offer) {
+            (Some(spec), _) if s.dmabuf.is_some() => Offer::Dma(spec),
+            (_, Some(shm)) => shm,
+            _ => {
+                pending.frame.destroy();
+                bail!("the compositor offered no supported recording buffer");
+            }
+        };
+        if let Err(e) = self.allocate(offer) {
+            pending.frame.destroy();
+            return Err(e);
+        }
+        let buffer = self
+            .busy
+            .iter()
+            .position(|busy| !busy)
+            .context("no free screencopy buffer")?;
+        self.busy[buffer] = true;
+        // A damage-tracking copy waits for the next change, which on a
+        // static screen may never come.
+        if self.fresh || self.force_copy {
+            pending.frame.copy(&self.wl[buffer]);
+        } else {
+            pending.frame.copy_with_damage(&self.wl[buffer]);
+        }
+        self.fresh = false;
+        self.pending = Some(Pending {
+            buffer: Some(buffer),
+            ..pending
+        });
+        Ok(None)
+    }
+
+    /// Creates the buffers for `offer` on the first frame. Later frames
+    /// must match it: the size and format of a recording are fixed.
+    fn allocate(&mut self, offer: Offer) -> Result<()> {
+        let (spec, dma) = match offer {
+            Offer::Dma(spec) => (spec, true),
+            Offer::Shm { spec, .. } => (spec, false),
+        };
+        if let Some(buffers) = &self.buffers {
+            ensure!(
+                buffers.spec == spec && buffers.dma == dma,
+                "the recorded output changed from {} to {} while recording",
+                buffers.spec,
+                spec
+            );
+            return Ok(());
+        }
+        let format = gpu::pixel_format(spec.format)
+            .with_context(|| format!("recording {spec} screencopies is not supported"))?;
+        let qh = self.client.queue.handle();
+        let s = &self.client.state;
+        let mut stores = Vec::with_capacity(BUFFERS);
+        let mut wl = Vec::with_capacity(BUFFERS);
+        // Partially created wl_buffers are destroyed if a later step fails.
+        let result = (|| -> Result<()> {
+            match offer {
+                Offer::Dma(spec) => {
+                    let dmabuf = s.dmabuf.as_ref().context("missing linux-dmabuf")?;
+                    let gbm = gpu::Gbm::open(s.node_device)?;
+                    let offered: Vec<u64> = s
+                        .modifiers
+                        .iter()
+                        .filter(|&&(f, m)| f == spec.format && m != gpu::MOD_INVALID)
+                        .map(|&(_, m)| m)
+                        .collect();
+                    let vulkan = gpu::Vulkan::new(gbm.rdev).and_then(|vk| {
+                        let modifiers = vk.importable(spec.format, &offered);
+                        ensure!(
+                            !modifiers.is_empty(),
+                            "Vulkan on {} cannot import any {} modifier the compositor offers ({offered:#x?})",
+                            vk.description,
+                            fourcc_name(spec.format)
+                        );
+                        Ok((vk, modifiers))
+                    });
+                    match vulkan {
+                        Ok((vk, modifiers)) => {
+                            for _ in 0..BUFFERS {
+                                let bo =
+                                    gbm.allocate(spec.width, spec.height, spec.format, &modifiers)?;
+                                let copy = gpu::VkCopy::new(
+                                    &vk,
+                                    &bo,
+                                    spec.width,
+                                    spec.height,
+                                    spec.format,
+                                )?;
+                                wl.push(dmabuf_buffer(dmabuf, &bo, spec, &qh));
+                                stores.push(Store::Vulkan { copy, bo });
+                            }
+                            if let Some(Store::Vulkan { bo, .. }) = stores.first() {
+                                log::info!(
+                                    "Wayland recording: {spec} DMA-BUFs on {}, modifier {:#x}, Vulkan readback on {}",
+                                    gbm.node,
+                                    bo.modifier,
+                                    vk.description
+                                );
+                            }
+                        }
+                        Err(e) if offered.contains(&gpu::MOD_LINEAR) => {
+                            log::warn!(
+                                "Wayland recording: no Vulkan readback ({e:#}); reading linear DMA-BUFs with the CPU instead, which is slow on discrete GPUs"
+                            );
+                            for _ in 0..BUFFERS {
+                                let bo = gbm.allocate(spec.width, spec.height, spec.format, &[])?;
+                                let map = gpu::Mapped::new(&bo)?;
+                                wl.push(dmabuf_buffer(dmabuf, &bo, spec, &qh));
+                                stores.push(Store::Mapped { map, bo });
+                            }
+                        }
+                        Err(e) => {
+                            return Err(e.context(
+                                "recording needs Vulkan to read the compositor's DMA-BUFs",
+                            ));
+                        }
+                    }
+                }
+                Offer::Shm {
+                    spec,
+                    stride,
+                    format,
+                } => {
+                    log::warn!(
+                        "Wayland recording: the compositor offers no DMA-BUF screencopy; \
+                         shared-memory copies make it read every frame back itself, which can make games stutter"
+                    );
+                    ensure!(
+                        stride >= spec.width * 4,
+                        "invalid screencopy stride {stride}"
+                    );
+                    for _ in 0..BUFFERS {
+                        let (buffer, shm) =
+                            allocate_shm(&s.shm, spec.width, spec.height, stride, format, &qh)?;
+                        wl.push(buffer);
+                        stores.push(Store::Shm(shm));
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            for buffer in wl {
+                buffer.destroy();
+            }
+            return Err(e);
+        }
+        self.busy = vec![false; wl.len()];
+        self.wl = wl;
+        self.buffers = Some(Arc::new(Buffers {
+            spec,
+            format,
+            dma,
+            stores,
+        }));
+        Ok(())
+    }
 }
+
+fn dmabuf_buffer(
+    dmabuf: &zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+    bo: &gpu::Bo,
+    spec: Spec,
+    qh: &QueueHandle<State>,
+) -> wl_buffer::WlBuffer {
+    let params = dmabuf.create_params(qh, ());
+    params.add(
+        bo.fd(),
+        0,
+        bo.offset,
+        bo.stride,
+        (bo.modifier >> 32) as u32,
+        bo.modifier as u32,
+    );
+    let buffer = params.create_immed(
+        spec.width as i32,
+        spec.height as i32,
+        spec.format,
+        zwp_linux_buffer_params_v1::Flags::empty(),
+        qh,
+        (),
+    );
+    params.destroy();
+    buffer
+}
+
+/// A shared-memory buffer (its `wl_buffer` is kept by whoever attaches it).
 struct Shm {
-    wl: wl_buffer::WlBuffer,
     map: MmapMut,
     _file: File,
     stride: u32,
 }
-impl Drop for Shm {
-    fn drop(&mut self) {
-        self.wl.destroy();
-    }
-}
+
 #[derive(Default)]
 struct Output {
     wl: Option<wl_output::WlOutput>,
@@ -271,8 +519,11 @@ struct State {
     manager: zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
     dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     shm: wl_shm::WlShm,
+    /// Serial of the screencopy frame the fields below describe; events of
+    /// earlier (destroyed) frames are ignored.
+    frame: u64,
     dma_offer: Option<Spec>,
-    shm_offer: Option<(Spec, u32)>,
+    shm_offer: Option<Offer>,
     offers_done: bool,
     ready: bool,
     failed: bool,
@@ -287,16 +538,6 @@ struct Client {
     conn: Connection,
     queue: EventQueue<State>,
     state: State,
-    output: usize,
-    target: Option<RecordTarget>,
-    cursor: bool,
-    force_copy: bool,
-    device: Option<Arc<Device>>,
-    slots: Vec<Slot>,
-    spec: Option<Spec>,
-    hw: Option<Hw>,
-    vulkan: Option<Hw>,
-    shm: Option<Shm>,
 }
 impl Client {
     fn connect() -> Result<Self> {
@@ -317,6 +558,7 @@ impl Client {
             manager,
             dmabuf,
             shm,
+            frame: 0,
             dma_offer: None,
             shm_offer: None,
             offers_done: false,
@@ -355,577 +597,55 @@ impl Client {
         });
         queue.roundtrip(&mut state)?;
         queue.roundtrip(&mut state)?;
-        Ok(Self {
-            conn,
-            queue,
-            state,
-            output: 0,
-            target: None,
-            cursor: false,
-            force_copy: false,
-            device: None,
-            slots: Vec::new(),
-            spec: None,
-            hw: None,
-            vulkan: None,
-            shm: None,
-        })
+        Ok(Self { conn, queue, state })
     }
     fn dispatch(&mut self, timeout: Duration) -> Result<()> {
+        self.wait([], timeout).map(|_| ())
+    }
+    fn wait<const N: usize>(
+        &mut self,
+        others: [BorrowedFd<'_>; N],
+        timeout: Duration,
+    ) -> Result<[bool; N]> {
         use rustix::event::{PollFd, PollFlags, Timespec, poll};
         self.queue.flush()?;
-        if self.queue.dispatch_pending(&mut self.state)? > 0 {
-            return Ok(());
+        // Events already queued are handled now; then only a quick look at
+        // the other descriptors.
+        let dispatched = self.queue.dispatch_pending(&mut self.state)? > 0;
+        let timeout = Timespec::try_from(if dispatched { Duration::ZERO } else { timeout })?;
+        let mut ready = [false; N];
+        let guard = self.conn.prepare_read();
+        let wayland = guard.as_ref().map(|g| g.connection_fd());
+        let mut fds: Vec<PollFd<'_>> = wayland
+            .iter()
+            .chain(others.iter())
+            .map(|fd| PollFd::new(fd, PollFlags::IN))
+            .collect();
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(e) => return Err(e.into()),
         }
-        if let Some(guard) = self.conn.prepare_read() {
-            let fd = guard.connection_fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-            if poll(&mut fds, Some(&Timespec::try_from(timeout)?))? > 0 {
-                guard.read()?;
+        let events: Vec<bool> = fds.iter().map(|fd| !fd.revents().is_empty()).collect();
+        drop(fds);
+        let offset = usize::from(wayland.is_some());
+        for (i, ready) in ready.iter_mut().enumerate() {
+            *ready = events[offset + i];
+        }
+        if let Some(guard) = guard
+            && events[0]
+        {
+            match guard.read() {
+                Ok(_) => {}
+                Err(wayland_client::backend::WaylandError::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.into()),
             }
         }
         self.queue.dispatch_pending(&mut self.state)?;
-        Ok(())
-    }
-    fn capture(&mut self, stop: &AtomicBool) -> Result<Option<Frame>> {
-        self.state.dma_offer = None;
-        self.state.shm_offer = None;
-        self.state.offers_done = false;
-        self.state.ready = false;
-        self.state.failed = false;
-        self.state.invert = false;
-        let target = self.target.as_ref().context("missing recording target")?;
-        let r = target.region;
-        let o = target.output_rect;
-        let proxy = self.state.manager.capture_output_region(
-            self.cursor as i32,
-            self.state.outputs[self.output]
-                .wl
-                .as_ref()
-                .context("output removed")?,
-            r.x - o.x,
-            r.y - o.y,
-            r.w,
-            r.h,
-            &self.queue.handle(),
-            (),
-        );
-        let result = self.capture_inner(&proxy, stop);
-        proxy.destroy();
-        result
-    }
-    fn capture_inner(
-        &mut self,
-        proxy: &zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
-        stop: &AtomicBool,
-    ) -> Result<Option<Frame>> {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !self.state.offers_done && !self.state.failed {
-            if stop.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
-            ensure!(
-                Instant::now() < deadline,
-                "screencopy buffer offer timed out"
-            );
-            self.dispatch(Duration::from_millis(50))?;
-        }
-        ensure!(!self.state.failed, "compositor rejected recording region");
-        let mut selected = None;
-        if let Some(spec) = self.state.dma_offer {
-            ensure!(
-                self.state.dmabuf.is_some(),
-                "DMA-BUF offered without linux-dmabuf global"
-            );
-            if self.spec != Some(spec) {
-                self.slots.clear();
-                self.hw = None;
-                self.vulkan = None;
-                self.spec = Some(spec);
-            }
-            if self.device.is_none() {
-                self.device = Some(Arc::new(open_device(self.state.node_device)?));
-            }
-            if self.hw.is_none() {
-                self.hw = Some(make_hw(self.device.as_ref().unwrap(), spec)?);
-            }
-            loop {
-                if let Some(i) = self.slots.iter().position(|s| {
-                    s.allocation
-                        .busy
-                        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                        .is_ok()
-                }) {
-                    selected = Some(i);
-                    break;
-                }
-                if self.slots.len() < 4 {
-                    let slot = self.allocate(spec)?;
-                    slot.allocation.busy.store(true, Ordering::Release);
-                    self.slots.push(slot);
-                    selected = Some(self.slots.len() - 1);
-                    break;
-                }
-                if stop.load(Ordering::Relaxed) {
-                    return Ok(None);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            let buffer = &self.slots[selected.unwrap()].wl;
-            if self.force_copy {
-                proxy.copy(buffer);
-            } else {
-                proxy.copy_with_damage(buffer);
-            }
-        } else {
-            let (spec, stride) = self
-                .state
-                .shm_offer
-                .context("compositor offered no supported recording buffer")?;
-            ensure!(
-                matches!(spec.format, 0 | 1),
-                "SHM recording requires ARGB8888/XRGB8888"
-            );
-            if self.spec != Some(spec) || self.shm.is_none() {
-                log::warn!(
-                    "Wayland recording: compositor offers no screencopy DMA-BUF; SHM readback can cause game judder"
-                );
-                self.spec = Some(spec);
-                self.shm = Some(allocate_shm(
-                    &self.state.shm,
-                    spec.width,
-                    spec.height,
-                    stride,
-                    if spec.format == 1 {
-                        wl_shm::Format::Xrgb8888
-                    } else {
-                        wl_shm::Format::Argb8888
-                    },
-                    &self.queue.handle(),
-                )?);
-            }
-            let buffer = &self.shm.as_ref().unwrap().wl;
-            if self.force_copy {
-                proxy.copy(buffer);
-            } else {
-                proxy.copy_with_damage(buffer);
-            }
-        }
-        // copy_with_damage may deliberately wait forever on a static desktop;
-        // bounded dispatch keeps dropping the source responsive in that case.
-        while !self.state.ready && !self.state.failed {
-            if stop.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
-            self.dispatch(Duration::from_millis(50))?;
-        }
-        if self.state.failed || self.state.invert {
-            if let Some(i) = selected {
-                self.slots[i]
-                    .allocation
-                    .busy
-                    .store(false, Ordering::Release);
-            }
-            ensure!(
-                !self.state.failed,
-                "compositor failed DMA-BUF screencopy (not falling back to SHM)"
-            );
-            bail!("inverted Wayland recording buffers are not supported");
-        }
-        let spec = self.spec.unwrap();
-        if let Some(i) = selected {
-            let allocation = self.slots[i].allocation.clone();
-            let tiled = allocation.modifier != 0;
-            let frame = wrap(
-                allocation.clone(),
-                spec,
-                self.hw.as_ref().unwrap(),
-                self.state.captured,
-                !tiled,
-            )?;
-            if tiled {
-                if self.vulkan.is_none() {
-                    self.vulkan = Some(make_vulkan(self.hw.as_ref().unwrap())?);
-                }
-                let result = detile(frame, self.vulkan.as_ref().unwrap());
-                // FFmpeg's Vulkan execution pools retain completed mapping
-                // references until their next submission. Waiting for those
-                // callbacks deadlocks a bounded BO pool. CPU transfer completion
-                // already proves the GPU is done reading this tiled allocation.
-                if result.is_ok() {
-                    allocation.busy.store(false, Ordering::Release);
-                }
-                return result.map(Some);
-            }
-            return Ok(Some(frame));
-        }
-        let shm = self.shm.as_ref().unwrap();
-        Ok(Some(Frame::from_bgra(
-            spec.width,
-            spec.height,
-            shm.stride as usize,
-            &shm.map,
-            true,
-            self.state.captured,
-        )))
-    }
-    fn allocate(&mut self, spec: Spec) -> Result<Slot> {
-        let device = self.device.as_ref().unwrap().clone();
-        let modifiers: Vec<u64> = self
-            .state
-            .modifiers
-            .iter()
-            .filter(|(f, m)| *f == spec.format && *m != u64::MAX)
-            .map(|(_, m)| *m)
-            .collect();
-        ensure!(
-            !modifiers.is_empty(),
-            "no compositor DMA-BUF modifiers for fourcc {:#x}",
-            spec.format
-        );
-        // A renderable linear allocation permits direct DRM download. NVIDIA
-        // rejects it, so use an advertised tiled modifier and detile off the
-        // compositor thread through Vulkan instead of falling back to SHM.
-        let mut bo = if modifiers.contains(&0) {
-            unsafe {
-                gbm_bo_create(
-                    device.ptr,
-                    spec.width,
-                    spec.height,
-                    spec.format,
-                    (1 << 4) | (1 << 2),
-                )
-            }
-        } else {
-            std::ptr::null_mut()
-        };
-        if bo.is_null() {
-            if self.vulkan.is_none() {
-                self.vulkan = Some(make_vulkan(self.hw.as_ref().unwrap())?);
-            }
-            let importable = vulkan_modifiers(self.vulkan.as_ref().unwrap(), &modifiers)?;
-            ensure!(
-                !importable.is_empty(),
-                "no compositor/GBM DMA-BUF modifier can be imported by Vulkan"
-            );
-            bo = unsafe {
-                gbm_bo_create_with_modifiers2(
-                    device.ptr,
-                    spec.width,
-                    spec.height,
-                    spec.format,
-                    importable.as_ptr(),
-                    importable.len() as u32,
-                    1 << 2,
-                )
-            };
-        }
-        ensure!(
-            !bo.is_null(),
-            "GBM cannot allocate compositor screencopy format {:#x}: {}",
-            spec.format,
-            std::io::Error::last_os_error()
-        );
-        let raw = unsafe { gbm_bo_get_fd(bo) };
-        if raw < 0 {
-            unsafe {
-                gbm_bo_destroy(bo);
-            }
-            bail!("exporting GBM DMA-BUF failed");
-        }
-        let size = unsafe { libc::lseek(raw, 0, libc::SEEK_END) };
-        if size <= 0 {
-            unsafe {
-                libc::close(raw);
-                gbm_bo_destroy(bo);
-            }
-            bail!(
-                "querying DMA-BUF allocation size: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-        let allocation = Arc::new(Dma {
-            bo,
-            fd: unsafe { OwnedFd::from_raw_fd(raw) },
-            size: size as usize,
-            stride: unsafe { gbm_bo_get_stride(bo) },
-            offset: unsafe { gbm_bo_get_offset(bo, 0) },
-            modifier: unsafe { gbm_bo_get_modifier(bo) },
-            _device: device.clone(),
-            busy: AtomicBool::new(false),
-        });
-        ensure!(
-            modifiers.contains(&allocation.modifier),
-            "GBM selected an unadvertised modifier"
-        );
-        if self.slots.is_empty() {
-            log::info!(
-                "Wayland recording: DMA-BUF on {}, modifier={:#x}, {:?}",
-                device.node,
-                allocation.modifier,
-                spec
-            );
-        }
-        let params = self
-            .state
-            .dmabuf
-            .as_ref()
-            .unwrap()
-            .create_params(&self.queue.handle(), ());
-        params.add(
-            allocation.fd.as_fd(),
-            0,
-            allocation.offset,
-            allocation.stride,
-            (allocation.modifier >> 32) as u32,
-            allocation.modifier as u32,
-        );
-        let wl = params.create_immed(
-            spec.width as i32,
-            spec.height as i32,
-            spec.format,
-            zwp_linux_buffer_params_v1::Flags::empty(),
-            &self.queue.handle(),
-            (),
-        );
-        params.destroy();
-        Ok(Slot { allocation, wl })
+        Ok(ready)
     }
 }
-fn open_device(main: Option<u64>) -> Result<Device> {
-    // Feedback's main device can be a primary node; GBM and FFmpeg need its
-    // matching render node rather than assuming GPU enumeration is stable.
-    let mut node = "/dev/dri/renderD128".to_string();
-    if let Some(dev) = main
-        && let Ok(entries) = std::fs::read_dir(format!(
-            "/sys/dev/char/{}:{}/device/drm",
-            libc::major(dev),
-            libc::minor(dev)
-        ))
-    {
-        for e in entries.flatten() {
-            let name = e.file_name();
-            if name.as_encoded_bytes().starts_with(b"renderD") {
-                node = format!("/dev/dri/{}", name.to_string_lossy());
-                break;
-            }
-        }
-    }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&node)
-        .with_context(|| format!("opening compositor render node {node}"))?;
-    let ptr = unsafe { gbm_create_device(file.as_raw_fd()) };
-    ensure!(!ptr.is_null(), "creating GBM device on {node}");
-    Ok(Device {
-        ptr,
-        _file: file,
-        node,
-    })
-}
-fn make_hw(device: &Device, spec: Spec) -> Result<Hw> {
-    let sw = match spec.format {
-        0x34325258 => ffi::AVPixelFormat::AV_PIX_FMT_BGR0,
-        0x34325241 => ffi::AVPixelFormat::AV_PIX_FMT_BGRA,
-        0x34324258 => ffi::AVPixelFormat::AV_PIX_FMT_RGB0,
-        0x34324241 => ffi::AVPixelFormat::AV_PIX_FMT_RGBA,
-        _ => bail!("unsupported recording DRM fourcc {:#x}", spec.format),
-    };
-    unsafe {
-        let node = std::ffi::CString::new(device.node.as_str())?;
-        let mut dev = std::ptr::null_mut();
-        let rc = ffi::av_hwdevice_ctx_create(
-            &mut dev,
-            ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_DRM,
-            node.as_ptr(),
-            std::ptr::null_mut(),
-            0,
-        );
-        ensure!(rc >= 0, "FFmpeg DRM device: {}", ffmpeg::Error::from(rc));
-        let dev = Hw(dev);
-        let frames = ffi::av_hwframe_ctx_alloc(dev.0);
-        ensure!(!frames.is_null(), "allocating DRM frames context");
-        let frames = Hw(frames);
-        let ctx = &mut *((*frames.0).data.cast::<ffi::AVHWFramesContext>());
-        ctx.format = ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME;
-        ctx.sw_format = sw;
-        ctx.width = spec.width as i32;
-        ctx.height = spec.height as i32;
-        let rc = ffi::av_hwframe_ctx_init(frames.0);
-        ensure!(
-            rc >= 0,
-            "initializing DRM frames: {}",
-            ffmpeg::Error::from(rc)
-        );
-        Ok(frames)
-    }
-}
-fn make_vulkan(drm: &Hw) -> Result<Hw> {
-    unsafe {
-        let source = &*((*drm.0).data.cast::<ffi::AVHWFramesContext>());
-        let mut device = std::ptr::null_mut();
-        let rc = ffi::av_hwdevice_ctx_create_derived(
-            &mut device,
-            ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
-            source.device_ref,
-            0,
-        );
-        ensure!(
-            rc >= 0,
-            "deriving Vulkan from DRM for DMA-BUF detile: {}",
-            ffmpeg::Error::from(rc)
-        );
-        let device = Hw(device);
-        let frames = ffi::av_hwframe_ctx_alloc(device.0);
-        ensure!(!frames.is_null(), "allocating Vulkan frames context");
-        let frames = Hw(frames);
-        let ctx = &mut *((*frames.0).data.cast::<ffi::AVHWFramesContext>());
-        ctx.format = ffi::AVPixelFormat::AV_PIX_FMT_VULKAN;
-        ctx.sw_format = source.sw_format;
-        ctx.width = source.width;
-        ctx.height = source.height;
-        let rc = ffi::av_hwframe_ctx_init(frames.0);
-        ensure!(
-            rc >= 0,
-            "initializing Vulkan detile frames: {}",
-            ffmpeg::Error::from(rc)
-        );
-        log::info!(
-            "Wayland recording: Vulkan DMA-BUF detile/download (no compositor SHM readback)"
-        );
-        Ok(frames)
-    }
-}
-fn detile(frame: Frame, vulkan: &Hw) -> Result<Frame> {
-    unsafe {
-        let mut mapped = ffmpeg::frame::Video::empty();
-        (*mapped.as_mut_ptr()).format = ffi::AVPixelFormat::AV_PIX_FMT_VULKAN as i32;
-        (*mapped.as_mut_ptr()).hw_frames_ctx = ffi::av_buffer_ref(vulkan.0);
-        ensure!(
-            !(*mapped.as_ptr()).hw_frames_ctx.is_null(),
-            "referencing Vulkan frames context"
-        );
-        let rc = ffi::av_hwframe_map(
-            mapped.as_mut_ptr(),
-            frame.av().as_ptr(),
-            ffi::AV_HWFRAME_MAP_READ as i32,
-        );
-        ensure!(
-            rc >= 0,
-            "importing tiled DRM frame into Vulkan: {} (no SHM fallback)",
-            ffmpeg::Error::from(rc)
-        );
-        let mut downloaded = ffmpeg::frame::Video::empty();
-        let rc = ffi::av_hwframe_transfer_data(downloaded.as_mut_ptr(), mapped.as_ptr(), 0);
-        ensure!(
-            rc >= 0,
-            "downloading detiled Vulkan frame: {}",
-            ffmpeg::Error::from(rc)
-        );
-        if downloaded.format() == ffmpeg::format::Pixel::BGRA {
-            (*downloaded.as_mut_ptr()).format = ffi::AVPixelFormat::AV_PIX_FMT_BGR0 as i32;
-        }
-        Ok(Frame::from_av(downloaded, frame.captured))
-    }
-}
-fn vulkan_modifiers(frames: &Hw, modifiers: &[u64]) -> Result<Vec<u64>> {
-    use ash::vk::{self, Handle};
-    unsafe {
-        let fc = &*((*frames.0).data.cast::<ffi::AVHWFramesContext>());
-        let device = &*((*fc.device_ctx).hwctx.cast::<ffi::AVVulkanDeviceContext>());
-        let entry = ash::Entry::load().context("loading Vulkan modifier queries")?;
-        let instance = ash::Instance::load(
-            entry.static_fn(),
-            vk::Instance::from_raw(device.inst as u64),
-        );
-        let physical = vk::PhysicalDevice::from_raw(device.phys_dev as u64);
-        let format = vk::Format::from_raw(*ffi::av_vkfmt_from_pixfmt(fc.sw_format));
-        let mut result = Vec::new();
-        for &modifier in modifiers {
-            let mut drm = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
-                .drm_format_modifier(modifier)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-            let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
-                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-            let info = vk::PhysicalDeviceImageFormatInfo2::default()
-                .format(format)
-                .ty(vk::ImageType::TYPE_2D)
-                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-                .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
-                .push_next(&mut external)
-                .push_next(&mut drm);
-            let mut external_props = vk::ExternalImageFormatProperties::default();
-            let mut props = vk::ImageFormatProperties2::default().push_next(&mut external_props);
-            if instance
-                .get_physical_device_image_format_properties2(physical, &info, &mut props)
-                .is_ok()
-                && external_props
-                    .external_memory_properties
-                    .external_memory_features
-                    .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
-            {
-                result.push(modifier);
-            }
-        }
-        Ok(result)
-    }
-}
-fn wrap(
-    allocation: Arc<Dma>,
-    spec: Spec,
-    hw: &Hw,
-    captured: Instant,
-    return_to_pool: bool,
-) -> Result<Frame> {
-    unsafe {
-        let mut descriptor: ffi::AVDRMFrameDescriptor = std::mem::zeroed();
-        descriptor.nb_objects = 1;
-        descriptor.objects[0] = ffi::AVDRMObjectDescriptor {
-            fd: allocation.fd.as_raw_fd(),
-            size: allocation.size,
-            format_modifier: allocation.modifier,
-        };
-        descriptor.nb_layers = 1;
-        descriptor.layers[0].format = spec.format;
-        descriptor.layers[0].nb_planes = 1;
-        descriptor.layers[0].planes[0] = ffi::AVDRMPlaneDescriptor {
-            object_index: 0,
-            offset: allocation.offset as isize,
-            pitch: allocation.stride as isize,
-        };
-        let lease = Box::into_raw(Box::new(Lease {
-            descriptor,
-            allocation,
-            return_to_pool,
-        }));
-        let data = std::ptr::addr_of_mut!((*lease).descriptor).cast::<u8>();
-        let buffer = ffi::av_buffer_create(
-            data,
-            std::mem::size_of::<ffi::AVDRMFrameDescriptor>(),
-            Some(release),
-            lease.cast(),
-            0,
-        );
-        if buffer.is_null() {
-            release(lease.cast(), data);
-            bail!("allocating DRM AVBufferRef");
-        }
-        let mut av = ffmpeg::frame::Video::empty();
-        let raw = av.as_mut_ptr();
-        (*raw).format = ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32;
-        (*raw).width = spec.width as i32;
-        (*raw).height = spec.height as i32;
-        (*raw).data[0] = data;
-        (*raw).buf[0] = buffer;
-        (*raw).hw_frames_ctx = ffi::av_buffer_ref(hw.0);
-        ensure!(
-            !(*raw).hw_frames_ctx.is_null(),
-            "referencing DRM frames context"
-        );
-        Ok(Frame::from_av(av, captured))
-    }
-}
+
 fn allocate_shm(
     shm: &wl_shm::WlShm,
     width: u32,
@@ -933,8 +653,8 @@ fn allocate_shm(
     stride: u32,
     format: wl_shm::Format,
     qh: &QueueHandle<State>,
-) -> Result<Shm> {
-    let fd = rustix::fs::memfd_create("quikscope-outline", rustix::fs::MemfdFlags::CLOEXEC)?;
+) -> Result<(wl_buffer::WlBuffer, Shm)> {
+    let fd = rustix::fs::memfd_create("quikscope-screencopy", rustix::fs::MemfdFlags::CLOEXEC)?;
     let len = u64::from(stride) * u64::from(height);
     rustix::fs::ftruncate(&fd, len)?;
     let file = File::from(fd);
@@ -950,12 +670,24 @@ fn allocate_shm(
         (),
     );
     pool.destroy();
-    Ok(Shm {
+    Ok((
         wl,
-        map,
-        _file: file,
-        stride,
-    })
+        Shm {
+            map,
+            _file: file,
+            stride,
+        },
+    ))
+}
+
+/// The DRM fourcc of a wl_shm format (which uses its own 0 and 1 for the
+/// two mandatory formats and fourccs for the rest).
+fn shm_fourcc(format: wl_shm::Format) -> u32 {
+    match format {
+        wl_shm::Format::Argb8888 => gpu::ARGB8888,
+        wl_shm::Format::Xrgb8888 => gpu::XRGB8888,
+        other => other as u32,
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
@@ -1091,16 +823,19 @@ impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, ()> for State {
         }
     }
 }
-impl Dispatch<zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1, ()> for State {
+impl Dispatch<zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1, u64> for State {
     fn event(
         s: &mut Self,
         _: &zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
         e: zwlr_screencopy_frame_v1::Event,
-        _: &(),
+        frame: &u64,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         use zwlr_screencopy_frame_v1::Event;
+        if *frame != s.frame {
+            return;
+        }
         match e {
             Event::LinuxDmabuf {
                 format,
@@ -1119,14 +854,15 @@ impl Dispatch<zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1, ()> for State {
                 height,
                 stride,
             } => {
-                s.shm_offer = Some((
-                    Spec {
-                        format: format as u32,
+                s.shm_offer = Some(Offer::Shm {
+                    spec: Spec {
+                        format: shm_fourcc(format),
                         width,
                         height,
                     },
                     stride,
-                ))
+                    format,
+                })
             }
             Event::BufferDone => s.offers_done = true,
             Event::Flags {
@@ -1244,7 +980,7 @@ fn outline(region: IRect) -> Result<Box<dyn Send>> {
                         zwlr_layer_surface_v1::KeyboardInteractivity::None,
                     );
                     layer.set_size(r.w as u32, r.h as u32);
-                    let mut b = allocate_shm(
+                    let (wl, mut b) = allocate_shm(
                         &c.state.shm,
                         r.w as u32,
                         r.h as u32,
@@ -1264,7 +1000,7 @@ fn outline(region: IRect) -> Result<Box<dyn Send>> {
                     surface.commit();
                     surfaces.push(surface);
                     layers.push(layer);
-                    buffers.push(b);
+                    buffers.push((wl, b));
                 }
                 c.state.configured = vec![false; surfaces.len()];
                 let deadline = Instant::now() + Duration::from_secs(3);
@@ -1272,8 +1008,8 @@ fn outline(region: IRect) -> Result<Box<dyn Send>> {
                     ensure!(Instant::now() < deadline, "outline configure timed out");
                     c.dispatch(Duration::from_millis(50))?;
                 }
-                for (surface, buffer) in surfaces.iter().zip(&buffers) {
-                    surface.attach(Some(&buffer.wl), 0, 0);
+                for (surface, (wl, _)) in surfaces.iter().zip(&buffers) {
+                    surface.attach(Some(wl), 0, 0);
                     surface.damage(0, 0, i32::MAX, i32::MAX);
                     surface.commit();
                 }
@@ -1288,6 +1024,9 @@ fn outline(region: IRect) -> Result<Box<dyn Send>> {
                 for s in surfaces {
                     s.destroy();
                 }
+                for (wl, _) in buffers {
+                    wl.destroy();
+                }
                 c.queue.roundtrip(&mut c.state)?;
                 Ok(())
             })();
@@ -1300,4 +1039,32 @@ fn outline(region: IRect) -> Result<Box<dyn Send>> {
         stop,
         thread: Some(thread),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shm_formats_map_to_fourccs() {
+        assert_eq!(shm_fourcc(wl_shm::Format::Xrgb8888), gpu::XRGB8888);
+        assert_eq!(shm_fourcc(wl_shm::Format::Argb8888), gpu::ARGB8888);
+        assert_eq!(shm_fourcc(wl_shm::Format::Xbgr8888), gpu::XBGR8888);
+        assert_eq!(shm_fourcc(wl_shm::Format::Abgr8888), gpu::ABGR8888);
+        // Red and blue swap between the two families.
+        assert_eq!(
+            gpu::pixel_format(shm_fourcc(wl_shm::Format::Xrgb8888)),
+            Some(PixelFormat::Bgrx)
+        );
+        assert_eq!(
+            gpu::pixel_format(shm_fourcc(wl_shm::Format::Xbgr8888)),
+            Some(PixelFormat::Rgbx)
+        );
+        let spec = Spec {
+            format: gpu::XBGR8888,
+            width: 2560,
+            height: 1440,
+        };
+        assert_eq!(spec.to_string(), "2560x1440 XB24");
+    }
 }

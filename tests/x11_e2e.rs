@@ -377,6 +377,12 @@ impl Session {
     }
 
     fn clipboard(&self) -> (Vec<u8>, bool) {
+        self.paste(b"image/png")
+    }
+
+    /// Converts CLIPBOARD to `target`, following INCR; the reply must be of
+    /// that type.
+    fn paste(&self, target: &[u8]) -> (Vec<u8>, bool) {
         let window = self.conn.generate_id().unwrap();
         self.conn
             .create_window(
@@ -396,15 +402,26 @@ impl Session {
             .check()
             .unwrap();
         let property = self.atom(b"QUIKSCOPE_TEST_PASTE");
-        let png = self.atom(b"image/png");
+        let wanted = self.atom(target);
         self.conn
-            .convert_selection(window, self.atom(b"CLIPBOARD"), png, property, CURRENT_TIME)
+            .convert_selection(
+                window,
+                self.atom(b"CLIPBOARD"),
+                wanted,
+                property,
+                CURRENT_TIME,
+            )
             .unwrap()
             .check()
             .unwrap();
         loop {
             if let Event::SelectionNotify(event) = self.event() {
-                assert_ne!(event.property, NONE, "owner refused image/png");
+                assert_ne!(
+                    event.property,
+                    NONE,
+                    "owner refused {}",
+                    String::from_utf8_lossy(target)
+                );
                 break;
             }
         }
@@ -437,7 +454,7 @@ impl Session {
                 if chunk.type_ == NONE {
                     continue;
                 }
-                assert_eq!(chunk.type_, png);
+                assert_eq!(chunk.type_, wanted);
                 assert_eq!(chunk.format, 8);
                 if chunk.value.is_empty() {
                     break;
@@ -445,7 +462,7 @@ impl Session {
                 bytes.extend_from_slice(&chunk.value);
             }
         } else {
-            assert_eq!(initial.type_, png);
+            assert_eq!(initial.type_, wanted);
         }
         self.conn.destroy_window(window).unwrap().check().unwrap();
         (bytes, incremental)
@@ -538,6 +555,53 @@ fn screen_geometry_and_incr_clipboard_are_pixel_exact() {
     assert_eq!(region, crop(&expected, 73, 51, 237, 139));
     let (png, _) = s.clipboard();
     assert_eq!(Image::decode(&png).unwrap(), region);
+}
+
+#[test]
+fn recorded_file_on_the_clipboard_pastes_as_uri_and_as_utf8_path() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.pattern();
+    s.start_daemon();
+    let out = s.run(&[
+        "record",
+        "video",
+        "-g",
+        "16,16 128x96",
+        "--no-audio",
+        "--no-notify",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    std::thread::sleep(Duration::from_millis(800));
+    let out = s.run(&["record", "stop"]);
+    assert!(
+        out.status.success(),
+        "{out:?}; daemon: {}",
+        std::fs::read_to_string(s.dir.path().join("daemon.log")).unwrap()
+    );
+    let path = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(std::path::Path::new(&path).is_file(), "{path}");
+    let (uris, _) = s.paste(b"text/uri-list");
+    let uris = String::from_utf8(uris).unwrap();
+    assert!(
+        uris.starts_with("file://") && uris.trim_end().ends_with(".mp4"),
+        "{uris}"
+    );
+    // Terminals and editors ask for UTF-8 text and get the path itself.
+    for target in [
+        &b"UTF8_STRING"[..],
+        b"text/plain;charset=utf-8",
+        b"text/plain",
+    ] {
+        let (text, _) = s.paste(target);
+        assert_eq!(
+            String::from_utf8(text).unwrap(),
+            path,
+            "{}",
+            String::from_utf8_lossy(target)
+        );
+    }
 }
 
 #[test]

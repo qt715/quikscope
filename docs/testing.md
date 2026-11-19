@@ -8,6 +8,8 @@
 | GPU/CPU parity | `tests/editor_render.rs` | Vulkan or GL (Mesa lavapipe/llvmpipe is enough) |
 | Editor interaction | `tests/editor_ui.rs` | Vulkan or GL, as above |
 | Settings interaction | `tests/settings_ui.rs` | Vulkan or GL, as above |
+| Video editor interaction | `tests/video_editor_ui.rs` | Vulkan or GL, as above; the `ffmpeg` CLI for its third-party fixture clips (skips without) |
+| Media | `src/media/**` `#[cfg(test)]`, `tests/media.rs` | nothing; Vulkan Video cases need a GPU with H.264 Vulkan Video and skip without; `ffmpeg`/`ffprobe` are optional external validators |
 | Text extraction | `tests/ocr.rs` | Tesseract and its language models; skips without them |
 | End to end | `tests/e2e.rs` (feature `e2e`) | `labwc` or `sway`, `dbus-daemon`; `grim` for reference comparisons; `bwrap` optional; Tesseract for the text extraction test |
 | X11 end to end | `tests/x11_e2e.rs` (feature `e2e`) | Xvfb, Mesa software GL/Vulkan |
@@ -105,6 +107,13 @@ warmups, separately for GDI and DXGI. DXGI availability fallback is explicitly
 labeled; do not call fallback timings duplication measurements. No latency
 numbers are asserted without running the benchmark on the target desktop.
 
+From Linux, `cargo xwin check --target x86_64-pc-windows-msvc --all-targets`
+type-checks the Windows build (exact command in
+[CONTRIBUTING](../CONTRIBUTING.md#build)). libwebp's SSE4.1 files need
+`CFLAGS_x86_64-pc-windows-msvc=-msse4.1` under clang-cl, which MSVC's `cl`
+does not; unset `C_INCLUDE_PATH`/`CPATH` so host headers stay out of the MSVC
+build. A passing cross-check proves compilation only.
+
 ## Golden images
 
 `render_regression` renders a fixed scene containing every annotation kind
@@ -169,6 +178,47 @@ painting, force welcome's saved mode to frozen, and skip the daemon config
 swap. The comment-preserving toggle, visible-error, welcome-choice and real
 next-capture live-apply tests must respectively fail. Restore every mutation
 before running the complete suite.
+
+## Media
+
+The media engine is tested where its bugs would reach users: round trips,
+timing and boundary sizes rather than internals.
+
+- **Codecs** (`src/media/codec`): every H.264 encoder/decoder pairing
+  (OpenH264 and Vulkan Video in both directions) must return each picture
+  with its exact timestamp and close to the source pixels, at odd, tiny and
+  large sizes; OpenH264 must also decode third-party High-profile streams
+  with B-frames. Opus and AAC decode back to the expected signal, and the
+  resampler keeps pitch and length.
+- **Pixels** (`src/media/convert.rs`): BGRA → YUV 4:2:0 → BGRA stays within
+  BT.709 rounding, red and blue stay where they are, and odd sizes crop rather
+  than scale.
+- **Containers** (`src/media/container`): what a muxer writes, the demuxer
+  reads back packet for packet, with the same timestamps, keyframe flags and
+  track offsets (an audio track starting after the picture stays there), for
+  fragmented and classic MP4, MOV and MKV; seeking lands on a keyframe at or
+  before the target; a file cut off mid-recording still opens.
+- **Animations** (`src/media/anim`): each format round-trips frame count,
+  pixels within its loss budget and per-frame durations, including
+  variable-delay sources; the recording master seeks and reads back
+  losslessly.
+- **Audio mixing** (`src/media/mix.rs`): jittered and drifting chunks from
+  several sources produce neither overlaps nor gaps.
+- **Sessions and export** (`tests/media.rs`): synthetic video and audio
+  sources record into every format; the result decodes back with the expected
+  duration, frame timing and A/V alignment, and trims, mutes and conversions
+  export the requested range.
+
+Vulkan Video cases need a GPU whose driver exposes H.264 Vulkan Video; they
+print `skipping …` and pass elsewhere, including CI, whose Mesa lavapipe has
+no video queues. Run them locally on NVIDIA, AMD or Intel hardware after
+changing `h264_vulkan`. OpenH264 cases run everywhere.
+
+The `ffmpeg` and `ffprobe` tools are optional external validators, never
+product dependencies: when installed, tests make third-party fixture clips
+with them and check that our files parse with the expected durations; without
+them those checks skip. CI installs the `ffmpeg` package for this alone
+(`scripts/ci-deps-ubuntu.sh`).
 
 ## End to end
 
@@ -265,10 +315,11 @@ and capture effects add unmeasured latency; these are not GNOME/KDE numbers.
 ## CI
 
 `.github/workflows/ci.yml` runs formatting and clippy (`-D warnings`), the
-test suite with Mesa lavapipe, Noto fonts and Tesseract on Ubuntu, an MSRV
-check, the Wayland e2e suite in an Arch Linux container with labwc and
-Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, a Windows
-build with clippy and the non-GPU tests, and dependency licence/advisory checks.
+test suite with Mesa lavapipe, Noto fonts, Tesseract and the test-only
+`ffmpeg` CLI on Ubuntu, an MSRV check, the Wayland e2e suite in an Arch Linux
+container with labwc and Tesseract, the X11 e2e suite on Ubuntu with private
+Xvfb servers, a Windows build with clippy and the non-GPU tests, and
+dependency licence/advisory checks.
 The separate `.github/workflows/release.yml` builds native `.deb`, `.rpm`,
 Arch source recipes and a Windows NSIS installer. Dispatch uploads artifacts without publishing;
 `v*` tags create a draft release. See [package verification and release procedure](../packaging/README.md).

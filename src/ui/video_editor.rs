@@ -5,11 +5,10 @@
 //! outputs at the bottom right, matching the annotator's chrome. The source
 //! file is only ever read: every output is a new file.
 
-mod playback;
-
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context as _;
@@ -22,12 +21,15 @@ use gpui::{
     fill, point, prelude::FluentBuilder as _, px, size,
 };
 
-use self::playback::{AudioOut, Clock, Filmstrip, Frame, VideoPlayer};
-use super::editor::{EditorServices, tilde};
+use super::clips::{self, Clip, Pin};
+use super::editor::EditorServices;
+use super::export_job::{self, Export, Finished, Output, Progress};
+use super::playback::{AudioOut, Clock, Filmstrip, Frame, Queue, VideoPlayer};
 use super::theme;
-use super::toolbar::{self, EDGE, GAP, PAD, base, button, icon, panel, separator};
+use super::toolbar::{self, EDGE, GAP, PAD, Tip, base, button, icon, panel, separator};
 use crate::media::export::{ExportOptions, Trim};
 use crate::media::{EncoderPreference, MediaInfo, OutputFormat};
+use crate::output::OutputFile;
 
 /// Every icon the video editor references (checked against the asset table).
 pub const ICONS: [&str; 9] = [
@@ -42,9 +44,10 @@ pub const ICONS: [&str; 9] = [
     "x",
 ];
 
-/// Sent after "Annotate frame" saved the frame at `path` as a PNG. It
-/// bubbles to the app, where the daemon can open the PNG in the annotator;
-/// the editor cannot open annotator windows itself.
+/// Sent after "Annotate frame" wrote the frame at `path`, a PNG in the clip
+/// cache (nothing lands in the screenshots folder until the annotator
+/// saves). It bubbles to the app, where the daemon opens the PNG in the
+/// annotator; the editor cannot open annotator windows itself.
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = video_editor, no_json)]
 pub struct AnnotateFrame {
@@ -123,9 +126,9 @@ pub fn clock_label(t: Duration) -> String {
     }
 }
 
-fn format_hint(format: OutputFormat) -> &'static str {
+pub(super) fn format_hint(format: OutputFormat) -> &'static str {
     match format {
-        OutputFormat::Mp4 => "H.264 + AAC",
+        OutputFormat::Mp4 => "H.264 + Opus",
         OutputFormat::Mkv => "H.264 + Opus",
         OutputFormat::Mov => "QuickTime",
         OutputFormat::Gif => "256 colors",
@@ -135,20 +138,11 @@ fn format_hint(format: OutputFormat) -> &'static str {
     }
 }
 
-fn short_label(format: OutputFormat) -> &'static str {
+pub(super) fn short_label(format: OutputFormat) -> &'static str {
     match format {
         OutputFormat::Jxl => "JXL",
         f => f.label(),
     }
-}
-
-/// What a running export ends in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Output {
-    /// Put on the clipboard as a file.
-    Copy,
-    /// Written into the recordings folder.
-    Save,
 }
 
 /// Which part of the timeline a drag moves.
@@ -165,25 +159,21 @@ struct Drag {
     resume: bool,
 }
 
-struct Export {
-    output: Output,
-    format: OutputFormat,
-    /// f32 bits, 0.0–1.0.
-    progress: Arc<AtomicU32>,
-    cancel: Arc<AtomicBool>,
-}
-
-impl Drop for Export {
-    fn drop(&mut self) {
-        // Closing the window mid-export stops it and removes the partial file.
-        self.cancel.store(true, Ordering::Release);
-    }
-}
-
 struct Toast {
     message: String,
     error: bool,
     generation: u64,
+}
+
+/// The audio output, opened off the UI thread on first play: opening a
+/// device can take long enough to freeze the window.
+enum Audio {
+    Closed,
+    Opening,
+    Open(AudioOut),
+    /// Opening the output device (or the file's audio) failed once; playback
+    /// stays silent rather than retrying on every play.
+    Failed,
 }
 
 /// Rendered bounds of the bottom clusters and the format menu, recorded by
@@ -193,6 +183,13 @@ pub struct Probes {
     pub transport: ScrollHandle,
     pub outputs: ScrollHandle,
     pub menu: ScrollHandle,
+}
+
+/// Frames the decoder keeps ahead of the playhead.
+const QUEUE: usize = 6;
+
+fn gpu_image(image: crate::raster::Image) -> Arc<RenderImage> {
+    super::render_image(image.width, image.height, image.data)
 }
 
 /// One open video. Config and clipboard come from the
@@ -219,10 +216,7 @@ pub struct VideoEditor {
     /// The frame texture last painted, released when another replaces it.
     painted: Option<Arc<RenderImage>>,
     decode_error: Option<String>,
-    audio: Option<AudioOut>,
-    /// Opening the output device (or the file's audio) failed once; playback
-    /// stays silent rather than retrying (and stalling) on every play.
-    audio_failed: bool,
+    audio: Audio,
     filmstrip: Filmstrip,
     drag: Option<Drag>,
     /// The timeline track as last painted, for hit testing.
@@ -231,6 +225,10 @@ pub struct VideoEditor {
     toast: Option<Toast>,
     toast_generation: u64,
     pub probes: Probes,
+    help_open: bool,
+    help_scroll: ScrollHandle,
+    /// The source is kept out of clip-cache pruning while it is open.
+    _source: Pin,
     _wake: Task<()>,
 }
 
@@ -244,7 +242,15 @@ impl VideoEditor {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
-        let video = VideoPlayer::spawn(path.clone(), tx.clone());
+        let video = VideoPlayer::spawn(
+            path.clone(),
+            Queue {
+                depth: QUEUE,
+                looping: false,
+            },
+            gpu_image,
+            tx.clone(),
+        );
         // Device pixels of the 36 px track at the window's scale.
         let thumb_h = (36.0 * window.scale_factor()).round() as u32;
         let filmstrip = Filmstrip::spawn(path.clone(), &info, thumb_h, FILMSTRIP, tx);
@@ -266,6 +272,7 @@ impl VideoEditor {
         let step = Duration::from_secs_f64(1.0 / if info.fps > 0.0 { info.fps } else { 30.0 });
         let duration = info.duration.max(step);
         let editor = VideoEditor {
+            _source: clips::pin(&path),
             path,
             duration,
             focus,
@@ -284,8 +291,7 @@ impl VideoEditor {
             shown: None,
             painted: None,
             decode_error: None,
-            audio: None,
-            audio_failed: false,
+            audio: Audio::Closed,
             filmstrip,
             drag: None,
             track: Bounds::default(),
@@ -293,6 +299,8 @@ impl VideoEditor {
             toast: None,
             toast_generation: 0,
             probes: Probes::default(),
+            help_open: false,
+            help_scroll: ScrollHandle::new(),
             _wake: wake,
             info,
         };
@@ -317,7 +325,7 @@ impl VideoEditor {
 
     /// An audio output stream is open (playing or paused).
     pub fn has_audio_output(&self) -> bool {
-        self.audio.is_some()
+        matches!(self.audio, Audio::Open(_))
     }
 
     pub fn is_muted(&self) -> bool {
@@ -332,6 +340,10 @@ impl VideoEditor {
         self.menu_open
     }
 
+    pub fn help_open(&self) -> bool {
+        self.help_open
+    }
+
     /// Presentation time of the frame on screen.
     pub fn shown_pts(&self) -> Option<Duration> {
         (!self.awaiting).then_some(())?;
@@ -340,9 +352,7 @@ impl VideoEditor {
 
     /// Progress of the running export (0.0–1.0).
     pub fn export_progress(&self) -> Option<f32> {
-        self.export
-            .as_ref()
-            .map(|e| f32::from_bits(e.progress.load(Ordering::Relaxed)))
+        self.export.as_ref().map(Export::progress)
     }
 
     pub fn toast(&self) -> Option<(&str, bool)> {
@@ -362,7 +372,8 @@ impl VideoEditor {
     }
 
     /// Painted bounds of a control: `play`, `mute`, `copy`, `format`,
-    /// `save`, `frame`, `cancel`, or `format:<ext>` while the menu is open.
+    /// `save`, `frame`, `help`, `cancel`, or `format:<ext>` while the menu
+    /// is open.
     pub fn control_bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
         if let Some(ext) = id.strip_prefix("format:") {
             let format = OutputFormat::parse(ext)?;
@@ -383,6 +394,7 @@ impl VideoEditor {
             "format" => (&self.probes.outputs, 1),
             "save" => (&self.probes.outputs, 2),
             "frame" => (&self.probes.outputs, 4),
+            "help" => (&self.probes.outputs, 5),
             _ => return None,
         };
         if (id == "cancel") != self.export.is_some() || (id == "mute" && !self.info.has_audio) {
@@ -455,6 +467,22 @@ impl VideoEditor {
         cx.notify();
     }
 
+    /// Where to look for the frame shown with the playhead at `at`.
+    ///
+    /// Frame times come from the stream's time base and the playhead from
+    /// the frame grid; the two can differ by rounding. Picking the frame
+    /// showing a quarter frame later lands on the intended frame either way.
+    /// The out point is exclusive (an export ends just before it), so there
+    /// the last frame kept shows instead of the first one cut.
+    fn pick(&self, at: Duration) -> Duration {
+        let at = if at >= self.trim.end {
+            self.trim.end.saturating_sub(self.step).max(self.trim.start)
+        } else {
+            at
+        };
+        at + self.step / 4
+    }
+
     /// Moves playback to `at` (clamped to the trim), keeping play/pause.
     fn seek(&mut self, at: Duration, window: &Window) {
         let at = at.clamp(self.trim.start, self.trim.end);
@@ -464,16 +492,12 @@ impl VideoEditor {
             *clock = Clock::start(at);
             self.video.seek(at, size);
             self.awaiting = true;
-            if let Some(audio) = &self.audio {
+            if let Audio::Open(audio) = &self.audio {
                 audio.seek(at);
             }
             return;
         }
-        // Frame times come from the stream's time base and the playhead from
-        // the frame grid; the two can differ by rounding. Picking the frame
-        // showing a quarter frame later lands on the intended frame either
-        // way.
-        let pick = at + self.step / 4;
+        let pick = self.pick(at);
         let settled = !self.awaiting && self.video.size() == size;
         match &self.shown {
             Some(f) if settled && f.covers(pick) => {}
@@ -493,53 +517,73 @@ impl VideoEditor {
         if self.clock.is_some() {
             self.pause();
         } else {
-            self.play(window);
+            self.play(window, cx);
         }
         cx.notify();
     }
 
-    fn play(&mut self, window: &Window) {
+    fn play(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.playhead + self.step / 2 >= self.trim.end {
             self.seek(self.trim.start, window);
         }
+        // The clock starts now; sound joins when the device is open.
         self.clock = Some(Clock::start(self.playhead));
-        self.start_audio();
+        self.start_audio(cx);
     }
 
     fn pause(&mut self) {
         self.clock = None;
-        if let Some(audio) = &self.audio {
+        if let Audio::Open(audio) = &self.audio {
             audio.set_playing(false);
         }
     }
 
-    fn start_audio(&mut self) {
-        if self.muted || !self.info.has_audio || self.audio_failed || self.clock.is_none() {
+    fn start_audio(&mut self, cx: &mut Context<Self>) {
+        if self.muted || !self.info.has_audio || self.clock.is_none() {
             return;
         }
-        if self.audio.is_none() {
-            // Opened on first play, not on open: viewing a clip never wakes
-            // the audio device.
-            match AudioOut::open(&self.path, self.playhead) {
-                Ok(Some(audio)) => self.audio = Some(audio),
-                Ok(None) => {
-                    self.audio_failed = true;
-                    return;
-                }
-                Err(e) => {
-                    log::warn!("audio playback unavailable: {e:#}");
-                    self.audio_failed = true;
-                    return;
-                }
+        match &self.audio {
+            Audio::Open(audio) => {
+                // Samples queued before a pause were already handed to the
+                // device; restarting at the playhead keeps sound and picture
+                // together.
+                audio.seek(self.playhead);
+                audio.set_playing(true);
+            }
+            Audio::Opening | Audio::Failed => {}
+            Audio::Closed => {
+                // Opened on first play, not on open: viewing a clip never
+                // wakes the audio device.
+                self.audio = Audio::Opening;
+                let (path, at) = (self.path.clone(), self.playhead);
+                let open = cx.background_spawn(async move { AudioOut::open(&path, at) });
+                cx.spawn(async move |this, cx| {
+                    let opened = open.await;
+                    let _ = this.update(cx, |e, cx| e.audio_opened(opened, cx));
+                })
+                .detach();
             }
         }
-        if let Some(audio) = &self.audio {
-            // Samples queued before a pause were already handed to the
-            // device; restarting at the playhead keeps sound and picture
-            // together.
-            audio.seek(self.playhead);
-            audio.set_playing(true);
+    }
+
+    fn audio_opened(&mut self, opened: anyhow::Result<Option<AudioOut>>, cx: &mut Context<Self>) {
+        if !matches!(self.audio, Audio::Opening) {
+            // Muted while it opened: muted means no stream at all.
+            return;
         }
+        self.audio = match opened {
+            Ok(Some(audio)) => Audio::Open(audio),
+            Ok(None) => Audio::Failed,
+            Err(e) => {
+                log::warn!("audio playback unavailable: {e:#}");
+                Audio::Failed
+            }
+        };
+        if let Audio::Open(audio) = &self.audio {
+            audio.seek(self.playhead);
+            audio.set_playing(self.clock.is_some());
+        }
+        cx.notify();
     }
 
     fn toggle_mute(&mut self, cx: &mut Context<Self>) {
@@ -549,9 +593,11 @@ impl VideoEditor {
         self.muted = !self.muted;
         if self.muted {
             // Muted means no stream at all, not a silent one.
-            self.audio = None;
+            if !matches!(self.audio, Audio::Failed) {
+                self.audio = Audio::Closed;
+            }
         } else {
-            self.start_audio();
+            self.start_audio(cx);
         }
         cx.notify();
     }
@@ -562,13 +608,15 @@ impl VideoEditor {
         let Some(clock) = &mut self.clock else {
             if size != self.video.size() {
                 // Resized: decode again at the new size where we are.
-                self.video.seek(self.playhead + self.step / 4, size);
+                self.video.seek(self.pick(self.playhead), size);
                 self.awaiting = true;
             }
             return;
         };
-        if let Some(audio) = self.audio.as_ref().and_then(AudioOut::position) {
-            clock.sync(audio);
+        if let Audio::Open(audio) = &self.audio
+            && let Some(heard) = audio.position()
+        {
+            clock.sync(heard);
         }
         let now = clock.now();
         if size != self.video.size() {
@@ -694,7 +742,7 @@ impl VideoEditor {
     fn end_drag(&mut self, window: &Window, cx: &mut Context<Self>) {
         if let Some(drag) = self.drag.take() {
             if drag.resume {
-                self.play(window);
+                self.play(window, cx);
             }
             cx.notify();
         }
@@ -746,6 +794,7 @@ impl VideoEditor {
 
     /// Ctrl+C / Ctrl+S: exports the trimmed range in the chosen format, then
     /// puts the file on the clipboard or leaves it in the recordings folder.
+    /// The export carries on if the window closes (see [`export_job`]).
     fn export(&mut self, output: Output, cx: &mut Context<Self>) {
         if self.export.is_some() {
             self.show_toast("An export is already running".into(), false, cx);
@@ -755,13 +804,12 @@ impl VideoEditor {
             self.show_toast("Saving is unavailable".into(), true, cx);
             return;
         };
-        let clipboard = services.clipboard.clone();
-        if output == Output::Copy && clipboard.is_none() {
+        if output == Output::Copy && services.clipboard.is_none() {
             self.show_toast("Clipboard is unavailable".into(), true, cx);
             return;
         }
         if output == Output::Copy && !self.needs_encode() {
-            if let Some(c) = &clipboard {
+            if let Some(c) = &services.clipboard {
                 c.set_files(std::slice::from_ref(&self.path));
             }
             self.show_toast(format!("Copied {}", self.format.label()), false, cx);
@@ -769,10 +817,16 @@ impl VideoEditor {
         }
         let record = &services.config.record;
         let format = self.format;
-        let dst = match output {
-            Output::Save => record.new_save_path(SystemTime::now(), format),
-            Output::Copy => clip_path(&self.path, format),
-        };
+        let save_path = record.new_save_path(SystemTime::now(), format);
+        let clips = services.clips.clone();
+        // Under the source's name, so a chat app shows a sensible file name.
+        let clip_name = format!(
+            "{}.{}",
+            self.path
+                .file_stem()
+                .map_or("clip".into(), |s| s.to_string_lossy()),
+            format.extension()
+        );
         let source_fps = self.info.fps.round().max(1.0) as u32;
         let options = ExportOptions {
             format,
@@ -783,140 +837,92 @@ impl VideoEditor {
             max_width: (format == OutputFormat::Gif).then_some(GIF_MAX_WIDTH),
             encoder: EncoderPreference::parse(&record.encoder).unwrap_or_default(),
         };
-        let progress = Arc::new(AtomicU32::new(0));
-        let cancel = Arc::new(AtomicBool::new(false));
-        // Progress repaints and the result arrive over one channel, so the
-        // window wakes when something changed rather than on a timer.
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<Option<anyhow::Result<PathBuf>>>();
         let src = self.path.clone();
         let reencode = self.needs_encode();
-        let (p, c) = (progress.clone(), cancel.clone());
-        // A dedicated thread: an export runs for minutes and would otherwise
-        // hold one of GPUI's few background workers.
-        let spawned = std::thread::Builder::new()
-            .name("quikscope-export".into())
-            .spawn(move || {
-                let output = match output {
-                    Output::Save => crate::output::OutputFile::reserve(&dst),
-                    Output::Copy => crate::output::OutputFile::replace(&dst),
-                };
-                let result = output.and_then(|output| {
-                    if reencode {
-                        let report = |f: f32| {
-                            // A repaint per whole percent, not per frame.
-                            let before = f32::from_bits(p.swap(f.to_bits(), Ordering::Relaxed));
-                            if (f * 100.0) as u32 != (before * 100.0) as u32 {
-                                let _ = tx.unbounded_send(None);
-                            }
-                        };
-                        crate::media::export::export(&src, output, &options, None, &report, &c)
-                    } else {
-                        copy_file(&src, output)
-                    }
-                });
-                let _ = tx.unbounded_send(Some(result));
-            });
-        if let Err(e) = spawned {
-            self.show_toast(format!("Export failed: {e}"), true, cx);
-            return;
-        }
-        self.export = Some(Export {
-            output,
-            format,
-            progress,
-            cancel,
-        });
-        self.menu_open = false;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = loop {
-                match rx.next().await {
-                    Some(Some(result)) => break result,
-                    Some(None) => {
-                        if this.update(cx, |_, cx| cx.notify()).is_err() {
-                            return;
-                        }
-                    }
-                    None => break Err(anyhow::anyhow!("the export thread stopped")),
+        let work = move |progress: Progress<'_>, cancel: &AtomicBool| {
+            // The window (and its pin) may close before this finishes.
+            let _source = clips::pin(&src);
+            let (_clip, dst) = match output {
+                Output::Save => (None, OutputFile::reserve(&save_path)?),
+                Output::Copy => {
+                    let (clip, path) = Clip::create(&clips, &clip_name)?;
+                    (Some(clip), OutputFile::replace(&path)?)
                 }
             };
-            let _ = this.update(cx, |e, cx| e.finish_export(result, clipboard, cx));
-        })
-        .detach();
-    }
-
-    fn finish_export(
-        &mut self,
-        result: anyhow::Result<PathBuf>,
-        clipboard: Option<Arc<dyn crate::platform::Clipboard>>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(export) = self.export.take() else {
-            return;
+            if reencode {
+                crate::media::export::export(&src, dst, &options, None, progress, cancel)
+            } else {
+                copy_file(&src, dst, progress, cancel)
+            }
         };
-        let cancelled = export.cancel.load(Ordering::Acquire);
-        match result {
-            Ok(path) => {
-                log::info!("exported {}", path.display());
-                match export.output {
-                    Output::Save => self.show_toast(format!("Saved {}", tilde(&path)), false, cx),
-                    Output::Copy => {
-                        if let Some(c) = clipboard {
-                            c.set_files(&[path]);
-                        }
-                        self.show_toast(format!("Copied {}", export.format.label()), false, cx);
-                    }
-                }
-            }
-            Err(_) if cancelled => self.show_toast("Export cancelled".into(), false, cx),
-            Err(e) => {
-                log::error!("export of {} failed: {e:#}", self.path.display());
-                self.show_toast(format!("Export failed: {e:#}"), true, cx);
-            }
+        let finished = |e: &mut VideoEditor, done: &Finished, cx: &mut Context<VideoEditor>| {
+            e.export = None;
+            let (message, error) = done.message();
+            e.show_toast(message, error, cx);
+        };
+        match export_job::start(output, format, &services, work, finished, cx) {
+            Ok(export) => self.export = Some(export),
+            Err(e) => self.show_toast(format!("Export failed: {e:#}"), true, cx),
         }
+        self.menu_open = false;
+        cx.notify();
     }
 
     fn cancel_export(&mut self, cx: &mut Context<Self>) {
         if let Some(export) = &self.export {
             // The export thread notices, removes its partial file and
             // reports back; the toast says so then.
-            export.cancel.store(true, Ordering::Release);
+            export.cancel();
             cx.notify();
         }
     }
 
-    /// Saves the frame on screen, at full resolution, as a screenshot PNG
-    /// and offers it to the annotator ([`AnnotateFrame`]).
+    /// Opens the frame on screen, at full resolution, in the annotator
+    /// ([`AnnotateFrame`]). It goes through the clip cache: the screenshots
+    /// folder only gets it when the annotator saves.
     fn annotate_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(services) = cx.try_global::<EditorServices>().cloned() else {
-            self.show_toast("Saving is unavailable".into(), true, cx);
+            self.show_toast("Annotating is unavailable".into(), true, cx);
             return;
         };
         let at = self.shown.as_ref().map_or(self.playhead, |f| f.pts);
-        let path = services.config.new_save_path(SystemTime::now());
-        let src = self.path.clone();
+        let name = format!(
+            "{}-{}.png",
+            self.path
+                .file_stem()
+                .map_or("frame".into(), |s| s.to_string_lossy()),
+            clock_label(at).replace([':', '.'], "-")
+        );
+        let (src, clips) = (self.path.clone(), services.clips.clone());
         let task = cx.background_spawn(async move {
             // The preview is scaled to the window; decode the frame again at
             // the source size.
             let mut decoder = crate::media::decode::Decoder::open(&src)?;
             decoder.seek(at)?;
             let frame = decoder.next_frame()?.context("No frame at the playhead")?;
+            let (_clip, path) = Clip::create(&clips, &name)?;
             frame
                 .image
-                .save_png(&path, crate::raster::Compression::Balanced)?;
+                .save_png(&path, crate::raster::Compression::Fast)?;
             anyhow::Ok(path)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |e, window, cx| match result {
                 Ok(path) => {
-                    e.show_toast(format!("Saved frame {}", tilde(&path)), false, cx);
+                    e.show_toast("Opening the frame in the annotator".into(), false, cx);
                     window.dispatch_action(Box::new(AnnotateFrame { path }), cx);
                 }
-                Err(err) => e.show_toast(format!("Saving the frame failed: {err:#}"), true, cx),
+                Err(err) => e.show_toast(format!("Reading the frame failed: {err:#}"), true, cx),
             });
         })
         .detach();
+    }
+
+    fn toggle_help(&mut self, cx: &mut Context<Self>) {
+        self.help_open = !self.help_open;
+        self.menu_open = false;
+        cx.notify();
     }
 
     // ── input ────────────────────────────────────────────────────────────
@@ -924,10 +930,25 @@ impl VideoEditor {
     fn key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let m = ks.modifiers;
+        let help_key =
+            matches!(ks.key.as_str(), "?" | "f1") || (ks.key == "/" && m.shift && !m.control);
+        if self.help_open {
+            if help_key || ks.key == "escape" {
+                self.toggle_help(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if help_key {
+            self.toggle_help(cx);
+            cx.stop_propagation();
+            return;
+        }
         if m.control || m.platform {
             match ks.key.as_str() {
                 "c" => self.export(Output::Copy, cx),
                 "s" => self.export(Output::Save, cx),
+                // A running export carries on and reports when done.
                 "w" | "q" => window.remove_window(),
                 _ => return,
             }
@@ -942,6 +963,9 @@ impl VideoEditor {
                 window.remove_window();
                 return;
             }
+            // Holding Space would otherwise flip play/pause at the key
+            // repeat rate.
+            "space" if ev.is_held => {}
             "space" => self.toggle_play(window, cx),
             "left" if m.shift => self.jump(-1, window, cx),
             "right" if m.shift => self.jump(1, window, cx),
@@ -1192,7 +1216,7 @@ impl VideoEditor {
             .gap(px(GAP))
             .p(px(PAD));
         if let Some(export) = &self.export {
-            let progress = f32::from_bits(export.progress.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+            let progress = export.progress();
             let verb = match export.output {
                 Output::Copy => "Copying",
                 Output::Save => "Saving",
@@ -1265,6 +1289,12 @@ impl VideoEditor {
                 button("frame", "Annotate frame (F)", false, true)
                     .on_click(cx.listener(|e, _, window, cx| e.annotate_frame(window, cx)))
                     .child(icon("image-plus", theme::text())),
+            )
+            .child(
+                button("help", "Keyboard shortcuts (? / F1)", self.help_open, true)
+                    .text_sm()
+                    .on_click(cx.listener(|e, _, _, cx| e.toggle_help(cx)))
+                    .child("?"),
             )
     }
 
@@ -1383,43 +1413,57 @@ impl VideoEditor {
     }
 }
 
-/// Where a copied clip is written: the cache, under the source's name so a
-/// chat app shows a sensible file name. Clips older than a day are removed
-/// first; the clipboard only needs the newest.
-fn clip_path(src: &Path, format: OutputFormat) -> PathBuf {
-    let dir = crate::config::cache_dir().join("clips");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        let day = Duration::from_secs(24 * 3600);
-        for entry in entries.flatten() {
-            let old = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age > day);
-            if old {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-    let stem = src
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "clip".into());
-    let path = dir.join(format!("{stem}.{}", format.extension()));
-    if path == src {
-        dir.join(format!("{stem}-clip.{}", format.extension()))
-    } else {
-        path
-    }
-}
+/// Saves an untouched source as it is: no generation loss, no encoder. A
+/// chunked copy rather than `fs::copy`, so progress moves and Cancel works
+/// on large recordings; dropping `output` uncommitted removes the partial.
+fn copy_file(
+    src: &Path,
+    output: OutputFile,
+    progress: Progress<'_>,
+    cancel: &AtomicBool,
+) -> anyhow::Result<PathBuf> {
+    use std::io::{Read as _, Write as _};
 
-/// Saves an untouched source as it is: no generation loss, no encoder.
-fn copy_file(src: &Path, output: crate::output::OutputFile) -> anyhow::Result<PathBuf> {
-    std::fs::copy(src, output.part())
-        .with_context(|| format!("writing {}", output.part().display()))?;
+    let mut from = File::open(src).with_context(|| format!("Reading {}", src.display()))?;
+    let total = from.metadata().map_or(0, |m| m.len()).max(1);
+    let write = || format!("Writing {}", output.path().display());
+    let mut to = File::create(output.part()).with_context(write)?;
+    let mut buf = vec![0; 1 << 20];
+    let mut copied = 0u64;
+    loop {
+        anyhow::ensure!(!cancel.load(Ordering::Acquire), "Export cancelled");
+        let n = from
+            .read(&mut buf)
+            .with_context(|| format!("Reading {}", src.display()))?;
+        if n == 0 {
+            break;
+        }
+        to.write_all(&buf[..n]).with_context(write)?;
+        copied += n as u64;
+        progress(copied as f32 / total as f32);
+    }
+    drop(to);
     output.commit()
 }
+
+const HELP_PLAYBACK: &[&str] = &[
+    "Space: play / pause",
+    "← / →: previous / next frame",
+    "Shift+← / →: back / forward a second",
+    "Home / End: go to the in / out point",
+    "Click or drag the timeline: seek",
+    "M: mute / unmute",
+];
+
+const HELP_TRIM: &[&str] = &[
+    "Drag the handles: trim",
+    "I / O: set the in / out point at the playhead",
+    "F: annotate the frame on screen",
+    "Ctrl+C: copy file · Ctrl+S: save to recordings folder",
+    "Esc: close menu / cancel export / close editor",
+    "Ctrl+W / Ctrl+Q: close (a running export finishes)",
+    "? / F1: toggle help",
+];
 
 impl Focusable for VideoEditor {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -1480,6 +1524,10 @@ impl Render for VideoEditor {
             .child(
                 div()
                     .id("timeline")
+                    .tooltip(|_, cx| {
+                        cx.new(|_| Tip("Click or drag to seek · drag the handles to trim (I / O)"))
+                            .into()
+                    })
                     .occlude()
                     .absolute()
                     .left(px(EDGE))
@@ -1515,6 +1563,28 @@ impl Render for VideoEditor {
             .child(self.outputs(cx))
             .children(self.toast_element())
             .when(self.menu_open, |d| d.child(self.format_menu(cx)))
+            .when(self.help_open, |d| {
+                d.child(
+                    // Clicking anywhere closes it, like the format menu.
+                    div()
+                        .id("help-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|e, _, _, cx| e.toggle_help(cx)),
+                        ),
+                )
+                .child(toolbar::help_panel(
+                    viewport,
+                    &self.help_scroll,
+                    [
+                        toolbar::help_section("Playback", HELP_PLAYBACK),
+                        toolbar::help_section("Trim and output", HELP_TRIM),
+                    ],
+                ))
+            })
     }
 }
 
@@ -1561,5 +1631,40 @@ mod tests {
         assert_eq!(clock_label(Duration::from_millis(1234)), "0:01.23");
         assert_eq!(clock_label(Duration::from_secs(61)), "1:01.00");
         assert_eq!(clock_label(Duration::from_secs(3723)), "1:02:03.00");
+    }
+
+    #[test]
+    fn untouched_copy_reports_progress_and_cancel_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("clip.mp4");
+        let bytes: Vec<u8> = (0..3u32 << 20).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &bytes).unwrap();
+        let dst = dir.path().join("out").join("clip.mp4");
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let report = |f: f32| seen.lock().unwrap().push(f);
+        let reserved = OutputFile::reserve(&dst).unwrap();
+        let saved = copy_file(&src, reserved, &report, &AtomicBool::new(false)).unwrap();
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+        let seen = seen.into_inner().unwrap();
+        assert!(seen.len() >= 3 && seen.is_sorted(), "{seen:?}");
+        assert_eq!(seen.last(), Some(&1.0));
+
+        // Cancelled a third of the way: neither the partial file nor the
+        // reserved name stays.
+        let cancel = AtomicBool::new(false);
+        let stop = |f: f32| {
+            if f > 0.3 {
+                cancel.store(true, Ordering::Release);
+            }
+        };
+        let reserved = OutputFile::reserve(&dst).unwrap();
+        let error = copy_file(&src, reserved, &stop, &cancel).unwrap_err();
+        assert_eq!(error.to_string(), "Export cancelled");
+        let left: Vec<_> = std::fs::read_dir(dst.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["clip.mp4"]);
     }
 }

@@ -56,7 +56,10 @@ pub fn export(
     };
     use std::{sync::atomic::Ordering, time::Instant};
     super::init();
-    ensure!(src != dst.path(), "Source and export destination must differ");
+    ensure!(
+        src != dst.path(),
+        "Source and export destination must differ"
+    );
     let info = super::decode::probe(src)?;
     let start = options.trim.map_or(Duration::ZERO, |t| t.start);
     let end = options.trim.map_or(info.duration, |t| t.end);

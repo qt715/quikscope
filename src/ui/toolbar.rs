@@ -14,9 +14,10 @@ use gpui::{
 use super::editor::{Editor, Tool};
 use super::{hsla, theme};
 use crate::document::{PALETTE, STROKE_WIDTHS};
+use crate::media::OutputFormat;
 
 /// Every icon the toolbar references (checked against the asset table in tests).
-pub const ICONS: [&str; 20] = [
+pub const ICONS: [&str; 23] = [
     "palette",
     "mouse-pointer-2",
     "hand",
@@ -37,6 +38,9 @@ pub const ICONS: [&str; 20] = [
     "scan-text",
     "save",
     "settings",
+    "play",
+    "pause",
+    "chevron-down",
 ];
 
 /// Distance from the window edges to every panel.
@@ -57,6 +61,9 @@ pub const BAR_SPACE: f32 = EDGE + BAR + CLEARANCE;
 
 const ZOOM_W: f32 = 52.0;
 const SAVE_W: f32 = 72.0;
+/// The animation strip's format button and its menu.
+const FORMAT_W: f32 = 64.0;
+const MENU_W: f32 = 220.0;
 /// Bottom-left cluster: undo, redo | zoom.
 const HISTORY_W: f32 = 2.0 * (PAD + BORDER) + 2.0 * BUTTON + SEPARATOR + ZOOM_W + 3.0 * GAP;
 /// Bottom-right cluster: copy text, copy, save | settings, help.
@@ -103,6 +110,47 @@ pub fn style_panel_bounds(viewport: Size<Pixels>) -> Bounds<Pixels> {
     Bounds::new(point(px(EDGE), px(y)), size(px(w), px(h)))
 }
 
+/// The animation strip's preferred width, and the narrowest that still
+/// leaves its scrubber usable.
+const STRIP_W: f32 = 380.0;
+const STRIP_MIN: f32 = 260.0;
+
+/// Where the animation strip sits in a `viewport`: in the bottom band
+/// between the clusters when it fits there (centred in the window if it
+/// can be, else in the gap, since the clusters differ in width), otherwise
+/// just above them, beside the style panel in windows short enough for the
+/// two to meet.
+pub fn strip_bounds(viewport: Size<Pixels>) -> Bounds<Pixels> {
+    let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
+    let (mut left, mut right) = (2.0 * EDGE + HISTORY_W, vw - 2.0 * EDGE - OUTPUT_W);
+    let mut bottom = EDGE;
+    if right - left < STRIP_MIN {
+        bottom = EDGE + BAR + CLEARANCE;
+        let side = style_panel_bounds(viewport);
+        left = if f32::from(side.bottom()) + CLEARANCE > vh - bottom - BAR {
+            f32::from(side.right()) + EDGE
+        } else {
+            EDGE
+        };
+        right = vw - EDGE;
+    }
+    let w = STRIP_W.min(right - left).max(1.0);
+    let x = ((vw - w) / 2.0).clamp(left, (right - w).max(left));
+    Bounds::new(
+        point(px(x.ceil()), px(vh - bottom - BAR)),
+        size(px(w.floor()), px(BAR)),
+    )
+}
+
+/// Height of the band at the bottom of the window the chrome occupies,
+/// clearance included: the bottom clusters, and with an animation the
+/// strip, which may sit above them. Toasts and the canvas fit stay above it.
+pub fn bottom_band(viewport: Size<Pixels>, animation: bool) -> f32 {
+    let strip =
+        animation.then(|| f32::from(viewport.height - strip_bounds(viewport).top()) + CLEARANCE);
+    strip.unwrap_or(0.0).max(BAR_SPACE)
+}
+
 /// Rendered bounds of each panel. GPUI 0.3.10 reports element bounds to
 /// tests only through `VisualTestContext::debug_bounds`, which the headless
 /// harness has no equivalent of; a tracked [`ScrollHandle`] records them
@@ -115,6 +163,10 @@ pub struct Probes {
     pub output: ScrollHandle,
     pub playback: ScrollHandle,
     pub scrubber: ScrollHandle,
+    pub format_menu: ScrollHandle,
+    /// The annotator's toast and animation export progress, while shown.
+    pub toast: ScrollHandle,
+    pub progress: ScrollHandle,
 }
 
 pub(super) fn icon(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
@@ -211,6 +263,9 @@ pub fn chrome(
     }
     if editor.animation_status().is_some() {
         out.push(playback(editor, viewport, cx).into_any_element());
+        if editor.animation_menu_open() {
+            out.push(animation_format_menu(editor, viewport, cx).into_any_element());
+        }
     }
     out
 }
@@ -436,6 +491,15 @@ fn history(editor: &Editor, zoom_label: String, cx: &mut Context<Editor>) -> imp
 }
 
 fn output(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
+    // An animation is re-encoded and saved with the recordings.
+    let (copy_tip, save_tip) = if editor.animation_status().is_some() {
+        (
+            "Copy animation (Ctrl+C)",
+            "Save to recordings folder (Ctrl+S)",
+        )
+    } else {
+        ("Copy image (Ctrl+C)", "Save to screenshots folder (Ctrl+S)")
+    };
     panel("output", &editor.chrome.output)
         .absolute()
         .right(px(EDGE))
@@ -449,13 +513,13 @@ fn output(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
                 .child(icon("scan-text", theme::text())),
         )
         .child(
-            button("copy", "Copy image (Ctrl+C)", false, true)
+            button("copy", copy_tip, false, true)
                 .on_click(cx.listener(|e, _, _, cx| e.copy(cx)))
                 .child(icon("copy", theme::text())),
         )
         .child(
             // The one primary action: saving is what most edits end with.
-            base("save", "Save to screenshots folder (Ctrl+S)")
+            base("save", save_tip)
                 .w(px(SAVE_W))
                 .gap_1p5()
                 .bg(theme::accent())
@@ -497,19 +561,29 @@ fn playback(editor: &Editor, viewport: Size<Pixels>, cx: &mut Context<Editor>) -
         .frames
         .map(|n| n.to_string())
         .unwrap_or_else(|| "?".into());
-    let width = 380.0_f32.min((f32::from(viewport.width) - 2.0 * EDGE).max(1.0));
-    let fits = f32::from(viewport.width) >= HISTORY_W + OUTPUT_W + width + 4.0 * EDGE;
+    let bounds = strip_bounds(viewport);
+    let menu_open = editor.animation_menu_open();
     panel("animation-playback", &editor.chrome.playback)
         .absolute()
-        .left(px((f32::from(viewport.width) - width) / 2.0))
-        .bottom(px(if fits { EDGE } else { EDGE + BAR + CLEARANCE }))
-        .w(px(width))
+        .left(bounds.left())
+        .top(bounds.top())
+        .w(bounds.size.width)
+        .h(bounds.size.height)
         .p(px(PAD))
         .gap_2()
         .child(
-            button("animation-play", "Play / pause (Space)", playing, true)
-                .on_click(cx.listener(|e, _, _, cx| e.toggle_playback(cx)))
-                .child(if playing { "Ⅱ" } else { "▶" }),
+            button(
+                "animation-play",
+                if playing {
+                    "Pause (Space)"
+                } else {
+                    "Play (Space)"
+                },
+                false,
+                true,
+            )
+            .on_click(cx.listener(|e, _, _, cx| e.toggle_playback(cx)))
+            .child(icon(if playing { "pause" } else { "play" }, theme::text())),
         )
         .child(
             div()
@@ -561,41 +635,125 @@ fn playback(editor: &Editor, viewport: Size<Pixels>, cx: &mut Context<Editor>) -
         )
         .child(
             div()
+                .flex_shrink_0()
                 .text_xs()
                 .text_color(theme::muted())
                 .child(format!("{frame}/{count}  {:.1}s", position.as_secs_f64())),
         )
         .child(
-            button("animation-format", "Change animation format", false, true)
-                .w(px(62.))
+            base("animation-format", "Animation format")
+                .w(px(FORMAT_W))
+                .gap_1()
                 .text_xs()
-                .on_click(cx.listener(|e, _, _, cx| e.cycle_animation_format(cx)))
-                .child(format.label()),
+                .text_color(theme::text())
+                .when(menu_open, |d| d.bg(theme::accent_bg()))
+                .when(!menu_open, |d| d.hover(|s| s.bg(theme::hover())))
+                .on_click(cx.listener(|e, _, _, cx| e.toggle_animation_menu(cx)))
+                .child(super::video_editor::short_label(format))
+                .child(icon("chevron-down", theme::muted())),
         )
 }
 
-pub fn shortcut_help(
-    viewport: gpui::Size<gpui::Pixels>,
-    scroll: &gpui::ScrollHandle,
+/// The animation format menu, above the strip's format button. Item `i + 1`
+/// of [`Probes::format_menu`] is `OutputFormat::ANIMATION[i]`.
+fn animation_format_menu(
+    editor: &Editor,
+    viewport: Size<Pixels>,
+    cx: &mut Context<Editor>,
 ) -> impl IntoElement {
-    let tools = Tool::ALL.into_iter().map(|tool| {
-        let keys = ('a'..='z')
-            .chain('0'..='9')
-            .filter(|key| Tool::from_key(key.encode_utf8(&mut [0; 4])) == Some(tool))
-            .map(|key| key.to_ascii_uppercase().to_string())
-            .collect::<Vec<_>>()
-            .join(" / ");
-        let label = tool.label().split(" (").next().unwrap();
-        div().text_xs().child(format!("{label} — {keys}"))
-    });
-    let section = |title: &'static str, rows: &'static [&'static str]| {
+    let (_, _, current) = editor.animation_status().expect("animation strip");
+    let strip = strip_bounds(viewport);
+    let item = |format: OutputFormat| {
+        let active = current == format;
         div()
+            .id(gpui::ElementId::Name(
+                format!("animation-format-{}", format.extension()).into(),
+            ))
             .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_sm().text_color(theme::accent()).child(title))
-            .children(rows.iter().map(|row| div().text_xs().child(*row)))
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .h(px(28.))
+            .px_2()
+            .rounded_md()
+            .text_sm()
+            .when(active, |d| {
+                d.bg(theme::accent_bg()).text_color(theme::accent())
+            })
+            .when(!active, |d| {
+                d.text_color(theme::text()).hover(|s| s.bg(theme::hover()))
+            })
+            .on_click(cx.listener(move |e, _, _, cx| e.set_animation_format(format, cx)))
+            .child(format.label())
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(super::video_editor::format_hint(format)),
+            )
     };
+    let menu = div()
+        .id("animation-format-menu")
+        .track_scroll(&editor.chrome.format_menu)
+        .occlude()
+        .absolute()
+        .right(viewport.width - strip.right())
+        .bottom(viewport.height - strip.top() + px(6.))
+        .w(px(MENU_W))
+        .p(px(PAD))
+        .flex()
+        .flex_col()
+        .rounded_lg()
+        .bg(theme::panel())
+        .border_1()
+        .border_color(theme::panel_border())
+        .shadow_lg()
+        .child(
+            div()
+                .px_2()
+                .pt_1p5()
+                .pb_0p5()
+                .text_xs()
+                .text_color(theme::muted())
+                .child("Animation format"),
+        )
+        .children(OutputFormat::ANIMATION.map(item));
+    // A backdrop over the window: clicking anywhere else closes the menu
+    // without also pressing whatever is under the pointer.
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .id("animation-format-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|e, _, _, cx| e.toggle_animation_menu(cx)),
+                ),
+        )
+        .child(menu)
+}
+
+/// A titled list of shortcuts for [`help_panel`].
+pub(super) fn help_section(title: &'static str, rows: &'static [&'static str]) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().text_sm().text_color(theme::accent()).child(title))
+        .children(rows.iter().map(|row| div().text_xs().child(*row)))
+}
+
+/// The keyboard shortcut overlay: `columns` side by side (stacked in
+/// narrow windows) in a centred panel that scrolls when the window is short.
+pub(super) fn help_panel(
+    viewport: Size<Pixels>,
+    scroll: &ScrollHandle,
+    columns: impl IntoIterator<Item = impl IntoElement>,
+) -> impl IntoElement {
     div()
         .absolute()
         .inset_0()
@@ -627,66 +785,119 @@ pub fn shortcut_help(
                         .flex_shrink_0()
                         .when(viewport.width < px(640.), |d| d.flex_col())
                         .gap_6()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(div().text_sm().text_color(theme::accent()).child("Tools"))
-                                .children(tools)
-                                .child(
-                                    div()
-                                        .mt_2()
-                                        .text_xs()
-                                        .child("Shift: square / circle / 15° snap"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .child(section(
-                                    "Edit",
-                                    &[
-                                        "Drag empty canvas: marquee (fully contained)",
-                                        "Shift+click: toggle selection · Ctrl+A: select all",
-                                        "Drag selection: move · Arrows: nudge · Shift: ×10",
-                                        "Delete / Backspace: delete · Ctrl+D: duplicate",
-                                        "Ctrl+Z: undo · Ctrl+Shift+Z / Ctrl+Y: redo",
-                                        "Ctrl+Shift+] / [: bring to front / send to back",
-                                        "[ / ]: stroke size · F: toggle fill",
-                                        "I: pick a color anywhere on screen",
-                                        "Esc: cancel / clear selection / close editor",
-                                    ],
-                                ))
-                                .child(section(
-                                    "View",
-                                    &[
-                                        "Space+drag / middle drag / H: pan · Scroll: pan",
-                                        "Ctrl+scroll / Ctrl++ / Ctrl+−: zoom",
-                                        "Ctrl+0: fit · Ctrl+1: actual size",
-                                        "? / F1: toggle help · Esc: close help",
-                                    ],
-                                ))
-                                .child(section(
-                                    "Text",
-                                    &[
-                                        "Double-click / Enter on selected text: edit",
-                                        "Enter: new line · Esc / click away: finish",
-                                        "Ctrl+B / Ctrl+I: bold / italic",
-                                        "Ctrl+Shift+> / <: increase / decrease font size",
-                                    ],
-                                ))
-                                .child(section(
-                                    "Output",
-                                    &[
-                                        "Ctrl+C: copy image · Ctrl+Shift+C: extract text",
-                                        "Ctrl+S: save · Ctrl+Shift+S: save new copy",
-                                        "Ctrl+W / Ctrl+Q: close editor",
-                                    ],
-                                )),
-                        ),
+                        .children(columns),
                 ),
         )
+}
+
+/// The annotator's shortcuts; `animation` swaps in what differs for an
+/// animated shot (Space plays, outputs are re-encoded animations).
+pub fn shortcut_help(
+    viewport: Size<Pixels>,
+    scroll: &ScrollHandle,
+    animation: bool,
+) -> impl IntoElement {
+    let tools = Tool::ALL.into_iter().map(|tool| {
+        let keys = ('a'..='z')
+            .chain('0'..='9')
+            .filter(|key| Tool::from_key(key.encode_utf8(&mut [0; 4])) == Some(tool))
+            .map(|key| key.to_ascii_uppercase().to_string())
+            .collect::<Vec<_>>()
+            .join(" / ");
+        let label = tool.label().split(" (").next().unwrap();
+        div().text_xs().child(format!("{label} — {keys}"))
+    });
+    let tools = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().text_sm().text_color(theme::accent()).child("Tools"))
+        .children(tools)
+        .child(
+            div()
+                .mt_2()
+                .text_xs()
+                .child("Shift: square / circle / 15° snap"),
+        );
+    type Rows = &'static [&'static str];
+    let (edit, view, output): (Rows, Rows, Rows) = if animation {
+        (
+            &[
+                "Drag empty canvas: marquee (fully contained)",
+                "Shift+click: toggle selection · Ctrl+A: select all",
+                "Drag selection: move · Arrows: nudge · Shift: ×10",
+                "Delete / Backspace: delete · Ctrl+D: duplicate",
+                "Ctrl+Z: undo · Ctrl+Shift+Z / Ctrl+Y: redo",
+                "Ctrl+Shift+] / [: bring to front / send to back",
+                "[ / ]: stroke size · F: toggle fill",
+                "I: pick a color anywhere on screen",
+                "Esc: cancel / cancel export / clear selection / close",
+            ],
+            &[
+                "Middle drag / H: pan · Scroll: pan",
+                "Ctrl+scroll / Ctrl++ / Ctrl+−: zoom",
+                "Ctrl+0: fit · Ctrl+1: actual size",
+                "? / F1: toggle help · Esc: close help",
+            ],
+            &[
+                "Ctrl+C: copy animation · Ctrl+Shift+C: extract text",
+                "Ctrl+S: save to recordings folder",
+                "Ctrl+Shift+S: save a new copy",
+                "Ctrl+W / Ctrl+Q: close (a running export finishes)",
+            ],
+        )
+    } else {
+        (
+            &[
+                "Drag empty canvas: marquee (fully contained)",
+                "Shift+click: toggle selection · Ctrl+A: select all",
+                "Drag selection: move · Arrows: nudge · Shift: ×10",
+                "Delete / Backspace: delete · Ctrl+D: duplicate",
+                "Ctrl+Z: undo · Ctrl+Shift+Z / Ctrl+Y: redo",
+                "Ctrl+Shift+] / [: bring to front / send to back",
+                "[ / ]: stroke size · F: toggle fill",
+                "I: pick a color anywhere on screen",
+                "Esc: cancel / clear selection / close editor",
+            ],
+            &[
+                "Space+drag / middle drag / H: pan · Scroll: pan",
+                "Ctrl+scroll / Ctrl++ / Ctrl+−: zoom",
+                "Ctrl+0: fit · Ctrl+1: actual size",
+                "? / F1: toggle help · Esc: close help",
+            ],
+            &[
+                "Ctrl+C: copy image · Ctrl+Shift+C: extract text",
+                "Ctrl+S: save · Ctrl+Shift+S: save new copy",
+                "Ctrl+W / Ctrl+Q: close editor",
+            ],
+        )
+    };
+    let sections = div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .when(animation, |d| {
+            d.child(help_section(
+                "Animation",
+                &[
+                    "Space: play / pause",
+                    "Click or drag the strip: scrub",
+                    "Format button: GIF, WebP, AVIF or JPEG XL",
+                    "Drawings apply to every frame; drawing pauses playback",
+                ],
+            ))
+        })
+        .child(help_section("Edit", edit))
+        .child(help_section("View", view))
+        .child(help_section(
+            "Text",
+            &[
+                "Double-click / Enter on selected text: edit",
+                "Enter: new line · Esc / click away: finish",
+                "Ctrl+B / Ctrl+I: bold / italic",
+                "Ctrl+Shift+> / <: increase / decrease font size",
+            ],
+        ))
+        .child(help_section("Output", output));
+    help_panel(viewport, scroll, [tools, sections])
 }

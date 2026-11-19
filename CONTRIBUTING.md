@@ -6,10 +6,13 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Build
 
-Use Rust 1.95 or newer and keep `Cargo.lock` intact. On Linux install the build
-libraries in `scripts/ci-deps-ubuntu.sh` (or their distribution equivalents).
-On Windows install Visual Studio C++ Build Tools. See the [README](README.md)
-for backend/runtime requirements.
+Use Rust 1.95 or newer and keep `Cargo.lock` intact. The codecs are compiled
+from source, so every platform needs a C and C++ compiler and CMake 3.16 or
+newer (libopus); NASM is optional and speeds up OpenH264. On Linux also install
+clang and the build libraries in `scripts/ci-deps-ubuntu.sh` (or their
+distribution equivalents). On Windows install Visual Studio C++ Build Tools
+with their CMake component. See the [README](README.md) for backend/runtime
+requirements.
 
 ```sh
 cargo build --locked
@@ -21,6 +24,19 @@ cargo test --locked
 On Windows omit `--features e2e`; the Wayland helper is Linux-only. Offscreen
 GPU tests require Mesa software rendering or a supported GPU; GPUI currently
 excludes those tests on Windows. OCR tests need Tesseract and language models.
+
+Linux contributors can type-check the Windows build with
+[cargo-xwin](https://github.com/rust-cross/cargo-xwin). libwebp's SSE4.1
+sources need the flag passed explicitly under clang-cl, and host include paths
+must not leak into the MSVC build:
+
+```sh
+env -u C_INCLUDE_PATH -u CPATH "CFLAGS_x86_64-pc-windows-msvc=-msse4.1" \
+  cargo xwin check --locked --target x86_64-pc-windows-msvc --all-targets
+```
+
+This checks compilation only; Windows behaviour still needs a native run
+(see [docs/testing.md](docs/testing.md#windows)).
 
 ## Private end-to-end desktops
 

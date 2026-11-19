@@ -26,9 +26,15 @@ Install `cargo-about 0.8.4` with `cargo install cargo-about --locked --version
 targets**, includes build/dev/transitive dependencies and uses Cargo.lock.
 The generated THIRD-PARTY-LICENSES.html is committed and regenerated in every
 release job. It includes MPL-2.0 source download instructions for the exact
-unmodified crate versions and the complete Inter OFL and Lucide/Feather texts.
-Every package ships this report plus the original asset and application
-licences. Review changes to the dependency allowlist rather than accepting new
+unmodified crate versions, the notices of the C/C++ libraries compiled into
+the executable (libopus, OpenH264, libwebp, Zstandard, Vulkan Memory
+Allocator; read from the locked crate sources, and the script fails if one of
+them moves or leaves Cargo.lock) and the complete Inter OFL and Lucide/Feather
+texts. Every package ships this report plus the original asset and application
+licences. quikscope links no FFmpeg and ships no codec DLLs or shared
+libraries. OpenH264 is built from source, so Cisco's H.264 patent licence
+(which covers only Cisco's own binaries) does not apply to it; the report says
+so. Review changes to the dependency allowlist rather than accepting new
 licences automatically. `cargo-deny 0.20.2` checks licences, security advisories,
 registry sources and wildcard dependencies. Duplicate transitive versions warn;
 seven reviewed unmaintained-only advisories have individually documented exceptions
@@ -40,11 +46,20 @@ Ubuntu 24.04 builds **one** release executable used by both nFPM 2.43.4 formats.
 Run `scripts/ci-deps-ubuntu.sh`, install `rpm dpkg-dev python3`, install nFPM,
 build `cargo build --frozen --release --bin quikscope`, then run
 `packaging/linux.sh [binary-path]`. The script requires branding PNGs and the
-licence report and fails explicitly when these are missing.
+licence report and fails explicitly when these are missing, or when the
+executable links FFmpeg.
 
-`dpkg-shlibdeps` discovers Debian package/version dependencies; RPM's
-`find-requires` discovers ELF sonames and versioned symbols. Explicit runtime
-requirements cover xkbcommon and dynamically loaded Wayland/Vulkan.
+Building needs a C and C++ compiler, CMake ≥ 3.16 (libopus), clang/libclang
+(PipeWire bindings) and the development packages in the script; NASM is
+optional and gives OpenH264 its SIMD paths, so release builds install it.
+OpenH264, libopus, libwebp, Zstandard and VMA are compiled into the executable
+and add no runtime package.
+
+`dpkg-shlibdeps` discovers Debian package/version dependencies (ALSA,
+PulseAudio, PipeWire, GBM, xkbcommon, …); RPM's `find-requires` discovers ELF
+sonames and versioned symbols. Explicit runtime requirements cover xkbcommon
+and the dynamically loaded Wayland client and Vulkan loader (rendering and
+Vulkan Video H.264).
 Fontconfig and FreeType are build dependencies, not linked runtime dependencies;
 fontdb reads font configuration itself. Tesseract/language data and
 xdg-desktop-portal are recommendations,
@@ -95,12 +110,17 @@ The Windows runner passes Cargo's reported compiler-artifact executable path,
 so custom target layouts do not rely on a guessed path. NSIS source-file paths
 use Windows separators, which Linux makensis normalizes for its host filesystem.
 
+The build needs the Visual Studio C++ Build Tools, including CMake (libopus;
+GitHub's runner image has it). The release runner also installs NASM so the
+bundled OpenH264 gets its SIMD paths. The installer contains quikscope.exe
+and licence/readme files only: codecs are compiled in, no DLLs ship beside it.
+
 The x86_64 MSVC target statically links the CRT via `.cargo/config.toml`, including
 local builds and `cargo install --path .` run from the source checkout. If
 overriding `RUSTFLAGS`, retain `-C target-feature=+crt-static`. The release runner
 sets this explicitly (toolchain actions can override target flags), builds for
-the explicit MSVC target, and rejects VCRUNTIME/MSVCP/api-ms-win-crt DLL imports
-before packaging. No separate Visual C++ redistributable is required.
+the explicit MSVC target, and rejects VCRUNTIME/MSVCP/api-ms-win-crt and FFmpeg
+DLL imports before packaging. No separate Visual C++ redistributable is required.
 
 The installer writes only the current user's LocalAppData/Start menu/HKCU,
 registers Installed Apps metadata, and delegates optional login startup to

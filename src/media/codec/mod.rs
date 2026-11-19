@@ -86,8 +86,12 @@ pub trait VideoEncoder: Send {
     /// Encodes one picture (its size must match the config). Returns the
     /// access units finished so far; there are no B-frames, so decode order
     /// is presentation order.
-    fn encode(&mut self, picture: &Yuv420, pts: Duration, keyframe: bool)
-    -> Result<Vec<EncodedFrame>>;
+    fn encode(
+        &mut self,
+        picture: &Yuv420,
+        pts: Duration,
+        keyframe: bool,
+    ) -> Result<Vec<EncodedFrame>>;
     /// Drains everything still in flight.
     fn finish(&mut self) -> Result<Vec<EncodedFrame>>;
 }
@@ -98,8 +102,20 @@ pub fn h264_encoder(
     config: &VideoEncoderConfig,
     preference: EncoderPreference,
 ) -> Result<Box<dyn VideoEncoder>> {
-    let _ = (config, preference);
-    todo!("VideoCodecs: pick h264_vulkan, fall back to h264_soft")
+    if preference == EncoderPreference::Auto {
+        // A failed open has already released its device: no probe session
+        // stays alive next to the encoder that is actually used.
+        match h264_vulkan::Encoder::open(config) {
+            Ok(encoder) => {
+                log::info!("H.264 encoder: {}", encoder.name());
+                return Ok(Box::new(encoder));
+            }
+            Err(err) => log::info!("H.264 encoder: OpenH264, Vulkan Video unusable: {err:#}"),
+        }
+    } else {
+        log::info!("H.264 encoder: OpenH264 (software requested)");
+    }
+    Ok(Box::new(h264_soft::Encoder::open(config)?))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,9 +138,108 @@ pub trait VideoDecoder: Send {
 /// The best working H.264 decoder: Vulkan Video unless `preference` is
 /// [`EncoderPreference::Software`] or unavailable, else OpenH264.
 pub fn h264_decoder(preference: EncoderPreference) -> Result<Box<dyn VideoDecoder>> {
-    let _ = preference;
-    todo!("VideoCodecs: pick h264_vulkan, fall back to h264_soft")
+    if preference == EncoderPreference::Auto {
+        match h264_vulkan::Decoder::open() {
+            Ok(decoder) => {
+                log::info!("H.264 decoder: {}", decoder.name());
+                return Ok(Box::new(HardwareFirstDecoder {
+                    active: ActiveDecoder::Hardware(decoder),
+                    replay: Some(Vec::new()),
+                }));
+            }
+            Err(err) => log::info!("H.264 decoder: OpenH264, Vulkan Video unusable: {err:#}"),
+        }
+    }
+    Ok(Box::new(h264_soft::Decoder::open()?))
 }
+
+/// Access units kept for a hand-over to OpenH264; a stream the GPU takes
+/// shows that with its first picture, long before this.
+const MAX_REPLAY: usize = 32;
+
+/// The Vulkan decoder, handing over to OpenH264 when the GPU rejects the
+/// stream (a profile or coding tool it lacks), which only shows once access
+/// units arrive. Until the first picture comes out, the units fed so far are
+/// kept so OpenH264 can start from the same point.
+struct HardwareFirstDecoder {
+    active: ActiveDecoder,
+    /// `None` once the hardware decoder has proven itself.
+    replay: Option<Vec<(Vec<u8>, Duration)>>,
+}
+
+enum ActiveDecoder {
+    Hardware(h264_vulkan::Decoder),
+    Software(h264_soft::Decoder),
+}
+
+impl HardwareFirstDecoder {
+    /// Switches to OpenH264 after `err` if nothing came out of the GPU yet,
+    /// returning what OpenH264 made of the replayed access units.
+    fn fall_back(&mut self, err: anyhow::Error) -> Result<Vec<DecodedPicture>> {
+        let Some(replay) = self.replay.take() else {
+            return Err(err);
+        };
+        log::warn!("Vulkan H.264 decoder rejected the stream ({err:#}); switching to OpenH264");
+        let mut software = h264_soft::Decoder::open()?;
+        let mut pictures = Vec::new();
+        for (access_unit, pts) in replay {
+            pictures.extend(software.decode(&access_unit, pts)?);
+        }
+        // Releases the GPU decoder (and, if unused elsewhere, the device).
+        self.active = ActiveDecoder::Software(software);
+        Ok(pictures)
+    }
+}
+
+impl VideoDecoder for HardwareFirstDecoder {
+    fn name(&self) -> &str {
+        match &self.active {
+            ActiveDecoder::Hardware(decoder) => decoder.name(),
+            ActiveDecoder::Software(decoder) => decoder.name(),
+        }
+    }
+
+    fn decode(&mut self, access_unit: &[u8], pts: Duration) -> Result<Vec<DecodedPicture>> {
+        let hardware = match &mut self.active {
+            ActiveDecoder::Hardware(decoder) => decoder,
+            ActiveDecoder::Software(decoder) => return decoder.decode(access_unit, pts),
+        };
+        if let Some(replay) = &mut self.replay {
+            replay.push((access_unit.to_vec(), pts));
+        }
+        match hardware.decode(access_unit, pts) {
+            Ok(pictures) => {
+                if !pictures.is_empty()
+                    || self.replay.as_ref().is_some_and(|r| r.len() >= MAX_REPLAY)
+                {
+                    self.replay = None;
+                }
+                Ok(pictures)
+            }
+            Err(err) => self.fall_back(err),
+        }
+    }
+
+    fn flush(&mut self) -> Result<Vec<DecodedPicture>> {
+        let result = match &mut self.active {
+            ActiveDecoder::Hardware(decoder) => decoder.flush(),
+            ActiveDecoder::Software(decoder) => return decoder.flush(),
+        };
+        match result {
+            Ok(pictures) => Ok(pictures),
+            Err(err) => {
+                let mut pictures = self.fall_back(err)?;
+                if let ActiveDecoder::Software(decoder) = &mut self.active {
+                    pictures.extend(decoder.flush()?);
+                }
+                Ok(pictures)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod h264_tests;
 
 /// Decodes one compressed audio track to interleaved f32 at its own
 /// [`spec`](AudioDecoder::spec).
@@ -142,6 +257,10 @@ pub fn audio_decoder(
     codec_private: &[u8],
     spec: AudioSpec,
 ) -> Result<Box<dyn AudioDecoder>> {
-    let _ = (codec, codec_private, spec);
-    todo!("AudioCodecs: opus::Decoder or aac::Decoder")
+    use super::container::Codec;
+    Ok(match codec {
+        Codec::Opus => Box::new(opus::Decoder::new(codec_private)?),
+        Codec::Aac => Box::new(aac::Decoder::new(codec_private, spec)?),
+        Codec::H264 | Codec::Av1 => anyhow::bail!("{codec:?} is not an audio codec"),
+    })
 }

@@ -2,7 +2,7 @@
 //! open without GPU start-up cost), the capture/clipboard/notification
 //! threads, recent shots, and the IPC socket.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read as _, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -19,7 +19,7 @@ use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use gpui::{
     App, AppContext as _, AsyncApp, BorrowAppContext as _, DisplayId, Entity, Global, QuitMode,
-    WindowBounds, WindowHandle, WindowOptions, px, size,
+    WindowBounds, WindowHandle, WindowId, WindowOptions, px, size,
 };
 
 use crate::cache::LastCapture;
@@ -27,8 +27,10 @@ use crate::capture::{Composed, Snapshot};
 use crate::config::{self, Config};
 use crate::document::{Document, Rgba};
 use crate::geom::IRect;
-use crate::ipc::{CaptureOptions, Mode, Request, Response, Switch};
-use crate::platform::{self, Capture, Clipboard, Event, Notifier, Platform};
+use crate::ipc::{CaptureOptions, Mode, RecordAction, Request, Response, Switch};
+use crate::media::MediaInfo;
+use crate::output::OutputFile;
+use crate::platform::{self, Capture, Clipboard, Event, EventSink, Notifier, Platform, Tray};
 use crate::raster::{Compression, Image};
 use crate::ui::color_window::{self, ColorWindow};
 use crate::ui::editor::{Editor, EditorServices, LastTool};
@@ -39,8 +41,9 @@ use crate::ui::{self, Assets, Shot};
 
 mod record;
 
-/// Shots kept in memory (newest last). Older ones remain reachable through
-/// the on-disk cache only for the most recent capture.
+/// Shots kept in memory (newest last), and recorded videos a notification
+/// click can still open. Older shots remain reachable through the on-disk
+/// cache only for the most recent capture.
 const KEEP_SHOTS: usize = 8;
 
 enum Msg {
@@ -48,6 +51,9 @@ enum Msg {
     Request(Request, oneshot::Sender<Response>),
     /// From the desktop: notification clicks, tray menus, global hotkeys.
     Desktop(Event),
+    /// SIGTERM or SIGINT: save a running recording, then quit.
+    #[cfg(unix)]
+    Shutdown,
 }
 
 struct Daemon {
@@ -57,22 +63,65 @@ struct Daemon {
     cache: LastCapture,
     shots: VecDeque<Arc<Shot>>,
     docs: HashMap<u64, Entity<Document>>,
-    editors: HashMap<u64, WindowHandle<Editor>>,
+    media: Media,
     settings: Option<WindowHandle<Settings>>,
     /// The window showing the last color picked with `quikscope pick`.
     color: Option<WindowHandle<ColorWindow>>,
-    next_id: u64,
     selecting: bool,
     /// Capture notifications; starts from the config, changed by
     /// `quikscope notifications …` (which also persists it).
     notify: bool,
     recording: record::Slot,
-    /// Recorded or opened videos by id (shared with shot ids), for
-    /// notification clicks.
-    videos: HashMap<u64, PathBuf>,
-    video_editors: HashMap<u64, WindowHandle<VideoEditor>>,
     /// Recordable audio devices, refreshed in the background.
     audio_devices: Vec<crate::media::AudioDevice>,
+    /// The tray icon, if any (on Linux it follows `record.tray`).
+    tray: Option<Arc<dyn Tray>>,
+    /// Where desktop events go, for a tray started after start-up.
+    #[cfg(target_os = "linux")]
+    events: EventSink,
+    masters: record::Masters,
+    /// Set once quitting began: no new recordings start.
+    quitting: bool,
+}
+
+/// Shots and videos share one id space, so a notification click needs only
+/// an id; this hands them out and tracks the windows showing them.
+#[derive(Default)]
+struct Media {
+    last_id: u64,
+    editors: HashMap<u64, WindowHandle<Editor>>,
+    video_editors: HashMap<u64, WindowHandle<VideoEditor>>,
+    /// The newest recorded or opened videos.
+    videos: BTreeMap<u64, PathBuf>,
+}
+
+impl Media {
+    fn allocate(&mut self) -> u64 {
+        self.last_id += 1;
+        self.last_id
+    }
+
+    fn add_video(&mut self, id: u64, path: PathBuf) {
+        self.videos.insert(id, path);
+        // Oldest first, but a video whose editor is open stays reachable.
+        let mut excess = self.videos.len().saturating_sub(KEEP_SHOTS);
+        self.videos.retain(|id, _| {
+            let forget = excess > 0 && !self.video_editors.contains_key(id);
+            excess -= usize::from(forget);
+            !forget
+        });
+    }
+
+    fn video(&self, id: u64) -> Option<PathBuf> {
+        self.videos.get(&id).cloned()
+    }
+
+    /// Forgets the editor that lived in `window`, so a closed editor's
+    /// shot or video holds nothing open.
+    fn window_closed(&mut self, window: WindowId) {
+        self.editors.retain(|_, h| h.window_id() != window);
+        self.video_editors.retain(|_, h| h.window_id() != window);
+    }
 }
 
 impl Global for Daemon {}
@@ -100,6 +149,10 @@ pub fn bind(socket: &Path) -> Result<UnixListener> {
 }
 
 pub fn run(socket: PathBuf) -> Result<()> {
+    let (tx, rx) = mpsc::unbounded::<Msg>();
+    // Before any other thread exists: they all inherit the blocked signals.
+    #[cfg(unix)]
+    route_signals(tx.clone())?;
     #[cfg(windows)]
     platform::windows::initialize()?;
     let started = Instant::now();
@@ -117,21 +170,22 @@ pub fn run(socket: PathBuf) -> Result<()> {
     // text extraction starts reading immediately.
     crate::ocr::warm(&config.ocr.languages);
     let listener = bind(&socket)?;
-    let (tx, rx) = mpsc::unbounded::<Msg>();
     spawn_listener(listener, tx.clone());
+    // After `bind`: no other daemon on this socket uses its masters.
+    let masters_root = config::cache_dir().join("recordings");
+    let masters = record::Masters::claim(&masters_root, &socket);
 
+    let events: EventSink = {
+        let tx = tx.clone();
+        Arc::new(move |event| {
+            let _ = tx.unbounded_send(Msg::Desktop(event));
+        })
+    };
     // Platform backends connect concurrently with GPUI start-up.
     let services = std::thread::spawn({
-        let tx = tx.clone();
+        let events = events.clone();
         let config = config.clone();
-        move || {
-            platform::connect(
-                Arc::new(move |event| {
-                    let _ = tx.unbounded_send(Msg::Desktop(event));
-                }),
-                &config,
-            )
-        }
+        move || platform::connect(events, &config)
     });
 
     let socket_for_exit = socket.clone();
@@ -140,16 +194,21 @@ pub fn run(socket: PathBuf) -> Result<()> {
         .with_quit_mode(QuitMode::Explicit);
     app.run(move |cx: &mut App| {
         ui::init(cx);
-        let platform = Arc::new(services.join().expect("platform start-up panicked"));
+        let mut platform = services.join().expect("platform start-up panicked");
         log::info!("platform backend: {}", platform.name);
+        let tray = platform.tray.take();
+        let platform = Arc::new(platform);
         cx.set_global(EditorServices {
             config: config.clone(),
             clipboard: platform.clipboard.clone(),
+            notifier: platform.notifier.clone(),
+            clips: config::cache_dir().join("clips"),
             pick_color: Some(std::rc::Rc::new(|cx: &mut App| {
                 cx.spawn(async move |cx| pick_color(cx).await)
             })),
         });
         let prewarm = platform.prewarm_options();
+        let own_masters = masters.dir.clone();
         cx.set_global(Daemon {
             notify: config.notify,
             config,
@@ -157,22 +216,41 @@ pub fn run(socket: PathBuf) -> Result<()> {
             cache: LastCapture::spawn(config::last_capture_path()),
             shots: VecDeque::new(),
             docs: HashMap::new(),
-            editors: HashMap::new(),
+            media: Media::default(),
             settings: None,
             color: None,
-            next_id: 1,
             selecting: false,
             recording: record::Slot::Idle,
-            videos: HashMap::new(),
-            video_editors: HashMap::new(),
             audio_devices: Vec::new(),
+            tray,
+            #[cfg(target_os = "linux")]
+            events,
+            masters,
+            quitting: false,
         });
         record::refresh_devices(cx);
-        record::clear_masters(cx);
-        match prewarm {
-            Some(options) => prewarm_gpu(options, cx),
-            None => log::debug!("GPU prewarm skipped: no invisible surface on this backend"),
+        cx.background_spawn(async move { record::clean_masters(&masters_root, &own_masters) })
+            .detach();
+        if std::env::var_os("QUIKSCOPE_NO_PREWARM").is_some_and(|v| v == "1") {
+            log::info!("GPU prewarm skipped: QUIKSCOPE_NO_PREWARM=1");
+        } else {
+            match prewarm {
+                Some(options) => prewarm_gpu(options, cx),
+                None => log::debug!("GPU prewarm skipped: no invisible surface on this backend"),
+            }
         }
+        cx.on_window_closed(|cx, window| {
+            cx.update_global::<Daemon, _>(|d, _| {
+                d.media.window_closed(window);
+                if d.settings.is_some_and(|h| h.window_id() == window) {
+                    d.settings = None;
+                }
+                if d.color.is_some_and(|h| h.window_id() == window) {
+                    d.color = None;
+                }
+            })
+        })
+        .detach();
         cx.on_action::<OpenSettings>(|_, cx| {
             if let Err(error) = open_settings(false, cx) {
                 log::error!("opening settings: {error:#}");
@@ -183,6 +261,7 @@ pub fn run(socket: PathBuf) -> Result<()> {
             cx.spawn(async move |cx| {
                 if let Err(error) = open_path(path, cx).await {
                     log::error!("annotating video frame: {error:#}");
+                    notify_failure("Could not open the frame", &error, cx);
                 }
             })
             .detach();
@@ -200,40 +279,23 @@ pub fn run(socket: PathBuf) -> Result<()> {
             while let Some(msg) = rx.next().await {
                 match msg {
                     Msg::Request(req, reply) => {
-                        cx.spawn(async move |cx| {
-                            let quit = req == Request::Quit;
-                            let response = handle(req, cx).await;
-                            let _ = reply.send(response);
-                            if quit {
-                                // Give the IPC thread a moment to flush the reply.
-                                cx.background_executor()
-                                    .timer(Duration::from_millis(20))
-                                    .await;
-                                cx.update(|cx| cx.quit());
-                            }
-                        })
-                        .detach();
-                    }
-                    Msg::Desktop(Event::OpenShot(id)) => {
-                        cx.update(|cx| {
-                            if let Err(e) = record::open_media(id, cx) {
-                                log::error!("opening editor: {e:#}");
-                            }
-                        });
+                        cx.spawn(async move |cx| dispatch(req, Some(reply), cx).await)
+                            .detach();
                     }
                     Msg::Desktop(Event::Request(req)) => {
+                        log::debug!("desktop request: {req}");
+                        cx.spawn(async move |cx| dispatch(req, None, cx).await)
+                            .detach();
+                    }
+                    #[cfg(unix)]
+                    Msg::Shutdown => {
+                        cx.spawn(async move |cx| quit(None, cx).await).detach();
+                    }
+                    Msg::Desktop(Event::OpenShot(id)) => {
                         cx.spawn(async move |cx| {
-                            let quit = req == Request::Quit;
-                            // Recording requests notify their own failures.
-                            let notifies = matches!(req, Request::Record(_));
-                            log::debug!("desktop request: {req}");
-                            if let Response::Error(e) = handle(req, cx).await
-                                && !notifies
-                            {
-                                notify_error("Screenshot failed", &e, cx);
-                            }
-                            if quit {
-                                cx.update(|cx| cx.quit());
+                            if let Err(e) = record::open_media(id, cx).await {
+                                log::error!("opening editor: {e:#}");
+                                notify_failure("Could not open the capture", &e, cx);
                             }
                         })
                         .detach();
@@ -244,12 +306,60 @@ pub fn run(socket: PathBuf) -> Result<()> {
                     Msg::Desktop(Event::SetFps(kind, fps)) => {
                         cx.update(|cx| record::set_fps(kind, fps, cx));
                     }
+                    Msg::Desktop(Event::RefreshAudioDevices) => {
+                        cx.update(record::refresh_devices);
+                    }
                 }
             }
         })
         .detach();
     });
     let _ = std::fs::remove_file(socket_for_exit);
+    Ok(())
+}
+
+/// Routes SIGTERM and SIGINT (`systemctl stop`, logout, Ctrl+C) into the
+/// same shutdown as `quikscope quit`, which saves a running recording. The
+/// signals are blocked here, before any other thread starts, so every
+/// thread inherits the mask and only the waiting thread receives them
+/// (`std::process::Command` clears the mask for child processes). A second
+/// signal exits at once, for a save that hangs.
+#[cfg(unix)]
+fn route_signals(tx: mpsc::UnboundedSender<Msg>) -> Result<()> {
+    // SAFETY: plain libc signal-set calls on a local, zero-initialised set.
+    let set = unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        let error = libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        anyhow::ensure!(
+            error == 0,
+            "blocking signals: {}",
+            std::io::Error::from_raw_os_error(error)
+        );
+        set
+    };
+    std::thread::Builder::new()
+        .name("quikscope-signals".into())
+        .spawn(move || {
+            let mut quitting = false;
+            loop {
+                let mut signal = 0;
+                // SAFETY: `set` lives for the whole loop; `signal` is a valid out-pointer.
+                if unsafe { libc::sigwait(&set, &mut signal) } != 0 {
+                    continue;
+                }
+                if quitting {
+                    log::warn!("signal {signal} again: exiting without waiting");
+                    std::process::exit(128 + signal);
+                }
+                log::info!("signal {signal}: saving any recording, then quitting");
+                quitting = true;
+                let _ = tx.unbounded_send(Msg::Shutdown);
+            }
+        })
+        .context("starting the signal thread")?;
     Ok(())
 }
 
@@ -373,16 +483,85 @@ mod ipc_limit_tests {
     }
 }
 
-async fn handle(req: Request, cx: &mut AsyncApp) -> Response {
-    let result = match req {
-        Request::Ping => return Response::Pong,
-        Request::Quit => {
-            // Finish the cache write so `open-last` after a restart sees
-            // the newest capture.
-            let cache = daemon(cx, |d, _| d.cache.clone());
-            cx.background_spawn(async move { cache.flush() }).await;
-            return Response::Pong;
+/// Runs one request from a client (`reply`) or the desktop (a tray menu or
+/// global hotkey, no reply). Failures nobody sees otherwise become a
+/// notification titled after the request; recording requests always
+/// notify, because compositor keybinds run them as clients without a
+/// terminal.
+async fn dispatch(req: Request, reply: Option<oneshot::Sender<Response>>, cx: &mut AsyncApp) {
+    if req == Request::Quit {
+        return quit(reply, cx).await;
+    }
+    let title = failure_title(&req);
+    let notify = reply.is_none()
+        || matches!(
+            req,
+            Request::Record(_) | Request::RecordControl(RecordAction::Stop)
+        );
+    let response = match handle(req, cx).await {
+        Ok(Some(r)) => r,
+        Ok(None) => Response::Cancelled,
+        Err(e) => {
+            log::error!("{e:#}");
+            if notify {
+                notify_failure(title, &e, cx);
+            }
+            Response::Error(format!("{e:#}"))
         }
+    };
+    if let Some(reply) = reply {
+        let _ = reply.send(response);
+    }
+}
+
+fn failure_title(req: &Request) -> &'static str {
+    match req {
+        Request::Capture(_, o) if o.text => "Text extraction failed",
+        Request::Capture(..) => "Screenshot failed",
+        Request::OpenLast => "Could not open the last capture",
+        Request::Open(_) => "Could not open the file",
+        Request::Settings => "Could not open settings",
+        Request::Notifications(_) => "Could not change notifications",
+        Request::Pick => "Color pick failed",
+        Request::Record(_) => "Recording failed",
+        Request::RecordControl(RecordAction::Stop) => "Saving the recording failed",
+        Request::RecordControl(_) => "Recording control failed",
+        Request::AudioDevices => "Could not list audio devices",
+        Request::Version | Request::Ping | Request::Quit => "quikscope failed",
+    }
+}
+
+/// The one way the daemon ends: IPC `quit`, a tray's Quit, SIGTERM/SIGINT.
+/// A running recording is stopped and saved and a save in progress awaited
+/// first, then the `open-last` cache is flushed so a restart sees the newest
+/// capture; only then does `reply` (an IPC `quit`) get its answer. A second
+/// request while that runs is answered at once and leaves the quitting to
+/// the first.
+async fn quit(reply: Option<oneshot::Sender<Response>>, cx: &mut AsyncApp) {
+    let first = !daemon(cx, |d, _| std::mem::replace(&mut d.quitting, true));
+    if first {
+        log::info!("quitting");
+        record::finish_for_quit(cx).await;
+        let cache = daemon(cx, |d, _| d.cache.clone());
+        cx.background_spawn(async move { cache.flush() }).await;
+    }
+    if let Some(reply) = reply {
+        let _ = reply.send(Response::Pong);
+    }
+    if first {
+        // Give the IPC thread a moment to flush the reply.
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+        cx.update(|cx| cx.quit());
+    }
+}
+
+async fn handle(req: Request, cx: &mut AsyncApp) -> Result<Option<Response>> {
+    match req {
+        Request::Ping => Ok(Some(Response::Pong)),
+        Request::Version => Ok(Some(Response::Version(env!("CARGO_PKG_VERSION").into()))),
+        Request::Quit => unreachable!("`dispatch` routes quit to `quit`"),
         Request::Capture(mode, opts) => capture(mode, opts, cx).await,
         Request::OpenLast => open_last(cx).await,
         Request::Notifications(switch) => set_notifications(switch, cx).await,
@@ -394,14 +573,6 @@ async fn handle(req: Request, cx: &mut AsyncApp) -> Response {
         Request::Record(options) => record::toggle(options, cx).await,
         Request::RecordControl(action) => record::control(action, cx).await,
         Request::AudioDevices => record::audio_devices(cx).await,
-    };
-    match result {
-        Ok(Some(r)) => r,
-        Ok(None) => Response::Cancelled,
-        Err(e) => {
-            log::error!("{e:#}");
-            Response::Error(format!("{e:#}"))
-        }
     }
 }
 
@@ -434,6 +605,26 @@ fn notify_error(summary: &'static str, message: &str, cx: &mut AsyncApp) {
     })
     .detach();
 }
+
+/// [`notify_error`] for `error`, unless it was [`Shown`] already.
+fn notify_failure(summary: &'static str, error: &anyhow::Error, cx: &mut AsyncApp) {
+    if !error.is::<Shown>() {
+        notify_error(summary, &format!("{error:#}"), cx);
+    }
+}
+
+/// An error the user already saw in a notification of its own (with its
+/// own title and click action), so it is not notified again.
+#[derive(Debug)]
+struct Shown(anyhow::Error);
+
+impl std::fmt::Display for Shown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for Shown {}
 
 async fn capture(mode: Mode, opts: CaptureOptions, cx: &mut AsyncApp) -> Result<Option<Response>> {
     let started = Instant::now();
@@ -1035,11 +1226,7 @@ fn add_shot(
     source: Option<PathBuf>,
     cx: &mut AsyncApp,
 ) -> Arc<Shot> {
-    let id = daemon(cx, |d, _| {
-        let id = d.next_id;
-        d.next_id += 1;
-        id
-    });
+    let id = daemon(cx, |d, _| d.media.allocate());
     insert_shot(Shot::new(id, image, scale, source), cx)
 }
 
@@ -1052,16 +1239,14 @@ fn insert_shot(shot: Shot, cx: &mut AsyncApp) -> Arc<Shot> {
             if let Some(old) = d.shots.pop_front() {
                 d.docs.remove(&old.id);
                 // A lossless animation master is only reachable through its
-                // shot; an editor still showing it keeps it until restart.
+                // shot. An editor showing it, or an export reading it, pins
+                // it; the last of those removes it.
                 if let Some(animation) = &old.animation
-                    && animation.path.starts_with(record::masters_dir())
-                    && !d.editors.contains_key(&old.id)
+                    && animation.path.starts_with(&d.masters.dir)
                 {
                     let path = animation.path.clone();
-                    cx.background_spawn(async move {
-                        let _ = std::fs::remove_file(path);
-                    })
-                    .detach();
+                    cx.background_spawn(async move { ui::clips::remove_when_unused(path) })
+                        .detach();
                 }
             }
         }
@@ -1101,10 +1286,10 @@ async fn finish_capture(
 
     let saved = if opts.save {
         let image = shot.image.clone();
-        let path = config.new_save_path(shot.taken);
+        let candidate = config.new_save_path(shot.taken);
         Some(
             cx.background_spawn(async move {
-                image.save_png(&path, Compression::Balanced).map(|_| path)
+                image.save_png_to(OutputFile::reserve(&candidate)?, Compression::Balanced)
             })
             .await?,
         )
@@ -1277,9 +1462,10 @@ async fn set_notifications(switch: Switch, cx: &mut AsyncApp) -> Result<Option<R
 
 /// Every settings entry point shares the same in-process config generation.
 /// Existing editor tools retain their current styles; future editors/captures
-/// and save/clipboard services immediately use these new defaults.
+/// and save/clipboard services immediately use these new defaults, and the
+/// tray follows at once (shown or removed, rates and devices re-checked).
 fn apply_config(config: Arc<Config>, cx: &mut App) {
-    cx.update_global::<Daemon, _>(|d, _| {
+    let old = cx.update_global::<Daemon, _>(|d, _| {
         #[cfg(windows)]
         if d.config.hotkeys != config.hotkeys
             && let Some(shell) = &d.platform.shell
@@ -1287,9 +1473,18 @@ fn apply_config(config: Arc<Config>, cx: &mut App) {
             shell.update_hotkeys(&config.hotkeys);
         }
         d.notify = config.notify;
-        d.config = config.clone();
+        std::mem::replace(&mut d.config, config.clone())
     });
     cx.update_global::<EditorServices, _>(|services, _| services.config = config.clone());
+    #[cfg(target_os = "linux")]
+    if old.record.tray != config.record.tray {
+        record::set_tray(cx);
+    }
+    if old.record != config.record {
+        // Devices may have come or gone since they were last listed.
+        record::refresh_devices(cx);
+    }
+    record::update_tray(cx);
     let settings = cx.global::<Daemon>().settings;
     // UI edits invoke this while the Settings entity is borrowed. Refresh only
     // after that update ends; external IPC/tray changes use the same path.
@@ -1408,16 +1603,16 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
     match probed {
         Ok(info) if info.kind == crate::media::Kind::Video => {
             let id = daemon(cx, |d, _| {
-                let id = d.next_id;
-                d.next_id += 1;
-                d.videos.insert(id, path.clone());
+                let id = d.media.allocate();
+                d.media.add_video(id, path.clone());
                 id
             });
-            cx.update(|cx| open_video(id, path, cx))?;
+            let (width, height) = (info.width, info.height);
+            open_video(id, path, Some(info), cx).await?;
             return Ok(Some(Response::Shot {
                 id,
-                width: info.width,
-                height: info.height,
+                width,
+                height,
                 saved: None,
             }));
         }
@@ -1429,11 +1624,7 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
             let format = crate::media::OutputFormat::from_path(&path)
                 .filter(|f| !f.is_video())
                 .unwrap_or_else(|| daemon(cx, |d, _| d.config.record.animation_format()));
-            let id = daemon(cx, |d, _| {
-                let id = d.next_id;
-                d.next_id += 1;
-                id
-            });
+            let id = daemon(cx, |d, _| d.media.allocate());
             let shot = Shot::new(id, Arc::new(first), 1.0, Some(path.clone()))
                 .with_animation(ui::Animation { path, info, format });
             let shot = insert_shot(shot, cx);
@@ -1455,73 +1646,73 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
     Ok(Some(shot_response(&shot)))
 }
 
-/// Opens (or focuses) the video editor for video `id` at `path`.
-fn open_video(id: u64, path: PathBuf, cx: &mut App) -> Result<()> {
-    let existing = cx.read_global::<Daemon, _>(|d, _| d.video_editors.get(&id).copied());
+/// Opens (or focuses) the video editor for video `id` at `path`, probing
+/// it unless the caller already did; returns once the window is open.
+async fn open_video(
+    id: u64,
+    path: PathBuf,
+    info: Option<MediaInfo>,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let existing = daemon(cx, |d, _| d.media.video_editors.get(&id).copied());
     if let Some(handle) = existing
-        && handle
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok()
+        && cx.update(|cx| {
+            handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        })
     {
         return Ok(());
     }
-    cx.spawn(async move |cx| {
-        let p = path.clone();
-        let info = match cx
-            .background_spawn(async move { crate::media::decode::probe(&p) })
-            .await
-        {
-            Ok(info) => info,
-            Err(e) => {
-                log::error!("opening {}: {e:#}", path.display());
-                notify_error("Could not open video", &format!("{e:#}"), cx);
-                return;
-            }
-        };
-        let opened = cx.update(|cx| -> Result<WindowHandle<VideoEditor>> {
-            let screen = cx
-                .displays()
-                .iter()
-                .map(|d| d.bounds().size)
-                .max_by_key(|s| (f32::from(s.width) * f32::from(s.height)) as i64)
-                .unwrap_or(size(px(1920.), px(1080.)));
-            let title = format!(
-                "quikscope — {}",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            );
-            cx.open_window(
-                WindowOptions {
-                    titlebar: Some(gpui::TitlebarOptions {
-                        title: Some(title.into()),
-                        ..Default::default()
-                    }),
-                    window_bounds: Some(WindowBounds::centered(
-                        crate::ui::video_editor::window_size(&info, screen),
-                        cx,
-                    )),
-                    app_id: Some("quikscope".into()),
-                    #[cfg(target_os = "linux")]
-                    icon: Some(crate::ui::window_icon()),
-                    focus: true,
-                    show: true,
-                    window_min_size: Some(size(px(480.), px(320.))),
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    let editor = cx.new(|cx| VideoEditor::new(path, info, window, cx));
-                    window.activate_window();
-                    editor
-                },
-            )
-        });
-        match opened {
-            Ok(handle) => daemon(cx, |d, _| {
-                d.video_editors.insert(id, handle);
-            }),
-            Err(e) => log::error!("opening the video editor: {e:#}"),
+    let info = match info {
+        Some(info) => info,
+        None => {
+            let p = path.clone();
+            cx.background_spawn(async move { crate::media::decode::probe(&p) })
+                .await
+                .with_context(|| format!("opening {}", path.display()))?
         }
-    })
-    .detach();
+    };
+    let handle = cx.update(|cx| -> Result<WindowHandle<VideoEditor>> {
+        let screen = cx
+            .displays()
+            .iter()
+            .map(|d| d.bounds().size)
+            .max_by_key(|s| (f32::from(s.width) * f32::from(s.height)) as i64)
+            .unwrap_or(size(px(1920.), px(1080.)));
+        let title = format!(
+            "quikscope — {}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        cx.open_window(
+            WindowOptions {
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some(title.into()),
+                    ..Default::default()
+                }),
+                window_bounds: Some(WindowBounds::centered(
+                    crate::ui::video_editor::window_size(&info, screen),
+                    cx,
+                )),
+                app_id: Some("quikscope".into()),
+                #[cfg(target_os = "linux")]
+                icon: Some(crate::ui::window_icon()),
+                focus: true,
+                show: true,
+                window_min_size: Some(size(px(480.), px(320.))),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let editor = cx.new(|cx| VideoEditor::new(path, info, window, cx));
+                window.activate_window();
+                editor
+            },
+        )
+        .context("opening the video editor")
+    })?;
+    daemon(cx, |d, _| {
+        d.media.video_editors.insert(id, handle);
+    });
     Ok(())
 }
 
@@ -1577,7 +1768,7 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
     let (shot, existing) = cx.read_global::<Daemon, _>(|d, _| {
         (
             d.shots.iter().find(|s| s.id == id).cloned(),
-            d.editors.get(&id).copied(),
+            d.media.editors.get(&id).copied(),
         )
     });
     let shot = shot.with_context(|| format!("shot {id} is no longer in memory"))?;
@@ -1649,7 +1840,7 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
         },
     )?;
     cx.update_global::<Daemon, _>(|d, _| {
-        d.editors.insert(id, handle);
+        d.media.editors.insert(id, handle);
     });
     log::debug!(
         "editor window opened in {:.1}ms",

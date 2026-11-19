@@ -90,12 +90,8 @@ jobs:
           rustflags: ""
           components: clippy
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: LGPL FFmpeg development build (DLLs on PATH for tests)
-        shell: bash
-        run: |
-          dir=$(packaging/ffmpeg.sh win64)
-          echo "FFMPEG_DIR=$dir" >> "$GITHUB_ENV"
-          echo "$dir\\bin" >> "$GITHUB_PATH"
+      # The runner image provides CMake (libopus); without NASM, OpenH264
+      # builds its plain C paths, which is enough for tests.
       - run: cargo build --locked --release
       - run: cargo clippy --locked --all-targets -- --deny warnings
       # GPUI 0.3.10 returns no headless renderer on Windows. The two
@@ -134,7 +130,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed base-devel git rustup labwc grim dbus \
             mesa vulkan-swrast wayland libxkbcommon libxkbcommon-x11 fontconfig tesseract tesseract-data-eng \
-            clang ffmpeg pipewire libpulse
+            clang cmake nasm alsa-lib pipewire libpulse
           rustup default stable
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2

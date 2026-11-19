@@ -22,6 +22,7 @@ pub mod decode;
 pub mod encode;
 pub mod export;
 mod frame;
+pub mod mix;
 pub mod record;
 
 pub use frame::{Frame, PixelFormat, Pixels};

@@ -320,8 +320,13 @@ flowchart LR
     ctl -- RecordTarget --> src[ScreenRecorder::open\nplatform VideoSource]
     src -- Frame --> sess[media::record::Session]
     aud[media::audio sources] -- AudioChunk --> sess
-    sess --> enc[libavfilter → encoder → muxer]
-    enc --> file[(mp4 / lossless master)]
+    sess -- video --> venc[convert::to_yuv420 →\ncodec::h264_encoder]
+    sess -- audio --> aenc[mix::Mixer → codec::opus]
+    venc --> mux[container::create_muxer]
+    aenc --> mux
+    mux --> file[(MP4 / MOV / MKV)]
+    sess -- animation --> master[(anim::master\nlossless, cache)]
+    master -- stop --> anim[anim::create_encoder] --> afile[(GIF / WebP / AVIF / JXL)]
     ctl -- stop --> fin[clipboard files\nnotification\ntray]
 ```
 
@@ -332,27 +337,64 @@ recording. A recording covers one output: the platform's `selection_outputs`
 picks the output holding most of the selection, and the region is clipped to
 it, because outputs of different scales have no common pixel size.
 
-Platform sources (`ScreenRecorder::open`) deliver `media::Frame`s, CPU BGRA
-or hardware frames carrying their FFmpeg `hw_frames_ctx`:
+Platform sources (`ScreenRecorder::open`) deliver CPU `media::Frame`s
+(`Frame::from_pixels`, 4-byte pixels in the order the source produced them):
 
 | Backend | Frames |
 | --- | --- |
-| `wlroots` | A `quikscope __record-helper` child process captures `capture_output_region` into GBM DMA-BUFs with a modifier both the compositor and Vulkan accept, maps them to Vulkan and downloads BGR0 (NVIDIA cannot render into LINEAR buffers; linear DRM buffers are read directly) into a shared-memory ring the daemon wraps as frames without copying. The child exists because NVIDIA's driver imported some buffer sizes as all-zero images once GPUI's Vulkan renderer lived in the same process. Never SHM: Hyprland reads SHM captures back synchronously on its main thread. |
+| `wlroots` | A `quikscope __record-helper` child process captures `capture_output_region` into GBM DMA-BUFs with a modifier both the compositor and Vulkan accept, maps them to Vulkan and downloads them (NVIDIA cannot render into LINEAR buffers; linear DRM buffers are read directly) into a shared-memory ring the daemon wraps as frames without copying. The child exists because NVIDIA's driver imported some buffer sizes as all-zero images once GPUI's Vulkan renderer lived in the same process. DMA-BUF is used whenever the compositor offers it; shared-memory capture is only the logged fallback for compositors that offer none, because Hyprland reads SHM captures back synchronously on its main thread, which makes games stutter. |
 | `x11` | MIT-SHM GetImage at the frame rate. |
 | `portal` | ScreenCast portal + PipeWire, cropped on the CPU; the restore token is kept in `$XDG_STATE_HOME/quikscope`. |
-| `windows` | libavfilter `ddagrab` on the monitor's DXGI adapter (D3D11 frames). |
+| `windows` | DXGI Desktop Duplication read back to the CPU; rotated outputs are turned to desktop orientation and the pointer is composed from DXGI's pointer shapes. |
 
 `media::record::Session` timestamps frames and audio chunks against one
-clock (pauses excluded), repeats the last frame over long static gaps, and
-encodes on its own threads. The encoder tries GPU encoders that accept the
-frames (passing hardware frames through, `hwmap`-ing, or downloading) before
-software ones. Animations are written losslessly (FFV1) to the cache and
-encoded into GIF (two-pass palette), WebP, AVIF or JPEG XL on stop; the
-master stays so the annotator can re-export without generation loss.
+clock (pauses excluded) with one presentation origin for every track, and
+encodes on its own threads. A tick without a new frame is skipped rather than
+encoded as a duplicate, so the files are variable frame rate. Odd capture
+sizes are cropped to the even rectangle at their top left, never scaled.
+Videos stream through the H.264 encoder and the muxer into the reserved
+output's partial file; animations are written to a lossless master in the
+cache and encoded into the chosen format on stop. The master stays so the
+annotator can re-export without generation loss. The [media engine](#media-engine)
+section describes the codecs and containers.
 
 Outlines are drawn by the platform outside the region and excluded from
 capture: a click-through layer-shell surface on wlroots, override-redirect
 strips on X11 and `WDA_EXCLUDEFROMCAPTURE` windows on Windows.
+
+## Media engine
+
+`src/media` encodes, decodes and muxes everything itself; there is no FFmpeg.
+C and C++ code is limited to libraries the crates build from source
+(OpenH264, libopus, libwebp, zstd, the Vulkan Memory Allocator).
+
+| Module | Role |
+| --- | --- |
+| `mod.rs`, `frame.rs` | `Frame`, `VideoSource`, `AudioSource`, output formats and the encoder preference. |
+| `audio/` | Recording audio devices: PulseAudio's API on Linux (served by PipeWire on current desktops), WASAPI (loopback for outputs) on Windows. |
+| `convert.rs` | 4-byte RGB ↔ YUV 4:2:0, BT.709 limited range (`yuv`, SIMD), and BGRA scaling (`fast_image_resize`). |
+| `codec/` | `h264_vulkan` (Vulkan Video through `gpu-video`, NV12; the device exists only while an encoder or decoder does), `h264_soft` (OpenH264: Constrained Baseline encoding, decoding up to High profile with CABAC and B-frames), `opus` (every audio track we write), `aac` (AAC-LC decoding for third-party files, symphonia), `resample` (rubato). `h264_encoder`/`h264_decoder` try Vulkan Video first unless the preference is software, then OpenH264. Our encoders write no B-frames. |
+| `container/` | `mp4`: MP4 and MOV boxes through `mp4-atom` with our own muxer and demuxer; fragmented MP4 by default (`record.mp4_fragmented = false` fragments while recording, then rewrites a classic fast-start file at finish), MOV always classic. `mkv`: `mkv-element` for writing (one cluster per keyframe) and `matroska-demuxer` for reading, whose cue-based seek is not trusted. |
+| `anim/` | GIF (`gif` + `quantette`: a palette per frame, Floyd–Steinberg, index 255 transparent), WebP (`webp-animation` over a static libwebp, lossy by default; `image-webp` to read), AVIF (`rav1e` writes AVIS with `mp4-atom` boxes; `rav1d` reads), JPEG XL (a vendored `zune-jpegxl` fork writes lossless animations; `jxl-oxide` reads), APNG reading (`png`), and `master`, the lossless recording master (zstd-compressed frames with a keyframe index for seeking). |
+| `mix.rs` | Mixes audio sources to 48 kHz stereo. Each source is placed by its running sample count from its first chunk and re-anchored only when it drifts more than about 40 ms, so chunk jitter never overlaps or gaps the sound. |
+| `record.rs` | Recording sessions (above). |
+| `export.rs` | Re-encoding for the video editor and annotator: trim, mute, video ↔ animation conversion and annotation compositing. |
+| `decode.rs` | Probing, playback and seeking for the video editor: demuxer + H.264 and audio decoders + `convert::to_bgra`. |
+
+Conventions shared by every codec and container: H.264 crosses the codec and
+container APIs as Annex-B access units with SPS/PPS before every keyframe
+(muxers build `avcC` and convert to length-prefixed samples, demuxers convert
+back), so a decoder can start at any keyframe. Timestamps are relative to the
+file's presentation start, shared by all tracks, so an audio track that starts
+later than the picture stays in sync. Animation frames carry their own
+durations end to end; encoders quantize them only to their format's precision
+(10 ms for GIF). Video files must be progressive 8-bit 4:2:0 H.264; HEVC, VP9
+and AV1 are not supported.
+
+Every file the media code writes (recordings, exports, clipboard copies) goes
+through `output::OutputFile`: a partial file per writer, published with one
+rename, and an exclusive reservation of new names so concurrent writers that
+derive the same name end up with distinct files.
 
 ## Persistence
 
@@ -361,7 +403,8 @@ strips on X11 and `WDA_EXCLUDEFROMCAPTURE` windows on Windows.
   background; `open-last` after a daemon restart reads it in one `read`
   without decoding. Without it, the newest image in the screenshots folder
   is opened.
-- Saves are atomic (`*.png.part` then rename).
+- Saves are atomic and never collide: `output::OutputFile` writes a partial
+  file per writer, renames it into place and reserves new names exclusively.
 - The daemon keeps the last eight shots and their documents in memory.
 
 ## Settings and onboarding

@@ -30,6 +30,10 @@ pub mod portal;
 mod sni;
 #[cfg(windows)]
 pub mod windows;
+// Pure Windows capture pixel math (rotation, regions, pointer), so its tests also run on Linux.
+#[cfg(any(windows, test))]
+#[path = "windows/pixels.rs"]
+mod windows_pixels;
 #[cfg(target_os = "linux")]
 pub mod wlroots;
 #[cfg(target_os = "linux")]
@@ -131,6 +135,9 @@ pub struct RecordingStatus {
     pub elapsed: std::time::Duration,
     pub at: std::time::Instant,
     pub paused: bool,
+    /// Stopped (or discarded) and still being written: a tray offers no
+    /// recording controls until it is done, and the clock stands still.
+    pub saving: bool,
 }
 
 /// Everything a tray menu shows.
@@ -164,6 +171,9 @@ pub enum Event {
     SetAudio(String, bool),
     /// Frame rate for future recordings of a kind; persisted.
     SetFps(crate::media::Kind, u32),
+    /// A tray menu is about to open: list audio devices again, so one
+    /// plugged in since start-up shows up.
+    RefreshAudioDevices,
 }
 
 /// Delivers [`Event`]s to the daemon from any thread.
@@ -217,10 +227,24 @@ pub struct Platform {
     pub capture_may_prompt: bool,
     /// Continuous capture for video and animation recording.
     pub recorder: Option<Arc<dyn ScreenRecorder>>,
-    /// Tray icon with recording controls.
+    /// Tray icon with recording controls. The daemon takes it at start-up
+    /// (on Linux it then follows `record.tray`, see [`status_notifier`]).
     pub tray: Option<Arc<dyn Tray>>,
     #[cfg(windows)]
     pub(crate) shell: Option<Arc<windows::Shell>>,
+}
+
+/// The Linux status-notifier tray. The daemon creates and drops it as
+/// `record.tray` changes; `None` (logged) when the session bus refuses it.
+#[cfg(target_os = "linux")]
+pub fn status_notifier(
+    events: EventSink,
+    config: &crate::config::RecordConfig,
+) -> Option<Arc<dyn Tray>> {
+    sni::StatusNotifier::spawn(events, config)
+        .map(|tray| Arc::new(tray) as Arc<dyn Tray>)
+        .map_err(|e| log::warn!("system tray unavailable: {e:#}"))
+        .ok()
 }
 
 /// Connects the backends for the current session. Missing pieces are
@@ -236,12 +260,7 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
         let tray = config
             .record
             .tray
-            .then(|| {
-                sni::StatusNotifier::spawn(events.clone(), &config.record)
-                    .map(|tray| Arc::new(tray) as Arc<dyn Tray>)
-                    .map_err(|e| log::warn!("system tray unavailable: {e:#}"))
-                    .ok()
-            })
+            .then(|| status_notifier(events.clone(), &config.record))
             .flatten();
         let backend = std::env::var("QUIKSCOPE_BACKEND").ok();
         if backend.as_deref() == Some("x11")

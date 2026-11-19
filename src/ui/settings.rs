@@ -578,6 +578,10 @@ impl Settings {
                 next.record.tray = !next.record.tray;
                 (&["record", "tray"], next.record.tray)
             }
+            "record-mp4-fragmented" => {
+                next.record.mp4_fragmented = !next.record.mp4_fragmented;
+                (&["record", "mp4_fragmented"], next.record.mp4_fragmented)
+            }
             _ => unreachable!(),
         };
         if self.welcome {
@@ -884,6 +888,20 @@ impl Settings {
         ));
         for (row, label, path) in SEGMENTED {
             items.push((row, self.segmented(row, label, path, cx)));
+            // Only MP4 has a layout to choose: MKV is crash-safe as it is
+            // and MOV always finishes as a classic movie file.
+            if row == "record-video-format" && r.video_format() == OutputFormat::Mp4 {
+                let id = "record-mp4-fragmented";
+                let choice = self.choice(
+                    id,
+                    "Crash-safe MP4 (fragmented)",
+                    "Recordings stay playable if recording stops unexpectedly. Turn off for \
+                     classic MP4 files, which some older players and editors need.",
+                    r.mp4_fragmented,
+                    cx,
+                );
+                items.push((id, choice.into_any_element()));
+            }
         }
         if let Some(input) = self.inputs.iter().find(|i| i.id == "record-save-dir") {
             items.push((input.id, input_row(input)));

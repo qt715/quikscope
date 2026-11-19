@@ -1,14 +1,17 @@
 //! GPUI front end: the region selection overlay and the annotation editor.
 
+pub mod clips;
 pub mod color_picker;
 pub mod color_window;
 pub mod edit_buffer;
 pub mod editor;
+mod export_job;
 pub mod eyedropper;
 pub mod field;
 pub mod font_menu;
 pub mod motion;
 pub mod overlay;
+mod playback;
 pub mod settings;
 pub mod toolbar;
 pub mod video_editor;

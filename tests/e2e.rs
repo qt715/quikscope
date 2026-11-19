@@ -767,6 +767,206 @@ fn recording_toggles_saves_and_offers_the_file() {
     }
 }
 
+/// One raw request line, as `socat` would send it.
+fn request(s: &Session, line: &str) -> String {
+    let mut stream = UnixStream::connect(s.socket()).unwrap();
+    writeln!(stream, "{line}").unwrap();
+    let mut reply = String::new();
+    BufReader::new(&stream).read_line(&mut reply).unwrap();
+    reply.trim_end().to_string()
+}
+
+fn wait_until(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn quit_and_sigterm_during_a_recording_save_a_playable_file() {
+    use quikscope::media::{Kind, decode};
+    for how in ["quit", "SIGTERM"] {
+        let Some(s) = Session::start() else {
+            return;
+        };
+        // Our own child rather than `start_daemon`'s, so it can be signalled.
+        let log = s.root().join("own-daemon.log");
+        let mut daemon = s
+            .command(session::QUIKSCOPE)
+            .arg("daemon")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(&log).unwrap())
+            .spawn()
+            .unwrap();
+        let log_text = || std::fs::read_to_string(&log).unwrap_or_default();
+        wait_until("daemon ready", Duration::from_secs(20), || {
+            log_text().contains("daemon ready")
+        });
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            stdout(&s.quikscope(&["version"])),
+            format!("quikscope {version}\ndaemon {version}")
+        );
+
+        let out = s.quikscope(&[
+            "record",
+            "video",
+            "-g",
+            "10,10 320x240",
+            "--no-audio",
+            "--no-notify",
+        ]);
+        assert!(out.status.success(), "{}", log_text());
+        std::thread::sleep(Duration::from_millis(1200));
+        if how == "quit" {
+            // Answered only once the recording is saved.
+            assert!(s.quikscope(&["quit"]).status.success(), "{}", log_text());
+        } else {
+            assert_eq!(
+                unsafe { libc::kill(daemon.id() as libc::pid_t, libc::SIGTERM) },
+                0
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = daemon.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "{how}: daemon kept running");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(status.success(), "{how}: {status}\n{}", log_text());
+        assert!(log_text().contains("recorded"), "{how}: {}", log_text());
+
+        let dir = s.root().join("home/Videos/Screencasts");
+        let files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(
+            files.len(),
+            1,
+            "{how}: one finished file, no partials: {files:?}"
+        );
+        let info = decode::probe(&files[0]).unwrap();
+        assert_eq!(info.kind, Kind::Video);
+        assert_eq!((info.width, info.height), (320, 240));
+        assert!(
+            info.duration >= Duration::from_millis(800),
+            "{how}: {info:?}"
+        );
+        let frame = decode::Decoder::open(&files[0])
+            .unwrap()
+            .next_frame()
+            .unwrap()
+            .unwrap();
+        assert!(green_spread(&frame.image) > 64, "{how}: shows the pattern");
+    }
+}
+
+#[test]
+fn record_status_reports_saving_until_a_long_gif_is_written() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    // `record gif` records GIF even where animations default to another format.
+    let config = s.root().join("config/quikscope/config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("[record]\nanimation_format = \"webp\"\n");
+    std::fs::write(&config, text).unwrap();
+    s.start_daemon();
+    let out = s.quikscope(&[
+        "record",
+        "gif",
+        "screen",
+        "--fps",
+        "30",
+        "--no-notify",
+        "--no-clipboard",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::thread::sleep(Duration::from_millis(2500));
+    // A full-output GIF takes a while to encode after the capture stops.
+    let stop = s.spawn_quikscope(&["record", "stop"]);
+    let mut seen = Vec::new();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(60) {
+        let status = request(&s, "record status");
+        if seen.last() != Some(&status) {
+            seen.push(status.clone());
+        }
+        if status == "ok record saving" {
+            let refused = request(&s, "record video geometry=0,0,64x64 no-audio no-notify");
+            assert!(refused.contains("still being saved"), "{refused}");
+        }
+        if seen.iter().any(|s| s == "ok record saving") && status == "ok record idle" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        seen.iter().any(|s| s == "ok record saving"),
+        "never reported saving: {seen:?}"
+    );
+    assert_eq!(seen.last().map(String::as_str), Some("ok record idle"));
+    let out = s.finish(stop, Duration::from_secs(60));
+    assert!(out.status.success(), "{}", s.daemon_log());
+    let path = PathBuf::from(stdout(&out));
+    assert_eq!(path.extension().unwrap(), "gif", "{}", path.display());
+    assert_eq!(&std::fs::read(&path).unwrap()[..6], b"GIF89a");
+}
+
+#[test]
+fn concurrent_screenshot_saves_get_distinct_files() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    // One name for every capture, as when several land in the same second.
+    let config = s.root().join("config/quikscope/config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("filename = \"same.png\"\n");
+    std::fs::write(&config, text).unwrap();
+    s.start_daemon();
+    let clients: Vec<_> = (0..4)
+        .map(|i| {
+            s.spawn_quikscope(&[
+                "capture",
+                "-g",
+                &format!("{},20 60x40", 10 + 70 * i),
+                "--save",
+                "--no-notify",
+                "--no-clipboard",
+            ])
+        })
+        .collect();
+    let mut saved: Vec<PathBuf> = clients
+        .into_iter()
+        .map(|c| saved_path(&s.finish(c, Duration::from_secs(20))))
+        .collect();
+    for path in &saved {
+        let img = decode_png(path);
+        assert_eq!((img.width, img.height), (60, 40), "{}", path.display());
+    }
+    saved.sort();
+    saved.dedup();
+    assert_eq!(saved.len(), 4, "{saved:?}");
+    let mut names: Vec<_> = std::fs::read_dir(s.shots_dir())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["same-1.png", "same-2.png", "same-3.png", "same.png"]
+    );
+}
+
 #[test]
 fn region_drag_selects_a_rectangle() {
     let Some(mut s) = Session::start() else {

@@ -1,10 +1,10 @@
 //! The video editor through GPUI's real input dispatch (offscreen window,
 //! headless WGPU renderer): trimming, seeking, formats and exports.
 //!
-//! Timeline and format cases use a path that does not exist, so they run
-//! without any media engine. Cases that decode use a 5 s 1280×720 H.264/AAC
-//! clip made by the `ffmpeg` command-line tool; they skip when it is not
-//! installed, and export cases skip when FFmpeg lacks the encoder.
+//! Timeline, format and help cases use a path that does not exist, so they
+//! run without any media engine. Cases that decode use a 5 s 1280×720
+//! H.264/AAC clip made by the `ffmpeg` command-line tool; they skip when it
+//! is not installed. Copies go to a temporary clip cache, never ~/.cache.
 
 #![cfg(not(windows))]
 
@@ -42,11 +42,34 @@ impl quikscope::platform::Clipboard for FileClipboard {
     }
 }
 
+/// Records desktop notifications.
+#[derive(Default)]
+struct Notes(Mutex<Vec<String>>);
+
+impl quikscope::platform::Notifier for Notes {
+    fn shot_captured(
+        &self,
+        _: u64,
+        _: &quikscope::raster::Image,
+        _: &str,
+        _: &str,
+        _: i32,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn message(&self, summary: &str, body: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().push(format!("{summary} {body}"));
+        Ok(())
+    }
+}
+
 struct Ui {
     cx: HeadlessAppContext,
     window: WindowHandle<VideoEditor>,
     dir: tempfile::TempDir,
     clipboard: Arc<FileClipboard>,
+    notes: Arc<Notes>,
     annotated: Arc<Mutex<Vec<PathBuf>>>,
 }
 
@@ -64,6 +87,7 @@ impl Ui {
         config.record.save_dir = dir.path().join("recordings").display().to_string();
         configure(&mut config);
         let clipboard = Arc::new(FileClipboard::default());
+        let notes = Arc::new(Notes::default());
         let annotated = Arc::new(Mutex::new(Vec::new()));
         let text = gpui_platform::current_platform(true).text_system();
         let mut cx = HeadlessAppContext::with_platform(
@@ -76,6 +100,8 @@ impl Ui {
             config: Arc::new(config),
             clipboard: Some(clipboard.clone()),
             pick_color: None,
+            notifier: Some(notes.clone()),
+            clips: dir.path().join("clips"),
         };
         let sink = annotated.clone();
         cx.update(|cx| {
@@ -93,6 +119,7 @@ impl Ui {
             window,
             dir,
             clipboard,
+            notes,
             annotated,
         };
         ui.frame();
@@ -143,6 +170,20 @@ impl Ui {
                 ..Default::default()
             },
         );
+    }
+
+    /// `key` as auto-repeat sends it while held down.
+    fn held(&mut self, key: &str) {
+        self.input(PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers: Modifiers::default(),
+                key: key.into(),
+                key_char: None,
+            },
+            is_held: true,
+            prefer_character_input: false,
+        }));
+        self.frame();
     }
 
     fn ctrl(&mut self, key: &str) {
@@ -252,20 +293,48 @@ impl Ui {
         self.editor(|e, _| e.shown_pts().map(|t| t.as_secs_f64()))
     }
 
-    /// Runs an export started by `start`. `None` when FFmpeg has no encoder
-    /// for the format (the case then skips).
-    fn export(&mut self, start: impl FnOnce(&mut Ui)) -> Option<String> {
+    /// Runs an export started by `start` and returns its toast.
+    fn export(&mut self, start: impl FnOnce(&mut Ui)) -> String {
         start(self);
         self.wait_for("the export to finish", |e| e.export_progress().is_none());
         let (message, error) = self
             .editor(|e, _| e.toast().map(|(m, e)| (m.to_owned(), e)))
             .expect("an export ends with a toast");
-        if error && message.to_lowercase().contains("encoder") {
-            eprintln!("skipping: {message}");
-            return None;
-        }
         assert!(!error, "{message}");
-        Some(message)
+        message
+    }
+
+    /// Sends Ctrl+W, which closes the window; nothing is painted after.
+    fn close(&mut self) {
+        self.input(PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers: Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+                key: "w".into(),
+                key_char: None,
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }));
+        assert!(
+            self.cx.update_window(self.any(), |_, _, _| ()).is_err(),
+            "window still open"
+        );
+    }
+
+    /// Runs the app (no window left to paint) until `done` holds.
+    fn pump_until(&mut self, what: &str, done: impl Fn(&Ui) -> bool) {
+        let start = Instant::now();
+        while !done(self) {
+            assert!(
+                start.elapsed() < Duration::from_secs(90),
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            self.cx.run_until_parked();
+        }
     }
 
     fn recordings(&self, ext: &str) -> Vec<PathBuf> {
@@ -550,15 +619,35 @@ pub(super) fn real_video_seeks_steps_and_plays() {
     });
     ui.frame();
 
+    // At the out handle the last kept frame shows: an export ends before
+    // the out point, so the frame there is cut.
+    let (from, to) = (ui.at(3.0, 5.0), ui.at(2.5, 0.0));
+    ui.drag(from, to);
+    assert_close(ui.trim().1, 2.5, 1e-6);
+    ui.wait_for("the last kept frame", |e| {
+        e.shown_pts()
+            .is_some_and(|t| close(t.as_secs_f64(), 2.5 - FRAME, FRAME / 2.0))
+    });
+    let (from, to) = (ui.at(2.5, 5.0), ui.at(3.0, 0.0));
+    ui.drag(from, to);
+    assert_close(ui.trim().1, 3.0, 1e-6);
+    ui.click(mid);
+
     // Muted, so the test never makes a sound; playback stops at the out point.
     ui.key("m");
     ui.key("space");
     assert!(ui.editor(|e, _| e.is_playing()));
+    // Holding Space repeats the key; it must not flip play/pause each time.
+    ui.held("space");
+    ui.held("space");
+    assert!(ui.editor(|e, _| e.is_playing()));
     ui.wait_for("playback to reach the out point", |e| !e.is_playing());
     assert_close(ui.playhead(), 3.0, 1e-6);
-    ui.wait_for("the last trimmed frame", |e| {
-        e.shown_pts().is_some_and(|t| t.as_secs_f64() > 2.9)
+    ui.wait_for("the frames before the out point", |e| {
+        e.shown_pts()
+            .is_some_and(|t| t.as_secs_f64() > 3.0 - 1.5 * FRAME)
     });
+    assert_close(ui.shown().unwrap(), 3.0 - FRAME, FRAME / 2.0);
     // Playing again starts from the in point.
     ui.key("space");
     assert!(ui.editor(|e, _| e.is_playing()));
@@ -583,12 +672,10 @@ pub(super) fn real_video_exports_trimmed_gif_and_mp4() {
 
     ui.click_control("format");
     ui.click_control("format:gif");
-    let Some(message) = ui.export(|ui| {
+    let message = ui.export(|ui| {
         ui.ctrl("s");
         ui.frame();
-    }) else {
-        return;
-    };
+    });
     assert!(message.starts_with("Saved"), "{message}");
     let gif = ui.recordings("gif");
     assert_eq!(gif.len(), 1, "{gif:?}");
@@ -600,9 +687,7 @@ pub(super) fn real_video_exports_trimmed_gif_and_mp4() {
 
     ui.click_control("format");
     ui.click_control("format:mp4");
-    let Some(message) = ui.export(|ui| ui.ctrl("s")) else {
-        return;
-    };
+    let message = ui.export(|ui| ui.ctrl("s"));
     assert!(message.starts_with("Saved"), "{message}");
     let mp4 = ui.recordings("mp4");
     assert_eq!(mp4.len(), 1, "{mp4:?}");
@@ -612,19 +697,22 @@ pub(super) fn real_video_exports_trimmed_gif_and_mp4() {
     assert_close(probed.duration.as_secs_f64(), 2.0, 0.1);
     assert_ffprobe_duration(&mp4[0], 2.0);
 
-    // Copy, muted: a silent file on the clipboard.
+    // Copy, muted: a silent file on the clipboard, in a clip directory of
+    // its own under the source's name.
     ui.key("m");
-    let Some(message) = ui.export(|ui| ui.ctrl("c")) else {
-        return;
-    };
+    let message = ui.export(|ui| ui.ctrl("c"));
     assert_eq!(message, "Copied MP4");
     let copied = ui.clipboard.0.lock().unwrap().clone();
     assert_eq!(copied.len(), 1);
+    assert_eq!(copied[0].file_name(), path.file_name());
+    assert_eq!(
+        copied[0].parent().unwrap().parent().unwrap(),
+        ui.dir.path().join("clips")
+    );
     let probed = quikscope::media::decode::probe(&copied[0]).unwrap();
     assert!(!probed.has_audio);
     assert_close(probed.duration.as_secs_f64(), 2.0, 0.1);
     assert_ffprobe_duration(&copied[0], 2.0);
-    let _ = std::fs::remove_file(&copied[0]);
 
     let after = std::fs::metadata(&path).unwrap();
     assert_eq!(before.len(), after.len());
@@ -652,7 +740,48 @@ pub(super) fn export_can_be_cancelled_and_leaves_no_file() {
     assert!(left.is_empty(), "{left:?}");
 }
 
-pub(super) fn annotate_frame_saves_full_size_png_and_dispatches_action() {
+/// Saving an untouched video copies it as it is, byte for byte.
+pub(super) fn untouched_save_copies_the_source_exactly() {
+    let Some((path, info)) = fixture() else {
+        return;
+    };
+    let mut ui = Ui::open(&path, info);
+    let message = ui.export(|ui| ui.ctrl("s"));
+    assert!(message.starts_with("Saved"), "{message}");
+    let mp4 = ui.recordings("mp4");
+    assert_eq!(mp4.len(), 1, "{mp4:?}");
+    assert_eq!(
+        std::fs::read(&mp4[0]).unwrap(),
+        std::fs::read(&path).unwrap()
+    );
+}
+
+/// Closing the window mid-export lets the export finish; a notification
+/// says so, since no window is left for a toast.
+pub(super) fn closing_the_window_lets_the_export_finish() {
+    let Some((path, info)) = fixture() else {
+        return;
+    };
+    let mut ui = Ui::open(&path, info);
+    ui.click_control("format");
+    ui.click_control("format:gif");
+    ui.ctrl("s");
+    assert!(ui.editor(|e, _| e.export_progress()).is_some());
+    ui.close();
+    ui.pump_until("the export to finish", |ui| {
+        !ui.notes.0.lock().unwrap().is_empty()
+    });
+    let notes = ui.notes.0.lock().unwrap().clone();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].starts_with("Saved "), "{notes:?}");
+    let gif = ui.recordings("gif");
+    assert_eq!(gif.len(), 1, "{gif:?}");
+    assert!(notes[0].contains(gif[0].file_name().unwrap().to_str().unwrap()));
+}
+
+/// "Annotate frame" opens the frame through the clip cache: nothing lands
+/// in the screenshots folder unless the annotator saves.
+pub(super) fn annotate_frame_opens_a_full_size_png_from_the_clip_cache() {
     let Some((path, info)) = fixture() else {
         return;
     };
@@ -665,14 +794,42 @@ pub(super) fn annotate_frame_saves_full_size_png_and_dispatches_action() {
             .is_some_and(|t| close(t.as_secs_f64(), 2.5, FRAME / 2.0))
     });
     ui.key("f");
-    ui.wait_for("the frame to be saved", |e| {
-        e.toast().is_some_and(|(m, _)| m.starts_with("Saved frame"))
+    ui.wait_for("the frame to be written", |e| {
+        e.toast()
+            .is_some_and(|(m, _)| m.starts_with("Opening the frame"))
     });
     let annotated = ui.annotated.lock().unwrap().clone();
     assert_eq!(annotated.len(), 1);
-    assert!(annotated[0].starts_with(ui.dir.path().join("shots")));
+    assert!(annotated[0].starts_with(ui.dir.path().join("clips")));
+    assert!(!ui.dir.path().join("shots").exists());
     let image = quikscope::raster::Image::load(&annotated[0]).unwrap();
     assert_eq!((image.width, image.height), (1280, 720));
+}
+
+/// `?`, F1 and the help button open the shortcut list; Escape, the same
+/// keys or a click anywhere close it, without acting on what is under it.
+pub(super) fn shortcut_help_opens_and_closes_without_side_effects() {
+    let (path, info) = fake("/nonexistent/clip.mp4", true);
+    let mut ui = Ui::open(&path, info);
+    let open = |ui: &mut Ui| ui.editor(|e, _| e.help_open());
+    ui.shift("/");
+    assert!(open(&mut ui));
+    // Keys go to the help, not the editor: no trim point is set.
+    ui.key("i");
+    assert_eq!(ui.trim(), (0.0, 5.0));
+    ui.key("escape");
+    assert!(!open(&mut ui));
+    ui.key("f1");
+    assert!(open(&mut ui));
+    ui.key("f1");
+    assert!(!open(&mut ui));
+    ui.click_control("help");
+    assert!(open(&mut ui));
+    let playhead = ui.playhead();
+    let on_track = ui.at(3.0, 0.0);
+    ui.click(on_track);
+    assert!(!open(&mut ui));
+    assert_eq!(ui.playhead(), playhead);
 }
 
 pub(super) fn audible_playback_opens_output_and_mute_closes_it() {
@@ -687,15 +844,22 @@ pub(super) fn audible_playback_opens_output_and_mute_closes_it() {
     ui.shift("right");
     ui.key("o");
     ui.key("home");
+    // The clock starts at once; the device opens off the UI thread.
     ui.key("space");
+    assert!(ui.editor(|e, _| e.is_playing()));
+    ui.wait_for("the audio output or the out point", |e| {
+        e.has_audio_output() || !e.is_playing()
+    });
     if !ui.editor(|e, _| e.has_audio_output()) {
         eprintln!("no audio output device: playback continues silently");
     }
     ui.wait_for("playback to reach the out point", |e| !e.is_playing());
     assert_close(ui.playhead(), 1.0, 1e-6);
-    ui.wait_for("the last frame before 1 s", |e| {
-        e.shown_pts().is_some_and(|t| t.as_secs_f64() > 0.9)
+    ui.wait_for("the frames before 1 s", |e| {
+        e.shown_pts()
+            .is_some_and(|t| t.as_secs_f64() > 1.0 - 1.5 * FRAME)
     });
+    assert_close(ui.shown().unwrap(), 1.0 - FRAME, FRAME / 2.0);
     ui.key("m");
     assert!(!ui.editor(|e, _| e.has_audio_output()));
     ui.key("space");

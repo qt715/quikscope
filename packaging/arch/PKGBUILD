@@ -10,10 +10,13 @@ license=('MIT' 'Apache-2.0')
 # Keep Cargo's own release LTO, but disable makepkg's injected C/C++ LTO flags.
 # Cargo strips release debuginfo, so makepkg must not create an empty debug split.
 options=('!lto' '!debug')
+# libpulse, libpipewire and alsa-lib serve recording audio; mesa provides
+# libgbm. Codecs (OpenH264, libopus, libwebp, zstd) are compiled in.
 depends=('glibc' 'libgcc' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'libxcb' 'hicolor-icon-theme'
-         'ffmpeg' 'libpulse' 'libpipewire' 'alsa-lib' 'mesa')
-makedepends=('cargo' 'clang' 'cmake' 'pkgconf' 'python' 'openssl' 'libx11' 'zstd' 'alsa-lib' 'fontconfig' 'freetype2')
-optdepends=('tesseract: OCR text extraction' 'tesseract-data-eng: English OCR model' 'xdg-desktop-portal: GNOME/KDE capture backend' 'vulkan-driver: GPU rendering')
+         'libpulse' 'libpipewire' 'alsa-lib' 'mesa')
+# cmake builds libopus, nasm OpenH264's SIMD paths; clang serves the PipeWire bindings.
+makedepends=('cargo' 'clang' 'cmake' 'nasm' 'pkgconf' 'python' 'openssl' 'libx11' 'zstd' 'alsa-lib' 'fontconfig' 'freetype2')
+optdepends=('tesseract: OCR text extraction' 'tesseract-data-eng: English OCR model' 'xdg-desktop-portal: GNOME/KDE capture backend' 'vulkan-driver: GPU rendering and hardware H.264 (Vulkan Video)')
 source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver-source.tar.gz")
 # The release workflow replaces this with the source archive's SHA-256 before
 # shipping this PKGBUILD and generates .SRCINFO from that exact file.

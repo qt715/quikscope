@@ -1,6 +1,7 @@
-//! Playback for the video editor: a decode thread that keeps a few frames
-//! ahead of the playhead, audio output through cpal, the filmstrip
-//! thumbnails, and the clock frames are painted against.
+//! Playback shared by the video editor and the annotator's animation mode:
+//! a decode thread that keeps a few frames ahead of the playhead, audio
+//! output through cpal, the filmstrip thumbnails, and the clock frames are
+//! painted against.
 //!
 //! Threads never touch GPUI. They fill shared queues and poke a wake channel;
 //! the editor pulls what is due when it paints. Every seek bumps a generation
@@ -18,15 +19,15 @@ use futures::channel::mpsc::UnboundedSender;
 use gpui::RenderImage;
 
 use crate::media::decode::{AudioDecoder, Decoder};
+use crate::raster::Image;
 
-/// Frames decoded ahead of the playhead: enough to ride out a slow keyframe
-/// without holding seconds of BGRA in memory.
-const QUEUE: usize = 6;
 /// Audio decoded ahead, in seconds. Short, because a seek throws it away.
 const AUDIO_AHEAD: f64 = 0.3;
 /// Audio positions older than this mean the device stopped taking samples
 /// (underrun, end of the track, a stalled device): the clock runs freely.
 const AUDIO_STALE: Duration = Duration::from_millis(250);
+/// Shortest frame duration kept: a zero-length frame would never be due.
+const MIN_FRAME: Duration = Duration::from_millis(1);
 
 /// Tells the editor something was decoded.
 pub type Wake = UnboundedSender<()>;
@@ -40,17 +41,30 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// One decoded frame, ready to paint.
-pub struct Frame {
-    pub image: Arc<RenderImage>,
+/// One decoded frame, ready to paint: a GPU image for the video editor, CPU
+/// pixels and tiles for the annotator.
+pub struct Frame<T = Arc<RenderImage>> {
+    pub image: T,
     pub pts: Duration,
     pub duration: Duration,
 }
 
-impl Frame {
+impl<T> Frame<T> {
     pub fn covers(&self, at: Duration) -> bool {
         self.pts <= at && at < self.pts + self.duration
     }
+}
+
+/// How a [`VideoPlayer`] queues frames.
+#[derive(Clone, Copy, Debug)]
+pub struct Queue {
+    /// Frames decoded ahead of the playhead: enough to ride out a slow
+    /// keyframe without holding seconds of pixels in memory.
+    pub depth: usize,
+    /// Starts over at the end, with frame times continuing past it (the
+    /// second lap's first frame is due where the first lap ended), so a
+    /// looping animation never waits for a seek at the wrap.
+    pub looping: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -60,45 +74,56 @@ struct Request {
     generation: u64,
 }
 
-#[derive(Default)]
-struct VideoState {
+struct VideoState<T> {
     /// A seek the decode thread has not picked up yet.
     request: Option<Request>,
     /// Bumped by every seek.
     generation: u64,
     size: (u32, u32),
-    queue: VecDeque<Frame>,
+    queue: VecDeque<Frame<T>>,
     /// The decoder ran out of frames for this generation.
     end: bool,
     error: Option<String>,
     quit: bool,
 }
 
-struct VideoShared {
-    state: Mutex<VideoState>,
+struct VideoShared<T> {
+    state: Mutex<VideoState<T>>,
     cond: Condvar,
 }
 
 /// Decodes video frames on its own thread, a few ahead of what is shown.
-pub struct VideoPlayer {
-    shared: Arc<VideoShared>,
+pub struct VideoPlayer<T = Arc<RenderImage>> {
+    shared: Arc<VideoShared<T>>,
 }
 
-impl VideoPlayer {
-    /// Starts the decode thread; nothing is decoded until the first [`seek`](Self::seek).
-    pub fn spawn(path: PathBuf, wake: Wake) -> VideoPlayer {
+impl<T: Send + 'static> VideoPlayer<T> {
+    /// Starts the decode thread; nothing is decoded until the first
+    /// [`seek`](Self::seek). `convert` turns each decoded image into what
+    /// the editor paints, on the decode thread.
+    pub fn spawn(path: PathBuf, queue: Queue, convert: fn(Image) -> T, wake: Wake) -> Self {
         let shared = Arc::new(VideoShared {
-            state: Mutex::new(VideoState::default()),
+            state: Mutex::new(VideoState {
+                request: None,
+                generation: 0,
+                size: (0, 0),
+                queue: VecDeque::new(),
+                end: false,
+                error: None,
+                quit: false,
+            }),
             cond: Condvar::new(),
         });
         let s = shared.clone();
         std::thread::Builder::new()
             .name("quikscope-video".into())
-            .spawn(move || video_thread(&path, &s, &wake))
+            .spawn(move || video_thread(&path, queue, convert, &s, &wake))
             .expect("spawning the video decode thread");
         VideoPlayer { shared }
     }
+}
 
+impl<T> VideoPlayer<T> {
     /// Restarts decoding at `at` with frames scaled to `size`, dropping
     /// everything queued.
     pub fn seek(&self, at: Duration, size: (u32, u32)) {
@@ -121,7 +146,7 @@ impl VideoPlayer {
     }
 
     /// Pops every queued frame due at `at`; returns the newest of them.
-    pub fn take_due(&self, at: Duration) -> Option<Frame> {
+    pub fn take_due(&self, at: Duration) -> Option<Frame<T>> {
         let mut s = lock(&self.shared.state);
         let mut due = None;
         while s.queue.front().is_some_and(|f| f.pts <= at) {
@@ -135,7 +160,7 @@ impl VideoPlayer {
 
     /// The first frame decoded since the last seek: the one showing at the
     /// seek target.
-    pub fn take_first(&self) -> Option<Frame> {
+    pub fn take_first(&self) -> Option<Frame<T>> {
         let mut s = lock(&self.shared.state);
         let first = s.queue.pop_front();
         if first.is_some() {
@@ -164,7 +189,7 @@ impl VideoPlayer {
     }
 }
 
-impl Drop for VideoPlayer {
+impl<T> Drop for VideoPlayer<T> {
     fn drop(&mut self) {
         // Not joined: a decode in progress finishes in the background rather
         // than stalling the window close.
@@ -173,7 +198,13 @@ impl Drop for VideoPlayer {
     }
 }
 
-fn video_thread(path: &Path, shared: &VideoShared, w: &Wake) {
+fn video_thread<T>(
+    path: &Path,
+    queue: Queue,
+    convert: fn(Image) -> T,
+    shared: &VideoShared<T>,
+    w: &Wake,
+) {
     let mut decoder = match Decoder::open(path) {
         Ok(d) => d,
         Err(e) => {
@@ -184,6 +215,9 @@ fn video_thread(path: &Path, shared: &VideoShared, w: &Wake) {
     };
     let mut size = (0, 0);
     let mut generation = 0;
+    // Looping: what the current lap adds to frame times, and where its
+    // frames end so far.
+    let (mut offset, mut lap_end) = (Duration::ZERO, Duration::ZERO);
     // Nothing to decode until the first seek says where and how large.
     let mut idle = true;
     loop {
@@ -196,7 +230,7 @@ fn video_thread(path: &Path, shared: &VideoShared, w: &Wake) {
                 if let Some(r) = s.request.take() {
                     break Some(r);
                 }
-                if !idle && s.queue.len() < QUEUE {
+                if !idle && s.queue.len() < queue.depth.max(1) {
                     break None;
                 }
                 s = shared.cond.wait(s).unwrap_or_else(|e| e.into_inner());
@@ -204,6 +238,7 @@ fn video_thread(path: &Path, shared: &VideoShared, w: &Wake) {
         };
         if let Some(r) = request {
             generation = r.generation;
+            (offset, lap_end) = (Duration::ZERO, Duration::ZERO);
             if r.size != size {
                 decoder.set_output_size(r.size.0, r.size.1);
                 size = r.size;
@@ -221,17 +256,32 @@ fn video_thread(path: &Path, shared: &VideoShared, w: &Wake) {
             }
             continue;
         }
-        let next = decoder.next_frame();
+        let next = match decoder.next_frame() {
+            Ok(None) if queue.looping && lap_end > Duration::ZERO => {
+                offset += lap_end;
+                lap_end = Duration::ZERO;
+                match decoder.seek(Duration::ZERO) {
+                    Ok(()) => continue,
+                    Err(e) => Err(e),
+                }
+            }
+            Ok(Some(f)) => {
+                let duration = f.duration.max(MIN_FRAME);
+                lap_end = f.pts + duration;
+                Ok(Some(Frame {
+                    image: convert(f.image),
+                    pts: offset + f.pts,
+                    duration,
+                }))
+            }
+            other => other.map(|_| None),
+        };
         let mut s = lock(&shared.state);
         if s.generation != generation || s.request.is_some() {
             continue;
         }
         match next {
-            Ok(Some(f)) => s.queue.push_back(Frame {
-                image: super::super::render_image(f.image.width, f.image.height, f.image.data),
-                pts: f.pts,
-                duration: f.duration,
-            }),
+            Ok(Some(frame)) => s.queue.push_back(frame),
             Ok(None) => {
                 s.end = true;
                 idle = true;
@@ -542,11 +592,8 @@ impl Filmstrip {
                     let frame = decoder.seek(at).and_then(|()| decoder.next_frame());
                     match frame {
                         Ok(Some(f)) => {
-                            let image = super::super::render_image(
-                                f.image.width,
-                                f.image.height,
-                                f.image.data,
-                            );
+                            let image =
+                                super::render_image(f.image.width, f.image.height, f.image.data);
                             lock(&out).push((at, image));
                             wake(&w);
                         }

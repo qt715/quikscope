@@ -185,84 +185,185 @@ impl Ui {
     }
 }
 
-pub(super) fn animation_scrubs_and_exports_annotations_on_every_frame() {
-    use quikscope::media::{OutputFormat, decode::Decoder};
-    use quikscope::ui::{Animation, editor::EditorServices};
-    use std::time::{Duration, Instant};
+/// Records desktop notifications.
+#[derive(Default)]
+struct Notes(std::sync::Mutex<Vec<String>>);
 
-    let dir = tempfile::tempdir().unwrap();
-    for (index, color) in [[30, 50, 80, 255], [80, 160, 30, 255], [180, 60, 20, 255]]
-        .into_iter()
-        .enumerate()
-    {
-        Image::filled(160, 120, color)
-            .save_png(
-                &dir.path().join(format!("frame-{index}.png")),
-                quikscope::raster::Compression::Fast,
-            )
-            .unwrap();
+impl quikscope::platform::Notifier for Notes {
+    fn shot_captured(&self, _: u64, _: &Image, _: &str, _: &str, _: i32) -> anyhow::Result<()> {
+        Ok(())
     }
-    let source = dir.path().join("source.gif");
-    let output = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-framerate", "2", "-i"])
-        .arg(dir.path().join("frame-%d.png"))
-        .args(["-loop", "0"])
-        .arg(&source)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let info = quikscope::media::decode::probe(&source).unwrap();
-    let first = Decoder::open(&source)
-        .unwrap()
-        .next_frame()
-        .unwrap()
-        .unwrap()
-        .image;
+
+    fn message(&self, summary: &str, body: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().push(format!("{summary} {body}"));
+        Ok(())
+    }
+}
+
+/// Writes a looping GIF of `frames` (indices into `palette`, `[r, g, b, …]`),
+/// each shown for `delay` centiseconds. Made here rather than by an external
+/// tool, so these cases need nothing installed.
+fn write_gif(
+    path: &std::path::Path,
+    size: (u16, u16),
+    palette: &[u8],
+    frames: &[Vec<u8>],
+    delay: u16,
+) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut encoder = gif::Encoder::new(file, size.0, size.1, palette).unwrap();
+    encoder.set_repeat(gif::Repeat::Infinite).unwrap();
+    for indices in frames {
+        let mut frame = gif::Frame::from_indexed_pixels(size.0, size.1, indices.clone(), None);
+        frame.delay = delay;
+        encoder.write_frame(&frame).unwrap();
+    }
+}
+
+/// Three 160×120 frames, solid blue-grey, green and orange, half a second each.
+fn three_frame_gif(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("source.gif");
+    let palette = [30, 50, 80, 80, 160, 30, 180, 60, 20];
+    let frames: Vec<Vec<u8>> = (0..3).map(|i| vec![i; 160 * 120]).collect();
+    write_gif(&path, (160, 120), &palette, &frames, 50);
+    path
+}
+
+/// The annotator on the animation at `source`; saves, copies and
+/// notifications go into `dir` and the returned recorders.
+fn animation_ui(
+    source: &std::path::Path,
+    (width, height, frames, frame_ms): (u32, u32, u64, u64),
+    viewport: gpui::Size<gpui::Pixels>,
+    dir: &std::path::Path,
+) -> (Ui, Arc<TextClipboard>, Arc<Notes>) {
+    use quikscope::media::{Kind, MediaInfo, OutputFormat};
+    use quikscope::ui::{Animation, editor::EditorServices};
+
+    let base = Image::filled(width, height, [80, 50, 30, 255]);
+    let info = MediaInfo {
+        width,
+        height,
+        duration: std::time::Duration::from_millis(frames * frame_ms),
+        fps: 1000.0 / frame_ms as f64,
+        frames: Some(frames),
+        has_audio: false,
+        kind: Kind::Animation,
+    };
     let mut ui = Ui::with_animation(
-        Document::new(Arc::new(first), 1.0),
-        size(px(1000.), px(700.)),
+        Document::new(Arc::new(base), 1.0),
+        viewport,
         Some(Animation {
-            path: source.clone(),
+            path: source.to_owned(),
             info,
             format: OutputFormat::Gif,
         }),
     );
     let mut config = quikscope::config::Config::default();
-    config.record.save_dir = dir.path().to_string_lossy().into_owned();
+    config.record.save_dir = dir.join("recordings").to_string_lossy().into_owned();
     config.record.filename = "annotated".into();
-    ui.cx.update(|cx| {
-        cx.set_global(EditorServices {
-            config: Arc::new(config),
-            clipboard: None,
-            pick_color: None,
-        })
-    });
+    let (clipboard, notes) = (
+        Arc::new(TextClipboard::default()),
+        Arc::new(Notes::default()),
+    );
+    let services = EditorServices {
+        config: Arc::new(config),
+        clipboard: Some(clipboard.clone()),
+        pick_color: None,
+        notifier: Some(notes.clone()),
+        clips: dir.join("clips"),
+    };
+    ui.cx.update(|cx| cx.set_global(services));
+    ui.frame();
+    (ui, clipboard, notes)
+}
+
+fn held_space(ui: &mut Ui) {
+    ui.input(PlatformInput::KeyDown(KeyDownEvent {
+        keystroke: Keystroke {
+            modifiers: Modifiers::default(),
+            key: "space".into(),
+            key_char: Some(" ".into()),
+        },
+        is_held: true,
+        prefer_character_input: false,
+    }));
+    ui.frame();
+}
+
+/// Paints until `done` holds; decoding and exports run on their own threads.
+fn wait_until(ui: &mut Ui, what: &str, done: impl Fn(&mut Ui) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !done(ui) {
+        assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ui.frame();
+    }
+}
+
+fn gifs_in(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+/// Plays, scrubs, switches formats from the strip's menu, and exports the
+/// drawings (cropped) on every frame. Decodes and encodes through the
+/// media engine.
+pub(super) fn animation_scrubs_and_exports_annotations_on_every_frame() {
+    use quikscope::media::{OutputFormat, decode::Decoder};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = three_frame_gif(dir.path());
+    let (mut ui, clipboard, _) = animation_ui(
+        &source,
+        (160, 120, 3, 500),
+        size(px(1000.), px(700.)),
+        dir.path(),
+    );
     let strip = ui.editor(|e, _| e.chrome.playback.bounds());
     let history = ui.editor(|e, _| e.chrome.history.bounds());
     let outputs = ui.editor(|e, _| e.chrome.output.bounds());
     assert!(strip.size.width > px(300.));
     assert!(history.right() < strip.left() && strip.right() < outputs.left());
 
+    // The format button opens a menu; Escape closes it, not the window.
+    let format = |ui: &mut Ui| ui.editor(|e, _| e.animation_status().unwrap().2);
+    let button = ui.editor(|e, _| e.chrome.playback.bounds_for_item(3).unwrap());
+    ui.click(button.center());
+    assert!(ui.editor(|e, _| e.animation_menu_open()));
+    let webp = ui.editor(|e, _| e.chrome.format_menu.bounds_for_item(2).unwrap());
+    ui.click(webp.center());
+    assert!(!ui.editor(|e, _| e.animation_menu_open()));
+    assert_eq!(format(&mut ui), OutputFormat::Webp);
+    ui.click(button.center());
+    ui.key("escape", None, Modifiers::default());
+    assert!(!ui.editor(|e, _| e.animation_menu_open()));
+    assert_eq!(format(&mut ui), OutputFormat::Webp);
+    ui.click(button.center());
+    let gif = ui.editor(|e, _| e.chrome.format_menu.bounds_for_item(1).unwrap());
+    ui.click(gif.center());
+    assert_eq!(format(&mut ui), OutputFormat::Gif);
+
     let original = ui.editor(|e, _| e.current_image().data[0..4].to_vec());
     let scrub = ui.editor(|e, _| e.chrome.scrubber.bounds());
     ui.click(point(scrub.right() - px(1.), scrub.center().y));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while ui.editor(|e, _| e.current_image().data[0..4].to_vec()) == original {
-        assert!(
-            Instant::now() < deadline,
-            "scrub did not show another frame"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-        ui.frame();
-    }
+    wait_until(&mut ui, "the scrubbed-to frame", |ui| {
+        ui.editor(|e, _| e.current_image().data[0..4].to_vec()) != original
+    });
+    // Space plays and pauses; holding it does not flip at the repeat rate.
+    let playing = |ui: &mut Ui| ui.editor(|e, _| e.animation_status().unwrap().0);
     ui.key("space", None, Modifiers::default());
-    assert!(ui.editor(|e, _| e.animation_status().unwrap().0));
+    assert!(playing(&mut ui));
+    held_space(&mut ui);
+    assert!(playing(&mut ui));
+    // Playback carries on across the loop without waiting for a seek.
+    wait_until(&mut ui, "a second lap", |ui| {
+        ui.editor(|e, _| e.animation_status().unwrap().1) < std::time::Duration::from_millis(500)
+    });
     ui.key("space", None, Modifiers::default());
-    assert!(!ui.editor(|e, _| e.animation_status().unwrap().0));
+    assert!(!playing(&mut ui));
+
     ui.typ("r");
     ui.editor(|e, _| {
         e.style.color = quikscope::document::Rgba {
@@ -278,11 +379,6 @@ pub(super) fn animation_scrubs_and_exports_annotations_on_every_frame() {
     ui.mouse("down", a);
     ui.mouse("move", b);
     ui.mouse("up", b);
-    ui.cx
-        .capture_screenshot(ui.any())
-        .unwrap()
-        .save("/tmp/quikscope-animation-mode.png")
-        .unwrap();
     ui.typ("c");
     let a = ui.screen(Pt::new(20., 20.));
     let b = ui.screen(Pt::new(100., 100.));
@@ -290,14 +386,12 @@ pub(super) fn animation_scrubs_and_exports_annotations_on_every_frame() {
     ui.mouse("move", b);
     ui.mouse("up", b);
     ui.ctrl("s", false);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while ui.editor(|e, _| e.saved_path().is_none()) {
-        assert!(Instant::now() < deadline, "animation save did not finish");
-        std::thread::sleep(Duration::from_millis(10));
-        ui.frame();
-    }
+    wait_until(&mut ui, "the animation save", |ui| {
+        ui.editor(|e, _| e.saved_path().is_some())
+    });
     let saved = ui.editor(|e, _| e.saved_path().unwrap().clone());
     assert_eq!(saved.extension().unwrap(), "gif");
+    assert!(saved.starts_with(dir.path().join("recordings")));
     let mut decoder = Decoder::open(&saved).unwrap();
     let mut frames = Vec::new();
     while let Some(frame) = decoder.next_frame().unwrap() {
@@ -315,6 +409,164 @@ pub(super) fn animation_scrubs_and_exports_annotations_on_every_frame() {
         assert!(
             pixel[2] > 230 && pixel[0] < 30 && pixel[1] < 30,
             "{pixel:?}"
+        );
+    }
+
+    // A copy lands in a clip directory of its own, under a readable name.
+    ui.ctrl("c", false);
+    wait_until(&mut ui, "the animation copy", |ui| {
+        ui.editor(|e, _| e.export_progress().is_none())
+    });
+    let copied = clipboard.0.lock().unwrap().clone();
+    assert_eq!(copied.len(), 1, "{copied:?}");
+    let copied = std::path::PathBuf::from(&copied[0]);
+    assert_eq!(copied.file_name().unwrap(), "animation.gif");
+    assert_eq!(
+        copied.parent().unwrap().parent().unwrap(),
+        dir.path().join("clips")
+    );
+}
+
+/// Closing the window mid-export lets the export finish (clipboard and a
+/// notification report it); Escape during an export cancels it with a
+/// toast instead of closing the window.
+pub(super) fn animation_export_outlives_its_window_and_escape_cancels_it() {
+    let dir = tempfile::tempdir().unwrap();
+    // Noise in 256 colors: slow enough to encode that Escape arrives first.
+    let path = dir.path().join("noise.gif");
+    let palette: Vec<u8> = (0..768u32).map(|i| (i * 37 % 256) as u8).collect();
+    let mut state = 0x2545_f491_u32;
+    let frames: Vec<Vec<u8>> = (0..40)
+        .map(|_| {
+            (0..320 * 240)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    state as u8
+                })
+                .collect()
+        })
+        .collect();
+    write_gif(&path, (320, 240), &palette, &frames, 4);
+    let open = || {
+        animation_ui(
+            &path,
+            (320, 240, 40, 40),
+            size(px(1000.), px(700.)),
+            dir.path(),
+        )
+    };
+
+    // Copied, then the window closed at once (Ctrl+W).
+    let (mut ui, clipboard, notes) = open();
+    ui.ctrl("c", false);
+    assert!(ui.editor(|e, _| e.export_progress()).is_some());
+    ui.input(PlatformInput::KeyDown(KeyDownEvent {
+        keystroke: Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            key: "w".into(),
+            key_char: None,
+        },
+        is_held: false,
+        prefer_character_input: false,
+    }));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while clipboard.0.lock().unwrap().is_empty() || notes.0.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the copy never finished"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ui.cx.run_until_parked();
+    }
+    assert!(
+        ui.cx.update_window(ui.any(), |_, _, _| ()).is_err(),
+        "window still open"
+    );
+    let copied = std::path::PathBuf::from(&clipboard.0.lock().unwrap()[0]);
+    assert!(copied.is_file() && copied.starts_with(dir.path().join("clips")));
+    let notes = notes.0.lock().unwrap().clone();
+    assert_eq!(notes, ["Copied GIF "], "{notes:?}");
+    drop(ui);
+
+    // Saving, then Escape: cancelled, and the window stays open to say so.
+    let (mut ui, _, _) = open();
+    let recordings = dir.path().join("recordings");
+    ui.ctrl("s", false);
+    assert!(ui.editor(|e, _| e.export_progress()).is_some());
+    ui.key("escape", None, Modifiers::default());
+    let toast = ui.editor(|e, _| e.toast().map(|(m, _)| m.to_owned()));
+    assert!(toast.is_some_and(|m| m.contains("ancel")));
+    wait_until(&mut ui, "the export to stop", |ui| {
+        ui.editor(|e, _| e.export_progress().is_none())
+    });
+    let toast = ui.editor(|e, _| e.toast().map(|(m, _)| m.to_owned()));
+    assert_eq!(toast.as_deref(), Some("Export cancelled"));
+    assert!(
+        gifs_in(&recordings).is_empty(),
+        "{:?}",
+        gifs_in(&recordings)
+    );
+}
+
+/// At every window size the strip stays clear of the clusters and the
+/// style panel, the fitted image stays clear of the strip, and toasts sit
+/// above it. Needs no media engine.
+pub(super) fn animation_strip_clears_the_chrome_image_and_toasts() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.gif");
+    for (w, h) in [
+        (1000.0, 700.0),
+        (800.0, 600.0),
+        (640.0, 480.0),
+        (520.0, 600.0),
+        (480.0, 320.0),
+    ] {
+        let (mut ui, _, _) = animation_ui(
+            &missing,
+            (1600, 900, 10, 100),
+            size(px(w), px(h)),
+            dir.path(),
+        );
+        ui.editor(|e, cx| e.set_tool(quikscope::ui::editor::Tool::Rect, cx));
+        // Without services an export can only fail: a toast to place.
+        ui.cx
+            .update(|cx| cx.remove_global::<quikscope::ui::editor::EditorServices>());
+        ui.ctrl("c", false);
+        let panels = ui.editor(|e, _| {
+            [
+                ("tools", e.chrome.tools.bounds()),
+                ("style", e.chrome.style.bounds()),
+                ("history", e.chrome.history.bounds()),
+                ("output", e.chrome.output.bounds()),
+                ("toast", e.chrome.toast.bounds()),
+            ]
+        });
+        let strip = ui.editor(|e, _| e.chrome.playback.bounds());
+        let window = gpui::Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let last = strip.bottom_right() - point(px(1.), px(1.));
+        assert!(
+            window.contains(&strip.origin) && window.contains(&last),
+            "strip {strip:?} outside {w}x{h}"
+        );
+        for (name, b) in &panels {
+            assert!(b.size.width > px(0.), "{name} at {w}x{h} was not laid out");
+            assert!(
+                !strip.intersects(b),
+                "strip {strip:?} overlaps {name} {b:?} at {w}x{h}"
+            );
+        }
+        let image = gpui::Bounds::from_corners(
+            ui.screen(Pt::new(0.0, 0.0)),
+            ui.screen(Pt::new(1600.0, 900.0)),
+        );
+        assert!(
+            !image.intersects(&strip),
+            "image {image:?} under the strip at {w}x{h}"
         );
     }
 }
@@ -485,6 +737,11 @@ pub(super) fn color_picker_drag_recolors_the_selection_as_one_undo_step() {
     assert!(!ui.editor(|e, _| e.picker_open()));
 }
 
+/// The clip cache of cases that never export: a path never created.
+fn no_clips() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("quikscope-ui-{}-no-clips", std::process::id()))
+}
+
 /// Records clipboard text instead of reaching a desktop.
 #[derive(Default)]
 struct TextClipboard(std::sync::Mutex<Vec<String>>);
@@ -533,6 +790,8 @@ pub(super) fn color_window_fits_narrow_screens_and_scrolls_when_short() {
             config: Arc::new(quikscope::config::Config::default()),
             clipboard: Some(clipboard.clone()),
             pick_color: None,
+            notifier: None,
+            clips: no_clips(),
         };
         cx.update(|cx| cx.set_global(services));
         let window: AnyWindowHandle = cx
@@ -657,6 +916,8 @@ pub(super) fn color_picker_scrolls_in_short_windows() {
         config: Arc::new(quikscope::config::Config::default()),
         clipboard: Some(clipboard.clone()),
         pick_color: None,
+        notifier: None,
+        clips: no_clips(),
     };
     ui.cx.update(|cx| cx.set_global(services));
     ui.editor(|e, cx| e.toggle_picker(cx));
@@ -739,6 +1000,8 @@ pub(super) fn picker_eyedropper_picks_from_screen_and_copies_each_format() {
                 gpui::Task::ready(Ok(Some(blue)))
             }
         })),
+        notifier: None,
+        clips: no_clips(),
     };
     ui.cx.update(|cx| cx.set_global(services));
     ui.editor(|e, cx| {

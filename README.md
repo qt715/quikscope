@@ -38,10 +38,10 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
   English and other European languages, Chinese, Japanese, Korean,
   Vietnamese, Thai and Arabic, each line read in its own language
   ([details](docs/text-extraction.md)).
-- **Recording**: videos (MP4/MKV/MOV with desktop and microphone audio) and
-  animations (GIF/WebP/AVIF/JPEG XL) of a region, output or window. The same
-  key starts and stops; the file lands on the clipboard
-  ([details](#recording)).
+- **Recording**: videos (H.264 in MP4/MKV/MOV, encoded on the GPU where the
+  driver supports it, with desktop and microphone audio) and animations
+  (GIF/WebP/AVIF/JPEG XL) of a region, output or window. The same key starts
+  and stops; the file lands on the clipboard ([details](#recording)).
 - **Opens your files**: images and animations in the annotator, videos in a
   small trim/convert editor, from the command line or your file manager.
 - **Plain IPC**: one text line over a local socket; usable from keybinds,
@@ -93,23 +93,25 @@ cargo install --locked quikscope
 
 From a source checkout, use `cargo install --locked --path .` instead.
 
-quikscope links FFmpeg (6.1 or newer) for recording and video, and on Linux
-also libgbm, PipeWire and PulseAudio (served by PipeWire on current
-desktops). Building needs their development files and clang:
+quikscope needs no FFmpeg: its codecs (OpenH264, libopus, libwebp, zstd) are
+compiled from source into the executable. Building needs a C and C++
+compiler and CMake 3.16 or newer; NASM, when installed, makes the OpenH264
+software encoder faster. On Linux it also needs clang (for the PipeWire
+bindings), pkg-config and the development files of Wayland, xkbcommon,
+PulseAudio, PipeWire, ALSA, libgbm, fontconfig and FreeType:
 
 ```sh
 # Arch
-sudo pacman -S --needed clang ffmpeg mesa libpipewire libpulse
+sudo pacman -S --needed base-devel clang cmake nasm pkgconf wayland libxkbcommon \
+  libxkbcommon-x11 libpulse libpipewire alsa-lib mesa fontconfig freetype2
 # Debian/Ubuntu
-sudo apt install clang libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
-  libavutil-dev libswscale-dev libswresample-dev libgbm-dev libpipewire-0.3-dev libpulse-dev
+sudo apt install build-essential clang cmake nasm pkg-config libwayland-dev libxkbcommon-dev \
+  libxkbcommon-x11-dev libx11-xcb-dev libfontconfig-dev libfreetype-dev libasound2-dev \
+  libgbm-dev libpipewire-0.3-dev libpulse-dev
 ```
 
-On Windows set `FFMPEG_DIR` to an unpacked FFmpeg shared build
-(`packaging/ffmpeg.sh win64` fetches the LGPL one the installer uses) and put
-its `bin` on `PATH`.
-Distribution FFmpeg builds without an H.264 encoder (Fedora's `ffmpeg-free`)
-can still record animations and use GPU H.264 encoders only.
+On Windows the Visual Studio C++ Build Tools with their CMake component are
+enough (NASM on `PATH` is optional).
 
 The packaged service uses `/usr/bin/quikscope`. For a Cargo installation, copy
 it to `~/.config/systemd/user/quikscope.service` and change `ExecStart` to the
@@ -281,7 +283,7 @@ bindsym Shift+Print exec --no-startup-id quikscope capture screen
 
 ### Windows 10/11
 
-Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Studio C++ Build Tools.
+Build on Windows 10 (1803+) or Windows 11 with Rust ≥ 1.95 and the Visual Studio C++ Build Tools (with CMake).
 Native verification used Windows 11 on one monitor at 96 DPI. Windows 10,
 multiple monitors, mixed DPI, window snapping and active-window capture are
 implemented but unverified. Frozen and live region selection were both verified.
@@ -343,6 +345,7 @@ quikscope open [FILE]...     open images, animations and videos (no file: the la
 quikscope settings          open or focus capture/editor/recording preferences
 quikscope notifications <on|off|toggle|status>
 quikscope daemon             run the daemon in the foreground
+quikscope version            print the client's and the daemon's versions
 quikscope ping | quit
 ```
 
@@ -412,7 +415,7 @@ annotator. Nothing counts down: recording starts when the selection is made.
 | --- | --- | --- |
 | Formats | MP4 (default), MKV, MOV — H.264 | GIF (default), WebP, AVIF, JPEG XL |
 | Frame rate | 60 fps (1–240) | 30 fps (1–60) |
-| Audio | desktop audio by default; any inputs and outputs, mixed | none |
+| Audio | Opus; desktop audio by default; any inputs and outputs, mixed | none |
 
 The region is selected over the live desktop like `capture region
 --no-freeze` (`Enter` or a click on empty space takes the whole output;
@@ -442,28 +445,37 @@ audio devices and frame rates; while recording it shows the elapsed time with
 Pause/Resume, Stop and save and Discard, and a click on the icon stops.
 `record.tray = false` hides it. The Windows tray menu has the same items.
 
-**Encoding.** Videos use the first GPU encoder that works (NVENC, VAAPI,
-Quick Sync, AMF, Media Foundation on Windows), else a software H.264 encoder;
-`record.encoder = "software"` skips the GPU.
+**Encoding.** quikscope has no FFmpeg dependency: it writes MP4, MOV and MKV
+itself and carries its own encoders. Videos are H.264, encoded on the GPU
+through Vulkan Video (NVIDIA, AMD and Intel with recent drivers) and
+otherwise by the built-in OpenH264 software encoder; `record.encoder =
+"software"` skips the GPU. Sound is Opus in every container. MP4 recordings
+are fragmented by default, so a file stays playable up to its last second
+if quikscope or the machine dies mid-recording;
+`record.mp4_fragmented = false` instead writes a classic MP4 with its index
+at the front when the recording ends. MOV is always written the classic way,
+MKV in one cluster per keyframe.
 Animations are recorded losslessly to the cache first and encoded when you
-stop (GIF with a palette computed over the whole clip), so annotating them
-later loses nothing.
+stop, so annotating them later loses nothing. Every frame keeps its exact
+display time through recording, annotating and re-encoding, including
+variable-delay GIFs; GIF frames each get their own dithered palette.
 
 **Capture.** On wlroots compositors frames are copied by the compositor into
-GPU buffers (DMA-BUF) and converted on quikscope's side; shared-memory
-capture is never used for recordings because Hyprland reads it back
-synchronously on its main thread, which makes games stutter. On Hyprland with
-an NVIDIA RTX 5090 this sustained 56 fps at 1280×720 and 52 fps at 2560×1440
-with about 2 ms of CPU per frame. X11 uses MIT-SHM, Windows Desktop
-Duplication (`ddagrab`), and GNOME/KDE the ScreenCast portal (experimental;
-the first recording asks for permission, later ones reuse the stored grant).
+GPU buffers (DMA-BUF) whenever it offers them, and converted on quikscope's
+side. A compositor that offers no DMA-BUF gets shared-memory capture instead,
+with a warning in the log: Hyprland reads shared-memory captures back
+synchronously on its main thread, which can make games stutter. X11 uses
+MIT-SHM, Windows Desktop Duplication, and GNOME/KDE the ScreenCast portal
+(experimental; the first recording asks for permission, later ones reuse the
+stored grant).
 
 ## Opening files
 
 `quikscope open FILE...` opens PNG, JPEG, WebP, AVIF, JPEG XL and GIF images
 in the annotator. Animated GIF, WebP, AVIF, JPEG XL and APNG files open in the
-annotator's animation mode; MP4, MKV, MOV, WebM and other videos open in the
-video editor. Without a file it opens the latest capture.
+annotator's animation mode. H.264 videos in MP4, MOV, MKV or WebM, with AAC,
+Opus or no sound, open in the video editor; HEVC, VP9 and AV1 videos are not
+supported. Without a file it opens the latest capture.
 
 The packages' desktop entry declares these types, so file managers list
 quikscope under **Open with** (`xdg-mime default quikscope.desktop video/mp4`
@@ -612,6 +624,9 @@ test described in [docs/testing.md](docs/testing.md).
   monitor; Windows 10, mixed DPI, multiple monitors and window snapping remain unverified.
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.
+- Video files open only if they are H.264 (progressive, 8-bit 4:2:0); HEVC,
+  VP9 and AV1 videos are not supported. Without Vulkan Video H.264 support in
+  the GPU driver, recording and playback use the slower OpenH264 software codec.
 
 ## Development
 
@@ -645,3 +660,10 @@ Windows executable and tray use the embedded ICO resource.
 MIT or Apache-2.0, at your option. Bundled assets: Inter variable and Inter
 italic (SIL Open Font License, `assets/fonts/INTER-LICENSE.txt`) and Lucide
 icons (ISC, `assets/icons/LICENSE`).
+
+The C and C++ libraries compiled into quikscope (libopus, OpenH264, libwebp,
+Zstandard and the Vulkan Memory Allocator) keep their own BSD and MIT
+licences; THIRD-PARTY-LICENSES.html in every package carries their notices
+with those of all Rust dependencies. OpenH264 is built from source, so Cisco's
+H.264 patent licence, which covers only binaries Cisco distributes, does not
+extend to it.

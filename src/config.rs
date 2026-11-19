@@ -87,14 +87,15 @@ pub struct Hotkeys {
 impl Default for Hotkeys {
     fn default() -> Self {
         // Recording shortcuts avoid the system's own recorders (Windows 11
-        // Snipping Tool Win+Shift+R, Game Bar Win+Alt+R).
+        // Snipping Tool Win+Shift+R, Game Bar Win+Alt+R) and
+        // Alt+Shift+PrintScreen, which toggles High Contrast.
         Self {
             region: "PrintScreen".into(),
             screen: "Ctrl+PrintScreen".into(),
             window: "Alt+PrintScreen".into(),
             open_last: "Shift+PrintScreen".into(),
             record_video: "Ctrl+Shift+PrintScreen".into(),
-            record_animation: "Alt+Shift+PrintScreen".into(),
+            record_animation: "Ctrl+Alt+PrintScreen".into(),
         }
     }
 }
@@ -266,7 +267,7 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Config> {
-        let config: Config = toml::from_str(text)?;
+        let mut config: Config = toml::from_str(text)?;
         anyhow::ensure!(
             !config.save_dir.trim().is_empty() && !config.save_dir.contains('\0'),
             "save_dir must be a nonempty directory path without NUL characters"
@@ -344,21 +345,39 @@ impl Config {
             "record.encoder {:?} is not \"auto\" or \"software\"",
             r.encoder
         );
+        // A shortcut the file does not set falls back to its default, and a
+        // newer default (0.3 added the recording shortcuts) may already be
+        // what an older file binds elsewhere. The file's own binding wins and
+        // the default is left unbound, rather than rejecting the whole file;
+        // two bindings the file sets itself are still an error.
+        let explicit = explicit_hotkeys(text)?;
+        let h = &mut config.hotkeys;
+        let mut bindings = [
+            ("region", &mut h.region),
+            ("screen", &mut h.screen),
+            ("window", &mut h.window),
+            ("open_last", &mut h.open_last),
+            ("record_video", &mut h.record_video),
+            ("record_animation", &mut h.record_animation),
+        ];
+        bindings.sort_by_key(|(name, _)| !explicit.contains(*name));
         let mut seen = std::collections::HashSet::new();
-        for (name, binding) in [
-            ("region", &config.hotkeys.region),
-            ("screen", &config.hotkeys.screen),
-            ("window", &config.hotkeys.window),
-            ("open_last", &config.hotkeys.open_last),
-            ("record_video", &config.hotkeys.record_video),
-            ("record_animation", &config.hotkeys.record_animation),
-        ] {
-            if let Some(key) = parse_hotkey(binding).with_context(|| format!("hotkeys.{name}"))? {
-                anyhow::ensure!(
-                    seen.insert(key),
-                    "hotkeys.{name}: duplicate global shortcut {binding:?}"
-                );
+        for (name, binding) in bindings {
+            let Some(key) = parse_hotkey(binding).with_context(|| format!("hotkeys.{name}"))?
+            else {
+                continue;
+            };
+            if seen.insert(key) {
+                continue;
             }
+            anyhow::ensure!(
+                !explicit.contains(name),
+                "hotkeys.{name}: duplicate global shortcut {binding:?}"
+            );
+            log::info!(
+                "hotkeys.{name}: the default {binding:?} is bound to another shortcut in the config; leaving it unbound"
+            );
+            binding.clear();
         }
         Ok(config)
     }
@@ -373,6 +392,17 @@ impl Config {
     pub fn new_save_path(&self, time: SystemTime) -> PathBuf {
         self.save_dir().join(format_time(&self.filename, time))
     }
+}
+
+/// The `[hotkeys]` names `text` (already valid TOML) sets itself, as
+/// opposed to ones left at their defaults.
+fn explicit_hotkeys(text: &str) -> Result<std::collections::HashSet<String>> {
+    let table: toml::Table = toml::from_str(text)?;
+    Ok(table
+        .get("hotkeys")
+        .and_then(toml::Value::as_table)
+        .map(|hotkeys| hotkeys.keys().cloned().collect())
+        .unwrap_or_default())
 }
 
 /// Updates typed config paths (for example `["editor", "stroke"]`) together.
@@ -712,8 +742,62 @@ mod tests {
         assert!(parse_hotkey("Ctrl+Ctrl+A").is_err());
         assert!(parse_hotkey("Super+PrintScreen").is_err());
         assert!(parse_hotkey("F25").is_err());
-        assert!(Config::parse("[hotkeys]\nregion = 'Ctrl+PrintScreen'").is_err());
+        assert!(
+            Config::parse("[hotkeys]\nregion = 'Ctrl+PrintScreen'\nscreen = 'Ctrl+PrintScreen'")
+                .is_err(),
+            "two bindings the file sets itself"
+        );
         assert!(Config::parse("[hotkeys]\nregion = ''\nscreen = 'Win+S'").is_ok());
+        let defaults = Hotkeys::default();
+        let bindings = [
+            &defaults.region,
+            &defaults.screen,
+            &defaults.window,
+            &defaults.open_last,
+            &defaults.record_video,
+            &defaults.record_animation,
+        ];
+        for (i, a) in bindings.iter().enumerate() {
+            for b in &bindings[i + 1..] {
+                assert_ne!(parse_hotkey(a).unwrap(), parse_hotkey(b).unwrap());
+            }
+        }
+        assert!(
+            !bindings.contains(&&"Alt+Shift+PrintScreen".to_string()),
+            "Windows toggles High Contrast with it"
+        );
+    }
+
+    #[test]
+    fn a_new_default_colliding_with_an_older_configs_binding_is_left_unbound() {
+        // A 0.2 config (no recording shortcuts) that bound the shortcut 0.3
+        // gives `record_video` by default, written as a table and dotted.
+        for text in [
+            "notify = false\n[hotkeys]\nregion = 'F1'\nscreen = 'Ctrl+Shift+PrintScreen'\n",
+            "notify = false\nhotkeys.region = 'F1'\nhotkeys.screen = 'Ctrl+Shift+PrintScreen'\n",
+        ] {
+            let c = Config::parse(text).unwrap();
+            assert!(!c.notify, "the rest of the file still applies");
+            assert_eq!(c.hotkeys.region, "F1");
+            assert_eq!(c.hotkeys.screen, "Ctrl+Shift+PrintScreen");
+            assert_eq!(c.hotkeys.record_video, "", "the default yields");
+            assert_eq!(
+                c.hotkeys.record_animation,
+                Hotkeys::default().record_animation
+            );
+        }
+        // Two bindings the file sets itself are still rejected.
+        assert!(
+            Config::parse("[hotkeys]\nscreen = 'F2'\nrecord_video = 'F2'\n").is_err(),
+            "explicit duplicates"
+        );
+        // Settings can save into such a file (its parse no longer fails).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[hotkeys]\nwindow = 'Ctrl+Alt+PrintScreen'\n").unwrap();
+        let c = persist_values(&path, &[(&["notify"], false.into())]).unwrap();
+        assert_eq!(c.hotkeys.window, "Ctrl+Alt+PrintScreen");
+        assert_eq!(c.hotkeys.record_animation, "");
     }
 
     #[test]

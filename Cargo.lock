@@ -5405,6 +5405,7 @@ dependencies = [
  "mkv-element",
  "mp4-atom",
  "openh264",
+ "openh264-sys2",
  "opus",
  "pipewire",
  "png 0.18.1",
@@ -5441,6 +5442,7 @@ dependencies = [
  "yuv",
  "zbus",
  "zstd",
+ "zune-core",
 ]
 
 [[package]]
