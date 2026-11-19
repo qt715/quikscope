@@ -1215,7 +1215,7 @@ async fn end_selection_windows(
 ) {
     #[cfg(windows)]
     for overlay in overlays {
-        if let Err(error) = platform::windows::hide_overlay(overlay, cx).await {
+        if let Err(error) = platform::windows::hide_window(overlay.into(), cx).await {
             log::error!("hiding selection overlay: {error:#}");
         }
         cx.update(|cx| {

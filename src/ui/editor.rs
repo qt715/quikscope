@@ -1186,7 +1186,7 @@ impl Editor {
                 ("c", true) => self.copy_text(cx),
                 ("z", false) => self.undo(cx),
                 ("z", true) | ("y", _) => self.redo(cx),
-                ("w", _) | ("q", _) => window.remove_window(),
+                ("w", _) | ("q", _) => super::close_window(window, cx),
                 ("0", _) => {
                     self.fit(window, cx);
                     cx.notify();
@@ -1228,7 +1228,7 @@ impl Editor {
                 } else if !self.selected.is_empty() {
                     self.selected.clear();
                 } else {
-                    window.remove_window();
+                    super::close_window(window, cx);
                     return;
                 }
             }
@@ -1666,7 +1666,7 @@ impl Editor {
             if let (Ok(path), Output::Save) = (&done.result, done.output) {
                 e.saved = Some((path.clone(), revision));
                 if close && let Some(window) = window {
-                    let _ = window.update(cx, |_, window, _| window.remove_window());
+                    let _ = window.update(cx, |_, window, cx| super::close_window(window, cx));
                 }
             }
         };
@@ -1731,7 +1731,7 @@ impl Editor {
                     e.show_toast(format!("Saved {}", tilde(&path)), false, cx);
                     e.saved = Some((path, revision));
                     if close {
-                        window.remove_window();
+                        super::close_window(window, cx);
                     }
                 }
                 Err(err) => e.show_toast(format!("Save failed: {err:#}"), true, cx),

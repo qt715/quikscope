@@ -11,7 +11,7 @@ use gpui::{
 use toml_edit::Value;
 
 use super::{
-    UI_FONT,
+    UI_FONT, close_window,
     field::{Field, FieldEvent, FieldKind},
     theme,
 };
@@ -155,9 +155,17 @@ impl Settings {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let weak = cx.weak_entity();
-        window.on_window_should_close(cx, move |_, cx| {
-            weak.update(cx, |this, cx| this.commit_close(cx))
-                .unwrap_or(true)
+        window.on_window_should_close(cx, move |window, cx| {
+            let Ok(commit) = weak.update(cx, |this, cx| this.commit_close(cx)) else {
+                return true;
+            };
+            // Windows destroys a window it closes natively while GPUI still
+            // has the deactivation that causes queued; see `close_window`.
+            if cfg!(windows) && commit {
+                close_window(window, cx);
+                return false;
+            }
+            commit
         });
         let mut this = Self {
             #[cfg(windows)]
@@ -1097,7 +1105,7 @@ impl Render for Settings {
                     .cursor_pointer().hover(|d| d.bg(theme::hover()))
                     .child(if self.welcome { "Done" } else { "Close" })
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if this.commit_close(cx) { window.remove_window(); }
+                        if this.commit_close(cx) { close_window(window, cx); }
                     }))))
     }
 }

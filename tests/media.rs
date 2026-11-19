@@ -76,6 +76,53 @@ impl VideoSource for Synthetic {
     }
 }
 
+/// [`pattern`] frames like a live screen capture at `fps`: each call
+/// delivers the picture of the current frame slot, captured then; slots
+/// nobody asked for in time are gone, as a compositor drops them.
+struct Live {
+    start: Instant,
+    interval: Duration,
+    /// Pre-drawn pictures, cycled (drawing one per frame would be slower
+    /// than the capture rate in a test build).
+    pictures: Vec<Image>,
+    last: Option<u64>,
+}
+
+impl Live {
+    fn new(fps: u32, width: u32, height: u32) -> Self {
+        Self {
+            start: Instant::now(),
+            interval: Duration::from_secs(1) / fps,
+            pictures: (0..32).map(|i| pattern(width, height, i)).collect(),
+            last: None,
+        }
+    }
+}
+
+impl VideoSource for Live {
+    fn size(&self) -> (u32, u32) {
+        (self.pictures[0].width, self.pictures[0].height)
+    }
+
+    fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
+        let slot_of = |at: Instant| (at - self.start).as_nanos() / self.interval.as_nanos();
+        let mut slot = slot_of(Instant::now()) as u64;
+        if self.last == Some(slot) {
+            let next = self.start + self.interval * (slot as u32 + 1);
+            let wait = next.saturating_duration_since(Instant::now());
+            if wait > timeout {
+                thread::sleep(timeout);
+                return Ok(None);
+            }
+            thread::sleep(wait);
+            slot += 1;
+        }
+        self.last = Some(slot);
+        let picture = &self.pictures[slot as usize % self.pictures.len()];
+        Ok(Some(Frame::from_image(picture, Instant::now())))
+    }
+}
+
 /// A picture the test changes; delivered like a damage-driven capture: only
 /// when it changes, plus once after opening and after every resume.
 #[derive(Clone)]
@@ -615,6 +662,37 @@ fn static_screens_record_variable_frame_rate() -> Result<()> {
     Ok(())
 }
 
+/// The first frames flow without a pause: the encoder (a GPU encoder takes
+/// ~150–200 ms to open) is ready by the time capture starts, instead of
+/// opening after the first frame while the capture waits.
+#[test]
+fn recordings_start_without_a_gap() -> Result<()> {
+    init_logs();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("start.mkv");
+    let mut config = config(&path, OutputFormat::Mkv, EncoderPreference::Auto);
+    config.fps = 60;
+    let session = Session::start(config, Box::new(Live::new(60, 640, 360)))?;
+    let recorded = record_for(session, ms(1000))?;
+    eprintln!("encoder: {}", recorded.encoder);
+    let times = video_packet_times(&path)?;
+    let start: Vec<_> = times.iter().take_while(|&&t| t < ms(500)).collect();
+    eprintln!("first half second: {start:?}");
+    assert!(
+        start.len() >= 15,
+        "{} frames in the first 500 ms",
+        start.len()
+    );
+    // Three frame intervals at 60 fps.
+    for pair in start.windows(2) {
+        assert!(
+            *pair[1] - *pair[0] <= ms(50),
+            "a gap at the start: {start:?}"
+        );
+    }
+    Ok(())
+}
+
 /// Jittery capture timestamps do not crackle: the mixer places samples by
 /// count, Opus carries them, and the decoded tone is continuous.
 #[test]
@@ -678,8 +756,10 @@ fn encoder_failure_keeps_what_was_recorded() -> Result<()> {
         assert_eq!(recorded.path, path);
         let frames = decoded(&path)?;
         assert!(frames.len() >= 25, "{format}: {} frames kept", frames.len());
+        // Every frame up to the failure, none lost (the recording starts
+        // from the newest frame once the encoder is open, not always 0).
         assert_eq!(
-            index_of(&frames.last().unwrap().image),
+            index_of(&frames.last().unwrap().image) - index_of(&frames[0].image),
             frames.len() as u32 - 1
         );
         fixtures::ffprobe(&path, &["h264"]);
@@ -895,8 +975,7 @@ fn crashed_recordings_stay_playable() -> Result<()> {
         // Fragments end at keyframes, one a second: at 2.5 s the first two
         // seconds are on disk.
         assert!(frames.len() >= 20, "{format}: {} frames", frames.len());
-        // Captures in order from the first, each once.
-        assert_eq!(index_of(&frames[0].image), 0, "{format}");
+        // Captures in order, each once.
         for pair in frames.windows(2) {
             assert!(
                 index_of(&pair[1].image) > index_of(&pair[0].image),

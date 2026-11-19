@@ -104,7 +104,8 @@
   writes separate files instead of overwriting each other, also for the
   annotator's Ctrl+S with a fixed `filename`.
 - Windows: a command that starts the daemon, run with its output captured
-  (`quikscope audio-devices | Out-String`), no longer hangs until the daemon
+  (`quikscope audio-devices | Out-String`, or `cmd /c "quikscope … > file"`
+  from a caller capturing `cmd`'s output), no longer hangs until the daemon
   quits, and redirected output (`quikscope version > file`) is written.
 
 ### Removed

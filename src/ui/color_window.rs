@@ -106,7 +106,7 @@ impl ColorWindow {
         let ks = &ev.keystroke;
         let command = ks.modifiers.control || ks.modifiers.platform;
         match ks.key.as_str() {
-            "escape" => window.remove_window(),
+            "escape" => super::close_window(window, cx),
             "c" if command => self.copy(Format::Hex, cx),
             _ => return,
         }

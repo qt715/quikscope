@@ -802,38 +802,38 @@ fn exchange(mut stream: UnixStream, req: &Request, timeout: Option<Duration>) ->
 
 /// Starts a detached daemon and returns the first successful connection to it.
 fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
-    #[cfg(unix)]
-    use std::os::unix::process::CommandExt as _;
     let exe = std::env::current_exe().context("locating the quikscope executable")?;
     let log = crate::config::cache_dir().join("daemon.log");
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir).ok();
     }
     let log_file = open_daemon_log(&log);
-    let mut cmd = std::process::Command::new(exe);
     // Detaching on Windows changes CWD; retain the client's socket location.
-    cmd.arg("daemon")
-        .env("QUIKSCOPE_SOCKET", std::path::absolute(socket)?)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null());
-    match log_file {
-        Some(f) => cmd.stderr(f),
-        None => cmd.stderr(std::process::Stdio::null()),
-    };
-    // Detach into its own session so closing the launching terminal (or the
-    // compositor's exec helper exiting) does not take the daemon down.
+    let socket_path = std::path::absolute(socket)?;
     #[cfg(unix)]
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
+    {
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("daemon")
+            .env(SOCKET_VAR, socket_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null());
+        match log_file {
+            Some(f) => cmd.stderr(f),
+            None => cmd.stderr(std::process::Stdio::null()),
+        };
+        // Detach into its own session so closing the launching terminal (or
+        // the compositor's exec helper exiting) does not take the daemon down.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        cmd.spawn().context("starting the daemon")?;
     }
     #[cfg(windows)]
-    configure_windows_daemon(&mut cmd);
-    #[cfg(windows)]
-    keep_std_handles_from_daemon();
-    cmd.spawn().context("starting the daemon")?;
+    spawn_windows_daemon(&exe, &socket_path, log_file.as_ref()).context("starting the daemon")?;
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -844,6 +844,9 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     }
     bail!("the daemon did not start within 5s; see {}", log.display())
 }
+
+/// Where an auto-started daemon listens, passed through its environment.
+const SOCKET_VAR: &str = "QUIKSCOPE_SOCKET";
 
 /// Above this size an auto-start moves the old daemon log to `daemon.log.1`
 /// (replacing the one before); below it the new daemon appends, so the log
@@ -863,51 +866,236 @@ fn open_daemon_log(log: &Path) -> Option<std::fs::File> {
         .ok()
 }
 
+/// Starts `exe daemon` detached, without a console, in the cache directory
+/// (never an untrusted download directory as the DLL search CWD), with
+/// stdin/stdout on NUL and stderr on `log` (NUL without one).
+///
+/// `CreateProcess` with inheritance on passes every inheritable handle of
+/// this client to the child, not only the three it is given. A client run
+/// as `cmd /c "quikscope … > file"` from a caller capturing `cmd`'s output
+/// inherited `cmd`'s inheritable output pipe; a daemon inheriting it in turn
+/// keeps that pipe open, so the caller waits until the daemon quits. An
+/// explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` limits inheritance to NUL and
+/// the log.
 #[cfg(windows)]
-fn configure_windows_daemon(cmd: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt as _;
-    // Never inherit an untrusted download directory as the DLL search CWD.
-    cmd.current_dir(crate::config::cache_dir());
-    // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no inherited console.
-    cmd.creation_flags(0x0000_0008 | 0x0000_0200);
-}
-
-/// `CreateProcess` passes every inheritable handle to the child, not only
-/// the three it is given. A client run as `quikscope … | Out-String` holds
-/// the inheritable write end of PowerShell's pipe as its stdout; a daemon
-/// inheriting it keeps the pipe open, so PowerShell waits until the daemon
-/// quits. This client exits soon, so its own handles need not be
-/// inheritable.
-#[cfg(windows)]
-fn keep_std_handles_from_daemon() {
-    use windows::Win32::Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation};
-    use windows::Win32::System::Console::{
-        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+fn spawn_windows_daemon(exe: &Path, socket: &Path, log: Option<&std::fs::File>) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows::Win32::Foundation::{
+        CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
     };
-    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-        // SAFETY: plain handle queries; a missing or invalid standard
-        // handle only makes `SetHandleInformation` fail, which is ignored.
-        unsafe {
-            if let Ok(handle) = GetStdHandle(id)
-                && !handle.is_invalid()
-            {
-                let _ = SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
-            }
+    use windows::Win32::System::Threading::{
+        CREATE_NEW_PROCESS_GROUP, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
+        InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW, UpdateProcThreadAttribute,
+    };
+    use windows::core::{PCWSTR, PWSTR};
+
+    struct AttributeList(LPPROC_THREAD_ATTRIBUTE_LIST);
+    impl Drop for AttributeList {
+        fn drop(&mut self) {
+            // SAFETY: initialized by `InitializeProcThreadAttributeList`,
+            // and its buffer outlives this guard.
+            unsafe { DeleteProcThreadAttributeList(self.0) };
         }
     }
+
+    let wide = |s: &std::ffi::OsStr| s.encode_wide().chain([0]).collect::<Vec<u16>>();
+    let application = wide(exe.as_os_str());
+    let mut command_line = daemon_command_line(&exe.as_os_str().encode_wide().collect::<Vec<_>>());
+    let directory = wide(crate::config::cache_dir().as_os_str());
+    let environment = environment_block(
+        std::env::vars_os()
+            .map(|(key, value)| (key.encode_wide().collect(), value.encode_wide().collect())),
+        (
+            &SOCKET_VAR.encode_utf16().collect::<Vec<_>>(),
+            &socket.as_os_str().encode_wide().collect::<Vec<_>>(),
+        ),
+    );
+
+    let null = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("NUL")
+        .context("opening NUL")?;
+    let null_handle = HANDLE(null.as_raw_handle());
+    let error_handle = log.map_or(null_handle, |f| HANDLE(f.as_raw_handle()));
+    let mut handles = vec![null_handle];
+    if error_handle != null_handle {
+        handles.push(error_handle);
+    }
+    for &handle in &handles {
+        // SAFETY: handles of files open for this whole call. The list
+        // attribute only accepts inheritable handles.
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT) }
+            .context("making the daemon's standard handles inheritable")?;
+    }
+
+    let mut size = 0;
+    // SAFETY: the sizing call writes only `size`; it fails by design with
+    // ERROR_INSUFFICIENT_BUFFER.
+    let _ = unsafe {
+        InitializeProcThreadAttributeList(
+            LPPROC_THREAD_ATTRIBUTE_LIST(std::ptr::null_mut()),
+            1,
+            0,
+            &mut size,
+        )
+    };
+    // u64 words keep the opaque list pointer-aligned.
+    let mut buffer = vec![0u64; size.div_ceil(size_of::<u64>())];
+    let list = LPPROC_THREAD_ATTRIBUTE_LIST(buffer.as_mut_ptr().cast());
+    // SAFETY: `buffer` holds the `size` bytes the sizing call asked for.
+    unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) }
+        .context("initializing the process attribute list")?;
+    let list = AttributeList(list);
+    // SAFETY: `handles` outlives the list's use in `CreateProcessW` below.
+    unsafe {
+        UpdateProcThreadAttribute(
+            list.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            Some(handles.as_ptr().cast()),
+            std::mem::size_of_val(handles.as_slice()),
+            None,
+            None,
+        )
+    }
+    .context("limiting the daemon's inherited handles")?;
+
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = null_handle;
+    startup.StartupInfo.hStdOutput = null_handle;
+    startup.StartupInfo.hStdError = error_handle;
+    startup.lpAttributeList = list.0;
+    let mut process = PROCESS_INFORMATION::default();
+    // SAFETY: every string is NUL-terminated (the environment block doubly)
+    // and lives across the call; `command_line` is writable as required.
+    unsafe {
+        CreateProcessW(
+            PCWSTR(application.as_ptr()),
+            PWSTR(command_line.as_mut_ptr()),
+            None,
+            None,
+            true,
+            DETACHED_PROCESS
+                | CREATE_NEW_PROCESS_GROUP
+                | CREATE_UNICODE_ENVIRONMENT
+                | EXTENDED_STARTUPINFO_PRESENT,
+            Some(environment.as_ptr().cast()),
+            PCWSTR(directory.as_ptr()),
+            &startup.StartupInfo,
+            &mut process,
+        )
+    }?;
+    // SAFETY: handles `CreateProcessW` returned to this process.
+    unsafe {
+        let _ = CloseHandle(process.hThread);
+        let _ = CloseHandle(process.hProcess);
+    }
+    Ok(())
+}
+
+/// `"exe" daemon`, NUL-terminated, as `CreateProcessW` takes it. The CRT
+/// reads a quoted program name verbatim (no backslash escapes), and Windows
+/// paths cannot contain `"`.
+#[cfg(any(windows, test))]
+fn daemon_command_line(exe: &[u16]) -> Vec<u16> {
+    let quote = u16::from(b'"');
+    let mut line = Vec::with_capacity(exe.len() + 10);
+    line.push(quote);
+    line.extend_from_slice(exe);
+    line.push(quote);
+    line.extend(" daemon".encode_utf16());
+    line.push(0);
+    line
+}
+
+/// A `CREATE_UNICODE_ENVIRONMENT` block: `vars` with `set` replacing any
+/// variable of the same name (Windows names ignore case), as `name=value`
+/// strings sorted by case-folded name, each NUL-terminated, plus a final NUL.
+#[cfg(any(windows, test))]
+fn environment_block(
+    vars: impl IntoIterator<Item = (Vec<u16>, Vec<u16>)>,
+    set: (&[u16], &[u16]),
+) -> Vec<u16> {
+    fn fold(name: &[u16]) -> Vec<u16> {
+        name.iter()
+            .map(|&c| match u8::try_from(c) {
+                Ok(b) => u16::from(b.to_ascii_uppercase()),
+                Err(_) => c,
+            })
+            .collect()
+    }
+    let folded = fold(set.0);
+    let mut vars: Vec<(Vec<u16>, Vec<u16>)> = vars
+        .into_iter()
+        .filter(|(name, _)| fold(name) != folded)
+        .collect();
+    vars.push((set.0.to_vec(), set.1.to_vec()));
+    vars.sort_by_cached_key(|(name, _)| fold(name));
+    let mut block = Vec::new();
+    for (name, value) in vars {
+        block.extend(name);
+        block.push(u16::from(b'='));
+        block.extend(value);
+        block.push(0);
+    }
+    block.push(0);
+    block
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
+
+    fn utf16(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
     #[test]
-    fn detached_windows_daemon_does_not_inherit_cwd() {
-        let mut cmd = std::process::Command::new("quikscope.exe");
-        configure_windows_daemon(&mut cmd);
+    fn daemon_command_line_quotes_the_program_verbatim() {
+        let exe = r"C:\Program Files\quik scope\quikscope.exe";
         assert_eq!(
-            cmd.get_current_dir(),
-            Some(crate::config::cache_dir().as_path())
+            String::from_utf16(&daemon_command_line(&utf16(exe))).unwrap(),
+            format!("\"{exe}\" daemon\0")
+        );
+        // Backslashes stay single: a quoted program name has no escapes.
+        let exe = r"\\?\UNC\server\share\q.exe";
+        assert_eq!(
+            String::from_utf16(&daemon_command_line(&utf16(exe))).unwrap(),
+            format!("\"{exe}\" daemon\0")
+        );
+    }
+
+    #[test]
+    fn environment_block_replaces_the_socket_and_sorts_names() {
+        let vars = [
+            ("Path", r"C:\Windows"),
+            ("quikscope_socket", "stale"),
+            ("=C:", r"C:\work"),
+            ("APPDATA", r"C:\Users\me\AppData\Roaming"),
+        ]
+        .map(|(k, v)| (utf16(k), utf16(v)));
+        let block = environment_block(
+            vars,
+            (
+                &utf16(SOCKET_VAR),
+                &utf16(r"C:\Users\me\AppData\Local\quikscope\ipc.sock"),
+            ),
+        );
+        assert_eq!(
+            String::from_utf16(&block).unwrap(),
+            "=C:=C:\\work\0APPDATA=C:\\Users\\me\\AppData\\Roaming\0Path=C:\\Windows\0\
+             QUIKSCOPE_SOCKET=C:\\Users\\me\\AppData\\Local\\quikscope\\ipc.sock\0\0"
+        );
+        assert_eq!(
+            environment_block([], (&utf16("A"), &utf16("1"))),
+            utf16("A=1\0\0")
         );
     }
 

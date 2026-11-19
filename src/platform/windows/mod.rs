@@ -206,19 +206,17 @@ pub fn focus_overlay(window: &gpui::Window, physical: crate::geom::IRect, cx: &g
     }
 }
 
-pub async fn hide_overlay<V: 'static>(
-    overlay: gpui::WindowHandle<V>,
-    cx: &mut gpui::AsyncApp,
-) -> Result<()> {
+/// Hides `window` before its removal; see `ui::close_window`.
+pub async fn hide_window(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp) -> Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
 
-    let hwnd = overlay.update(cx, |_, window, _| {
+    let hwnd = window.update(cx, |_, window, _| {
         let handle = HasWindowHandle::window_handle(window)
-            .map_err(|error| anyhow::anyhow!("selection window handle: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("window handle: {error}"))?;
         match handle.as_raw() {
             RawWindowHandle::Win32(handle) => Ok(HWND(handle.hwnd.get() as *mut _)),
-            _ => anyhow::bail!("Windows overlay has no Win32 handle"),
+            _ => anyhow::bail!("window has no Win32 handle"),
         }
     })??;
     // Hide while its GPUI window still exists, and outside an App borrow.

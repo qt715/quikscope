@@ -10,6 +10,7 @@ main_thread_tests![
     invalid_existing_normal_config_shows_error_and_never_writes,
     welcome_previews_without_file_then_done_commits_live_atomically,
     welcome_done_commits_frozen_choice_too,
+    close_and_done_remove_the_window,
     welcome_refuses_config_that_became_invalid_while_open,
     recording_section_writes_record_values,
 ];

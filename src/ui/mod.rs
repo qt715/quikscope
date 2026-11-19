@@ -175,6 +175,24 @@ pub fn init(cx: &mut App) {
     }
 }
 
+/// Closes `window` the way its own close commands should: removed from a
+/// task rather than during the current update, and on Windows hidden first
+/// with the deactivation task that hiding queues run before the removal.
+/// Removing the active window directly (or letting Windows destroy it) runs
+/// that task after GPUI forgot the window, which logs "window not found".
+pub fn close_window(window: &Window, cx: &mut App) {
+    let handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        #[cfg(windows)]
+        if let Err(error) = crate::platform::windows::hide_window(handle, cx).await {
+            // Already gone (closed twice): nothing to hide or remove.
+            log::debug!("hiding a window before closing it: {error:#}");
+        }
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+    })
+    .detach();
+}
+
 /// One GPU texture's worth of a screenshot.
 pub struct Tile {
     pub x: u32,

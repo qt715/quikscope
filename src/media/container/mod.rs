@@ -179,21 +179,56 @@ fn nanos(ns: i128) -> Duration {
     )
 }
 
+/// Frame rates [`nominal_fps`] reports exactly when its estimate is within 2 %.
+const COMMON_RATES: [f64; 14] = [
+    24_000.0 / 1001.0,
+    24.0,
+    25.0,
+    30_000.0 / 1001.0,
+    30.0,
+    50.0,
+    60_000.0 / 1001.0,
+    60.0,
+    90.0,
+    100.0,
+    120.0,
+    144.0,
+    165.0,
+    240.0,
+];
+
 /// Nominal frame rate from frame intervals in units of
-/// `1 / units_per_second`: the mean of the intervals below 1.5 times the
-/// shortest. Recordings skip pictures while the screen is static, so the
-/// overall average understates the rate they were made at, while whole-tick
-/// rounding (33 and 34 ms at 30 fps) still averages out. 0 without any
-/// interval.
-fn nominal_fps(intervals: impl Iterator<Item = u64> + Clone, units_per_second: f64) -> f64 {
-    let Some(shortest) = intervals.clone().filter(|&i| i > 0).min() else {
+/// `1 / units_per_second`, 0 without any interval.
+///
+/// Recordings skip pictures while the screen is static (long intervals),
+/// drop some under load (whole multiples of the frame interval) and stamp the
+/// rest with jittery present times (a late picture's long interval followed
+/// by a short one), so neither the overall average nor the shortest interval
+/// gives the rate they were made at. The median of the shorter half finds the
+/// one-frame cluster despite static stretches; the median of that cluster
+/// (intervals from half to twice it, so no dropped pictures) is the frame
+/// interval; and the mean of the intervals from half to 1.5 times that
+/// averages out jitter and whole-tick rounding (33 and 34 ms at 30 fps). The
+/// result snaps to a common rate within 2 %.
+fn nominal_fps(intervals: impl Iterator<Item = u64>, units_per_second: f64) -> f64 {
+    let mut sorted: Vec<u128> = intervals.filter(|&i| i > 0).map(u128::from).collect();
+    if sorted.is_empty() {
         return 0.0;
-    };
-    let limit = u128::from(shortest) * 3;
-    let (sum, count) = intervals
-        .filter(|&i| i > 0 && u128::from(i) * 2 < limit)
-        .fold((0u128, 0u64), |(sum, count), i| {
-            (sum + u128::from(i), count + 1)
-        });
-    units_per_second * count as f64 / sum as f64
+    }
+    sorted.sort_unstable();
+    let quartile = sorted[(sorted.len().div_ceil(2) - 1) / 2];
+    let cluster = &sorted[sorted.partition_point(|&i| i * 2 < quartile)
+        ..sorted.partition_point(|&i| i < quartile * 2)];
+    let frame = cluster[(cluster.len() - 1) / 2];
+    let (sum, count) = sorted
+        .iter()
+        .filter(|&&i| i * 2 >= frame && i * 2 <= frame * 3)
+        .fold((0u128, 0u64), |(sum, count), &i| (sum + i, count + 1));
+    let fps = units_per_second * count as f64 / sum as f64;
+    COMMON_RATES
+        .into_iter()
+        .map(|rate| (rate, (fps / rate - 1.0).abs()))
+        .filter(|&(_, error)| error <= 0.02)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(fps, |(rate, _)| rate)
 }

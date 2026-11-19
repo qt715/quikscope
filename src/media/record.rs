@@ -46,7 +46,8 @@ use super::container::{self, Codec, Muxer};
 use super::export::{self, AUDIO_TRACK, H264Track, OpusTrack, VIDEO_TRACK};
 use super::mix::Mixer;
 use super::{
-    AudioSource, EncoderPreference, Frame, OutputFormat, PixelFormat, VideoSource, convert,
+    AudioSource, AudioSpec, EncoderPreference, Frame, OutputFormat, PixelFormat, VideoSource,
+    convert,
 };
 use crate::output::OutputFile;
 use crate::raster::Image;
@@ -85,8 +86,8 @@ pub struct Recorded {
     /// Recorded time, pauses excluded.
     pub duration: Duration,
     /// A representative frame (for notifications and the clipboard preview):
-    /// the middle of the recording, or its first frame when the file cannot
-    /// be read back.
+    /// the middle of the recording, or a video's last picture when the file
+    /// cannot be read back (blank if there is none).
     pub thumbnail: Image,
     /// Encoder actually used, e.g. "OpenH264", for logs.
     pub encoder: String,
@@ -125,6 +126,9 @@ const THUMBNAIL: u32 = 384;
 const ABORT_POLL: Duration = Duration::from_millis(10);
 /// How long capture threads block before checking for stop and pause.
 const POLL: Duration = Duration::from_millis(40);
+/// How long [`Session::start`] blocks on the source between checks whether
+/// the encoder is open (on a static screen no frame ends the wait early).
+const OPEN_POLL: Duration = Duration::from_millis(5);
 /// How long the encoder thread waits for work before checking the clock
 /// (static-screen repeats, audio).
 const IDLE: Duration = Duration::from_millis(20);
@@ -306,6 +310,8 @@ struct Outcome {
     /// Why encoding stopped early or finishing failed; what was written may
     /// still be usable.
     error: Option<anyhow::Error>,
+    /// A video's last picture, for when the recording cannot be read back.
+    last_picture: Option<Yuv420>,
 }
 
 pub struct Session {
@@ -315,8 +321,6 @@ pub struct Session {
     fragmented: bool,
     output: Option<OutputFile>,
     size: (u32, u32),
-    /// The first frame, for when the recording cannot be read back.
-    thumbnail: Image,
     control: Arc<Control>,
     pulls: Vec<JoinHandle<()>>,
     encoder: Option<JoinHandle<Outcome>>,
@@ -357,19 +361,7 @@ impl Session {
         if !config.format.is_video() {
             audio.clear();
         }
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let first = loop {
-            if let Some(frame) = source.next_frame(POLL)? {
-                break frame;
-            }
-            ensure!(
-                Instant::now() < deadline,
-                "Screen source did not produce its first frame"
-            );
-        };
-        let thumbnail = first.to_image().thumbnail(THUMBNAIL);
-        let mut warnings = Vec::new();
-        let (sink, size) = if config.format.is_video() {
+        if config.format.is_video() {
             let in_place = matches!(
                 export::container_for(config.format, config.fragmented)?,
                 container::Container::Mp4 { fragmented: true } | container::Container::Mkv
@@ -377,39 +369,42 @@ impl Session {
             if in_place && config.output.is_reserved() {
                 config.output.write_in_place()?;
             }
-            let sink = VideoSink::create(&config, (first.width(), first.height()), &audio)?;
-            let size = sink.encoded;
-            if sink.scaled {
-                let warning = format!(
-                    "Recording scaled down to {}x{}: no H.264 encoder here takes the full {}x{} capture at {} fps",
-                    size.0,
-                    size.1,
-                    first.width(),
-                    first.height(),
-                    config.fps
-                );
-                log::warn!("{warning}");
-                warnings.push(warning);
-            }
-            (Sink::Video(sink), size)
         } else {
             ensure!(
                 config.master != config.output.path(),
                 "Animation master and output must differ"
             );
-            let size = (first.width(), first.height());
-            anim::check_size(config.format, size.0, size.1)?;
-            let writer = MasterWriter::create(&config.master, size.0, size.1)?;
-            (
-                Sink::Master(MasterSink {
-                    writer,
-                    size,
-                    last_pts: None,
-                }),
-                size,
-            )
-        };
+        }
         let specs: Vec<_> = audio.iter().map(|source| source.spec()).collect();
+        let expected = source.size();
+        let (opened, started) = open_while_capturing(&mut *source, config.fps, || {
+            open_sink(&config, expected, &specs)
+        });
+        let (first, capture_error) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                // Closes the master before deleting it.
+                drop(opened);
+                config.discard_master();
+                return Err(error);
+            }
+        };
+        let actual = (first.width(), first.height());
+        let opened = if actual == expected {
+            opened
+        } else {
+            log::warn!(
+                "the capture announced {}x{} but delivers {}x{}",
+                expected.0,
+                expected.1,
+                actual.0,
+                actual.1
+            );
+            drop(opened);
+            open_sink(&config, actual, &specs)
+        };
+        let (sink, size, warning) = opened.inspect_err(|_| config.discard_master())?;
+        let warnings = Vec::from_iter(warning);
         let control = Arc::new(Control {
             stop: AtomicBool::new(false),
             abort: AtomicBool::new(false),
@@ -423,6 +418,9 @@ impl Session {
             inbox: Inbox::default(),
         });
         control.inbox.push_video(first, Duration::ZERO);
+        if let Some(error) = capture_error {
+            control.fail(&error);
+        }
         let SessionConfig {
             output,
             format,
@@ -444,7 +442,6 @@ impl Session {
             fragmented,
             output: Some(output),
             size,
-            thumbnail,
             control,
             pulls: Vec::new(),
             encoder: Some(encoder),
@@ -550,6 +547,7 @@ impl Session {
         Some(encoder.join().unwrap_or_else(|_| Outcome {
             encoder: "unknown".into(),
             error: Some(anyhow::anyhow!("The encoder thread panicked")),
+            last_picture: None,
         }))
     }
 
@@ -638,7 +636,10 @@ impl Session {
         };
         let thumbnail = super::decode::thumbnail(&master, THUMBNAIL).unwrap_or_else(|e| {
             log::warn!("thumbnail of {}: {e:#}", master.display());
-            self.thumbnail.clone()
+            match outcome.last_picture {
+                Some(picture) => convert::to_bgra(&picture).thumbnail(THUMBNAIL),
+                None => Image::filled(1, 1, [0, 0, 0, 0]),
+            }
         });
         Ok(Recorded {
             path,
@@ -670,6 +671,107 @@ impl Drop for Session {
     fn drop(&mut self) {
         // Neither stopped nor cancelled (an error while starting): discard.
         self.discard();
+    }
+}
+
+impl SessionConfig {
+    /// Removes an animation master created for a session that did not start.
+    fn discard_master(&self) {
+        if !self.format.is_video() {
+            let _ = std::fs::remove_file(&self.master);
+        }
+    }
+}
+
+/// Waits for the source's first frame.
+fn first_frame(source: &mut dyn VideoSource) -> Result<Frame> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(frame) = source.next_frame(POLL)? {
+            return Ok(frame);
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Screen source did not produce its first frame"
+        );
+    }
+}
+
+/// Runs `open` (the encoder: a GPU encoder takes ~200 ms) while taking the
+/// source's frames, and returns its result with the newest frame once it is
+/// done, and the capture error that ended taking frames, if any.
+///
+/// A live source keeps only a few frames for whoever does not take them
+/// (the Wayland helper's ring holds 6) and drops the rest. Waiting for the
+/// encoder without taking them left only frames from its first moments,
+/// then nothing until a slot came free: the recording started from a frame
+/// ~150 ms older than the next one. Taking (and releasing) every frame keeps
+/// the source capturing, so the recording starts from a frame at most one
+/// period old and the next follows it one period later.
+fn open_while_capturing<T: Send>(
+    source: &mut dyn VideoSource,
+    fps: u32,
+    open: impl FnOnce() -> Result<T> + Send,
+) -> (Result<T>, Result<(Frame, Option<anyhow::Error>)>) {
+    thread::scope(|scope| {
+        let opening = scope.spawn(open);
+        let started = first_frame(&mut *source).map(|mut newest| {
+            let mut error = None;
+            // Once `open` is done, only what arrived since the last poll;
+            // bounded, for a source that has a frame ready at every call.
+            let mut after_open = 0;
+            while after_open < fps {
+                let opened = opening.is_finished();
+                let timeout = if opened { Duration::ZERO } else { OPEN_POLL };
+                match source.next_frame(timeout) {
+                    Ok(Some(frame)) => newest = frame,
+                    Ok(None) if opened => break,
+                    Ok(None) => {}
+                    Err(e) => {
+                        error = Some(e);
+                        break;
+                    }
+                }
+                after_open += u32::from(opened);
+            }
+            (newest, error)
+        });
+        let opened = opening
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("Opening the encoder panicked")));
+        (opened, started)
+    })
+}
+
+/// Opens what records `size` frames: the H.264 encoder and muxer for a
+/// video, the master for an animation. Returns it with the recorded size
+/// and a warning when that is scaled down.
+fn open_sink(
+    config: &SessionConfig,
+    size: (u32, u32),
+    audio: &[AudioSpec],
+) -> Result<(Sink, (u32, u32), Option<String>)> {
+    if config.format.is_video() {
+        let sink = VideoSink::create(config, size, audio)?;
+        let encoded = sink.encoded;
+        let warning = sink.scaled.then(|| {
+            let warning = format!(
+                "Recording scaled down to {}x{}: no H.264 encoder here takes the full {}x{} capture at {} fps",
+                encoded.0, encoded.1, size.0, size.1, config.fps
+            );
+            log::warn!("{warning}");
+            warning
+        });
+        Ok((Sink::Video(sink), encoded, warning))
+    } else {
+        anim::check_size(config.format, size.0, size.1)?;
+        let writer = MasterWriter::create(&config.master, size.0, size.1)?;
+        let sink = MasterSink {
+            writer,
+            size,
+            last_pts: None,
+        };
+        Ok((Sink::Master(sink), size, None))
     }
 }
 
@@ -776,12 +878,17 @@ fn encode(mut sink: Sink, control: &Control) -> Outcome {
         return Outcome {
             encoder,
             error: None,
+            last_picture: None,
         };
     }
     let dropped = control.inbox.dropped();
     if dropped > 0 {
         log::warn!("{dropped} frames were dropped because the encoder fell behind");
     }
+    let last_picture = match &mut sink {
+        Sink::Video(video) => video.last.take(),
+        Sink::Master(_) => None,
+    };
     let end = control.elapsed();
     let error = match result {
         Ok(()) => sink.finish(end).err(),
@@ -794,7 +901,11 @@ fn encode(mut sink: Sink, control: &Control) -> Outcome {
             Some(error)
         }
     };
-    Outcome { encoder, error }
+    Outcome {
+        encoder,
+        error,
+        last_picture,
+    }
 }
 
 enum Sink {
@@ -886,7 +997,7 @@ impl VideoSink {
     fn create(
         config: &SessionConfig,
         source_size: (u32, u32),
-        audio: &[Box<dyn AudioSource>],
+        audio: &[AudioSpec],
     ) -> Result<Self> {
         let even = (source_size.0 & !1, source_size.1 & !1);
         ensure!(
@@ -906,9 +1017,8 @@ impl VideoSink {
         let audio = if audio.is_empty() {
             None
         } else {
-            let specs: Vec<_> = audio.iter().map(|source| source.spec()).collect();
             Some((
-                Mixer::new(&specs)?,
+                Mixer::new(audio)?,
                 OpusTrack::new(AUDIO_TRACK, Duration::ZERO)?,
             ))
         };
@@ -1021,6 +1131,8 @@ impl MasterSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::Pixels;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn clock_excludes_pauses() {
@@ -1036,5 +1148,95 @@ mod tests {
         assert_eq!(clock.at(start + s(6)), Some(s(3)));
         assert_eq!(clock.at(start + s(8)), None);
         assert_eq!(clock.elapsed(), s(4));
+    }
+
+    /// A live capture like the Wayland helper: a frame every `period` into
+    /// a ring of `slots`, each held until its frame is dropped; a capture
+    /// finding no free slot is dropped.
+    struct Ring {
+        period: Duration,
+        next: Instant,
+        slots: usize,
+        waiting: VecDeque<Instant>,
+        leased: Arc<AtomicUsize>,
+    }
+
+    struct Lease(Arc<AtomicUsize>);
+
+    impl AsRef<[u8]> for Lease {
+        fn as_ref(&self) -> &[u8] {
+            &[0; 16 * 16 * 4]
+        }
+    }
+
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    impl VideoSource for Ring {
+        fn size(&self) -> (u32, u32) {
+            (16, 16)
+        }
+
+        fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
+            let deadline = Instant::now() + timeout;
+            loop {
+                let now = Instant::now();
+                while self.next <= now {
+                    if self.waiting.len() + self.leased.load(Ordering::Relaxed) < self.slots {
+                        self.waiting.push_back(self.next);
+                    }
+                    self.next += self.period;
+                }
+                if let Some(captured) = self.waiting.pop_front() {
+                    self.leased.fetch_add(1, Ordering::Relaxed);
+                    let lease = Lease(self.leased.clone());
+                    return Ok(Some(Frame::from_pixels(
+                        16,
+                        16,
+                        16 * 4,
+                        PixelFormat::Bgra,
+                        Pixels::Shared(Box::new(lease)),
+                        captured,
+                    )));
+                }
+                if self.next > deadline {
+                    thread::sleep(deadline.saturating_duration_since(now));
+                    return Ok(None);
+                }
+                thread::sleep(self.next - now);
+            }
+        }
+    }
+
+    /// A slow encoder open does not leave a gap after the first frame: the
+    /// recording starts from a frame captured about when the encoder was
+    /// ready, and the source's next frame follows it one period later.
+    #[test]
+    fn start_takes_frames_while_the_encoder_opens() {
+        let period = Duration::from_millis(10);
+        let mut source = Ring {
+            period,
+            next: Instant::now(),
+            slots: 6,
+            waiting: VecDeque::new(),
+            leased: Arc::default(),
+        };
+        let (opened, started) = open_while_capturing(&mut source, 100, || {
+            thread::sleep(Duration::from_millis(200));
+            Ok(Instant::now())
+        });
+        let ready = opened.unwrap();
+        let (first, error) = started.unwrap();
+        assert!(error.is_none());
+        assert!(
+            ready.saturating_duration_since(first.captured) < 3 * period,
+            "the first frame is {:?} older than the encoder",
+            ready - first.captured
+        );
+        let next = source.next_frame(Duration::from_secs(1)).unwrap().unwrap();
+        assert_eq!(next.captured - first.captured, period);
     }
 }

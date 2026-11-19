@@ -963,7 +963,7 @@ impl VideoEditor {
                 "c" => self.export(Output::Copy, cx),
                 "s" => self.export(Output::Save, cx),
                 // A running export carries on and reports when done.
-                "w" | "q" => window.remove_window(),
+                "w" | "q" => super::close_window(window, cx),
                 _ => return,
             }
             cx.stop_propagation();
@@ -974,7 +974,7 @@ impl VideoEditor {
             "escape" if self.export.is_some() => self.cancel_export(cx),
             "escape" if self.drag.is_some() => self.end_drag(window, cx),
             "escape" => {
-                window.remove_window();
+                super::close_window(window, cx);
                 return;
             }
             // Holding Space would otherwise flip play/pause at the key

@@ -530,6 +530,92 @@ fn variable_rate_video_reports_its_nominal_rate() {
     }
 }
 
+fn deltas(times: &[u64]) -> impl Iterator<Item = u64> + '_ {
+    times.windows(2).map(|w| w[1] - w[0])
+}
+
+/// Frame times at `fps` in units of `1 / units`, rounded to whole units.
+fn steady(fps: f64, units: f64, frames: u64) -> Vec<u64> {
+    (0..frames)
+        .map(|k| (k as f64 * units / fps).round() as u64)
+        .collect()
+}
+
+#[test]
+fn nominal_fps_of_jittered_present_times() {
+    // 60 fps in 0.1 ms units, each picture presented up to 1.2 ms early or
+    // late, so intervals run from 14 to 19 ms.
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let times: Vec<u64> = (0..300u64)
+        .map(|k| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let jitter = (seed >> 33) % 25; // 0..=24
+            (k * 10_000).div_ceil(60) + 1_000 + jitter - 12
+        })
+        .collect();
+    let range = (deltas(&times).min().unwrap(), deltas(&times).max().unwrap());
+    assert!(range.0 <= 145 && range.1 >= 185, "{range:?}");
+    assert_eq!(nominal_fps(deltas(&times), 10_000.0), 60.0);
+
+    // Intervals (ms) of a 60 fps Windows recording stamped with DXGI present
+    // times: mostly 15 and 16 ms, late pictures at 23 ms, dropped ones at
+    // 31 ms and more. The old mean of intervals below 1.5 times the shortest
+    // reported 63.9.
+    let recorded = [
+        16, 15, 23, 31, 15, 16, 15, 23, 31, 16, 16, 16, 15, 16, 40, 31, 16, 15, 16, 15, 17, 23, 15,
+        16, 15, 15, 16, 38, 16, 15, 16, 17, 15, 23, 31, 16, 15, 16, 16, 23, 33, 31, 16, 15, 16, 16,
+        17, 23, 31, 17, 33, 15, 16, 15, 16, 16, 24, 16, 15, 16, 16, 15, 15, 23, 31, 16, 15, 16, 15,
+        40, 15, 16, 16, 15, 15, 24, 16, 15, 16, 15, 16, 15, 39, 16, 15, 15, 16, 15, 39, 15, 15, 16,
+        23, 31, 15, 16, 15, 15, 24, 16, 16, 16, 14, 16, 16, 23, 31, 14, 16, 16, 23, 15, 16, 15, 15,
+        16, 17, 22, 17,
+    ];
+    assert_eq!(nominal_fps(recorded.into_iter(), 1_000.0), 60.0);
+}
+
+#[test]
+fn nominal_fps_ignores_static_stretches_and_dropped_pictures() {
+    // 60 fps on a 1 ms clock (16 and 17 ms intervals), with three static
+    // stretches (2.5 s, 50 ms, 1.7 s) and every 37th picture dropped.
+    let times: Vec<u64> = steady(60.0, 1_000.0, 900)
+        .into_iter()
+        .enumerate()
+        .filter(|&(k, _)| {
+            !(100..250).contains(&k) && !(300..303).contains(&k) && !(500..600).contains(&k)
+        })
+        .filter(|&(k, _)| k % 37 != 0)
+        .map(|(_, t)| t)
+        .collect();
+    assert_eq!(nominal_fps(deltas(&times), 1_000.0), 60.0);
+    // Static half the time: each second a burst of three 30 fps intervals,
+    // then three slow updates.
+    let times: Vec<u64> = (0..20u64)
+        .flat_map(|second| [0, 33, 67, 100, 400, 700].map(|t| second * 1_000 + t))
+        .collect();
+    assert_eq!(nominal_fps(deltas(&times), 1_000.0), 30.0);
+}
+
+#[test]
+fn nominal_fps_of_steady_rates() {
+    for (fps, units, expected) in [
+        (30.0, 1_000.0, 30.0),
+        (24.0, 1_000.0, 24.0),
+        (25.0, 1_000.0, 25.0),
+        (144.0, 1_000.0, 144.0),
+        (30_000.0 / 1001.0, 90_000.0, 30_000.0 / 1001.0),
+        (24_000.0 / 1001.0, 1_000.0, 24_000.0 / 1001.0),
+    ] {
+        let times = steady(fps, units, 300);
+        assert_eq!(nominal_fps(deltas(&times), units), expected, "{fps} fps");
+    }
+    // Uncommon rates are reported as measured.
+    let fps = nominal_fps(deltas(&steady(75.0, 1e6, 300)), 1e6);
+    assert!((fps - 75.0).abs() < 0.01, "{fps}");
+    assert_eq!(nominal_fps(std::iter::empty(), 1_000.0), 0.0);
+    assert_eq!(nominal_fps([0, 0].into_iter(), 1_000.0), 0.0);
+}
+
 /// After a seek past the end of an audio track, nothing of it comes back:
 /// the seek must not reach back for audio that has ended (which re-read the
 /// file from the start).

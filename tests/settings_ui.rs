@@ -259,6 +259,20 @@ pub(super) fn welcome_refuses_config_that_became_invalid_while_open() {
     assert_eq!(std::fs::read_to_string(&ui.path).unwrap(), original);
 }
 
+pub(super) fn close_and_done_remove_the_window() {
+    for welcome in [false, true] {
+        let mut ui = Ui::new(Some("notify = true\n"), welcome);
+        ui.done();
+        ui.cx.run_until_parked();
+        assert!(
+            ui.cx
+                .update_window(ui.any(), |_, window, _| window.refresh())
+                .is_err(),
+            "welcome={welcome}: the window is gone once its close task ran"
+        );
+    }
+}
+
 // Native close is deliberately covered by compositor e2e, not simulated here:
 // GPUI's Linux headless PlatformWindow::on_should_close ignores its callback.
 
