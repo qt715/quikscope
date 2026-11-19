@@ -37,7 +37,7 @@ libraries. OpenH264 is built from source, so Cisco's H.264 patent licence
 so. Review changes to the dependency allowlist rather than accepting new
 licences automatically. `cargo-deny 0.20.2` checks licences, security advisories,
 registry sources and wildcard dependencies. Duplicate transitive versions warn;
-seven reviewed unmaintained-only advisories have individually documented exceptions
+eight reviewed unmaintained-only advisories have individually documented exceptions
 in deny.toml. New maintenance or vulnerability advisories fail CI.
 
 ## Linux

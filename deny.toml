@@ -19,6 +19,9 @@ ignore = [
   "RUSTSEC-2026-0372",
   # chrono: unmaintained, no vulnerability; GPUI and its scheduler require it.
   "RUSTSEC-2026-0543",
+  # basic-toml: unmaintained, no vulnerability; build-time only, via askama in
+  # mkv-element's code generator. Nothing of it reaches the executable.
+  "RUSTSEC-2026-0374",
 ]
 
 [licenses]
