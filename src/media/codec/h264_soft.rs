@@ -379,42 +379,77 @@ fn crop_sps(access_unit: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `sps` (header byte, then escaped payload) with its frame cropping set to
-/// `width`×`height` (4:2:0 progressive: crop units of 2 pixels).
-fn sps_with_crop(sps: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-    let rbsp = unescape(&sps[1..]);
-    let mut reader = BitReader {
-        data: &rbsp,
-        pos: 0,
-    };
-    let profile = reader.bits(8)?;
+/// The fields of a sequence parameter set this crate needs.
+pub(super) struct Sps {
+    pub profile_idc: u32,
+    pub width_in_mbs: u32,
+    /// Frame height in macroblocks (map units doubled for field coding).
+    pub height_in_mbs: u32,
+    pub frame_mbs_only: bool,
+    /// Bit offsets in the RBSP of frame_cropping_flag and of what follows
+    /// the cropping fields.
+    crop_at: usize,
+    rest_at: usize,
+}
+
+/// Parses an SPS NAL unit (header byte, then escaped payload).
+pub(super) fn parse_sps(nal: &[u8]) -> Result<Sps> {
+    let rbsp = unescape(nal.get(1..).context("empty SPS")?);
+    parse_sps_rbsp(&rbsp)
+}
+
+fn parse_sps_rbsp(rbsp: &[u8]) -> Result<Sps> {
+    let mut reader = BitReader { data: rbsp, pos: 0 };
+    let profile_idc = reader.bits(8)?;
     reader.bits(16)?; // constraint flags, level
     reader.ue()?; // seq_parameter_set_id
-    if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile) {
-        if reader.ue()? == 3 {
+    if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile_idc) {
+        let chroma_format_idc = reader.ue()?;
+        if chroma_format_idc == 3 {
             reader.bits(1)?; // separate_colour_plane_flag
         }
         reader.ue()?; // bit_depth_luma_minus8
         reader.ue()?; // bit_depth_chroma_minus8
         reader.bits(1)?; // qpprime_y_zero_transform_bypass_flag
-        ensure!(
-            reader.bits(1)? == 0,
-            "SPS scaling matrices are not supported"
-        );
+        if reader.bits(1)? == 1 {
+            let lists = if chroma_format_idc == 3 { 12 } else { 8 };
+            for list in 0..lists {
+                if reader.bits(1)? == 1 {
+                    // scaling_list(): delta-coded until a zero next scale.
+                    let size = if list < 6 { 16 } else { 64 };
+                    let mut next = 8;
+                    for _ in 0..size {
+                        if next != 0 {
+                            next = (next + reader.se()? + 256) % 256;
+                        }
+                    }
+                }
+            }
+        }
     }
     reader.ue()?; // log2_max_frame_num_minus4
     match reader.ue()? {
         0 => {
             reader.ue()?; // log2_max_pic_order_cnt_lsb_minus4
         }
-        2 => {}
-        other => bail!("SPS pic_order_cnt_type {other} is not supported"),
+        1 => {
+            reader.bits(1)?; // delta_pic_order_always_zero_flag
+            reader.se()?; // offset_for_non_ref_pic
+            reader.se()?; // offset_for_top_to_bottom_field
+            for _ in 0..reader.ue()? {
+                reader.se()?; // offset_for_ref_frame
+            }
+        }
+        _ => {}
     }
     reader.ue()?; // max_num_ref_frames
     reader.bits(1)?; // gaps_in_frame_num_value_allowed_flag
     let width_in_mbs = reader.ue()? + 1;
-    let height_in_mbs = reader.ue()? + 1;
-    ensure!(reader.bits(1)? == 1, "interlaced SPS");
+    let map_units = reader.ue()? + 1;
+    let frame_mbs_only = reader.bits(1)? == 1;
+    if !frame_mbs_only {
+        reader.bits(1)?; // mb_adaptive_frame_field_flag
+    }
     reader.bits(1)?; // direct_8x8_inference_flag
     let crop_at = reader.pos;
     if reader.bits(1)? == 1 {
@@ -422,7 +457,29 @@ fn sps_with_crop(sps: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
             reader.ue()?;
         }
     }
-    let rest_at = reader.pos;
+    Ok(Sps {
+        profile_idc,
+        width_in_mbs,
+        height_in_mbs: map_units * if frame_mbs_only { 1 } else { 2 },
+        frame_mbs_only,
+        crop_at,
+        rest_at: reader.pos,
+    })
+}
+
+/// `sps` (header byte, then escaped payload) with its frame cropping set to
+/// `width`×`height` (4:2:0 progressive: crop units of 2 pixels).
+fn sps_with_crop(sps: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+    let rbsp = unescape(&sps[1..]);
+    let Sps {
+        width_in_mbs,
+        height_in_mbs,
+        frame_mbs_only,
+        crop_at,
+        rest_at,
+        ..
+    } = parse_sps_rbsp(&rbsp)?;
+    ensure!(frame_mbs_only, "interlaced SPS");
     let stop_bit = (0..rbsp.len() * 8)
         .rev()
         .find(|&bit| rbsp[bit / 8] & (0x80 >> (bit % 8)) != 0)
@@ -499,6 +556,13 @@ impl BitReader<'_> {
             ensure!(zeros < 32, "invalid Exp-Golomb code in SPS");
         }
         Ok((1 << zeros) - 1 + self.bits(zeros)?)
+    }
+
+    /// Exp-Golomb `se(v)`.
+    fn se(&mut self) -> Result<i32> {
+        let code = self.ue()?;
+        let magnitude = code.div_ceil(2) as i32;
+        Ok(if code % 2 == 1 { magnitude } else { -magnitude })
     }
 }
 

@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail, ensure};
-use gpu_video::capabilities::{DeviceType, EncodeProfileCapabilities, VideoAdapterInfo};
+use gpu_video::capabilities::{
+    DecodeH264Capabilities, DeviceType, EncodeProfileCapabilities, VideoAdapterInfo,
+};
 use gpu_video::parameters::{
     ColorRange, ColorSpace, DecoderParameters, EncoderOutputParameters, EncoderParametersH264,
     EncoderPreset, EncoderUsage, ProfileH264, RateControl, VideoDeviceDescriptor,
@@ -28,7 +30,8 @@ use gpu_video::{
 };
 
 use super::{
-    DecodedPicture, EncodedFrame, VideoDecoder, VideoEncoder, VideoEncoderConfig, Yuv420, YuvLayout,
+    DecodedPicture, EncodedFrame, VideoDecoder, VideoEncoder, VideoEncoderConfig, Yuv420,
+    YuvLayout, h264_soft,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,9 +218,13 @@ impl Encoder {
             bitrate,
             keyframe_interval,
         } = *config;
+        // The picture against the minimum, its macroblock-aligned coded size
+        // against the maximum.
         ensure!(
-            (limits.min_width..=limits.max_width).contains(&width)
-                && (limits.min_height..=limits.max_height).contains(&height),
+            width >= limits.min_width
+                && height >= limits.min_height
+                && width.next_multiple_of(16) <= limits.max_width
+                && height.next_multiple_of(16) <= limits.max_height,
             "{} encodes {}x{} to {}x{} pictures, not {width}x{height}",
             gpu.name,
             limits.min_width,
@@ -347,6 +354,7 @@ pub struct Decoder {
     // Declared before `_gpu`, so the session goes before the device.
     decoder: BytesDecoderH264,
     frames: Receiver<OutputFrame<RawFrameData>>,
+    caps: DecodeH264Capabilities,
     name: String,
     _gpu: Arc<Gpu>,
 }
@@ -354,6 +362,11 @@ pub struct Decoder {
 impl Decoder {
     pub fn open() -> Result<Decoder> {
         let gpu = gpu(Usage::Decode)?;
+        let caps = gpu
+            .device
+            .decode_capabilities()
+            .h264
+            .context("device lost its H.264 decode support")?;
         let (sender, frames) = mpsc::channel();
         let decoder = gpu
             .device
@@ -365,9 +378,35 @@ impl Decoder {
         Ok(Decoder {
             decoder,
             frames,
+            caps,
             name: format!("Vulkan H.264 ({})", gpu.name),
             _gpu: gpu,
         })
+    }
+
+    /// Refuses a sequence whose profile or coded size the device does not
+    /// support. Drivers do not all reject those themselves: RADV decodes
+    /// pictures below its minimum size into garbage.
+    fn check_sps(&self, nal: &[u8]) -> Result<()> {
+        let sps = h264_soft::parse_sps(nal)?;
+        let limits = match sps.profile_idc {
+            66 => self.caps.baseline_profile,
+            77 => self.caps.main_profile,
+            100 => self.caps.high_profile,
+            _ => None,
+        }
+        .with_context(|| format!("H.264 profile {} is not supported", sps.profile_idc))?;
+        let (width, height) = (sps.width_in_mbs * 16, sps.height_in_mbs * 16);
+        ensure!(
+            (limits.min_width..=limits.max_width).contains(&width)
+                && (limits.min_height..=limits.max_height).contains(&height),
+            "{width}x{height} pictures are outside the decodable {}x{} to {}x{}",
+            limits.min_width,
+            limits.min_height,
+            limits.max_width,
+            limits.max_height
+        );
+        Ok(())
     }
 
     fn drain(&self) -> Result<Vec<DecodedPicture>> {
@@ -389,6 +428,11 @@ impl VideoDecoder for Decoder {
     }
 
     fn decode(&mut self, access_unit: &[u8], pts: Duration) -> Result<Vec<DecodedPicture>> {
+        for (start, end) in nal_units(access_unit) {
+            if access_unit[start] & 0x1f == 7 {
+                self.check_sps(&access_unit[start..end])?;
+            }
+        }
         self.decoder
             .decode(EncodedInputChunk {
                 data: &aligned_access_unit(access_unit),
@@ -428,29 +472,12 @@ const _: () = assert!(3 * INVERSE_OF_3 % BITSTREAM_ALIGNMENT == 1);
 /// zero stripping and read as zero bits after the slice's stop bit. 3 is
 /// invertible modulo a power of two, so whole triplets reach any length.
 fn aligned_access_unit(access_unit: &[u8]) -> Vec<u8> {
-    let mut starts = Vec::new();
-    let mut i = 0;
-    while i + 3 <= access_unit.len() {
-        if access_unit[i..i + 3] == [0, 0, 1] {
-            starts.push(i + 3);
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
     let mut length = 0;
     let mut last_slice_end = None;
-    for (n, &start) in starts.iter().enumerate() {
-        let next = starts
-            .get(n + 1)
-            .map_or(access_unit.len(), |&next| next - 3);
-        let nal = &access_unit[start..next];
-        let Some(last) = nal.iter().rposition(|&byte| byte != 0) else {
-            continue;
-        };
-        if matches!(nal[0] & 0x1f, 1 | 5) {
-            length += 4 + last + 1;
-            last_slice_end = Some(start + last + 1);
+    for (start, end) in nal_units(access_unit) {
+        if matches!(access_unit[start] & 0x1f, 1 | 5) {
+            length += 4 + end - start;
+            last_slice_end = Some(end);
         }
     }
     let Some(end) = last_slice_end else {
@@ -465,6 +492,31 @@ fn aligned_access_unit(access_unit: &[u8]) -> Vec<u8> {
     }
     padded.extend_from_slice(&access_unit[end..]);
     padded
+}
+
+/// The NAL units of an Annex-B access unit as byte ranges, start codes and
+/// trailing zero bytes excluded (empty ones skipped), as gpu-video splits it.
+fn nal_units(access_unit: &[u8]) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i + 3 <= access_unit.len() {
+        if access_unit[i..i + 3] == [0, 0, 1] {
+            starts.push(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    (0..starts.len()).filter_map(move |n| {
+        let start = starts[n];
+        let next = starts
+            .get(n + 1)
+            .map_or(access_unit.len(), |&next| next - 3);
+        let last = access_unit[start..next]
+            .iter()
+            .rposition(|&byte| byte != 0)?;
+        Some((start, start + last + 1))
+    })
 }
 
 /// Wraps gpu-video's NV12 output (luma rows `width` bytes, chroma rows
