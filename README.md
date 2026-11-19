@@ -298,13 +298,15 @@ quikscope capture screen --save
 under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The daemon has no
 console window; commands attach to the invoking terminal. `quikscope.exe` is
 a GUI program, so PowerShell and `cmd` do not wait for a command run on its
-own; a script that needs its output or exit code captures the output
-(`quikscope version | Out-String`, `quikscope record status > status.txt`)
-or uses `Start-Process -Wait`. The daemon's log is
+own; a script that needs its output or exit code pipes it
+(`quikscope version | Out-String`, `quikscope record status | Out-File status.txt`)
+or uses `Start-Process -Wait`. PowerShell's `> file` does not capture its
+output; in `cmd`, `quikscope version > file` does. The daemon's log is
 `%LOCALAPPDATA%\quikscope\daemon.log`.
 
-The notification-area icon offers region, screen and window capture, the
-latest screenshot, recording controls, notifications on/off and quit. Default
+The notification-area icon offers the recording controls with audio devices
+and frame rates, region, screen and window capture, the latest screenshot,
+**Pick color**, notifications on/off, **Settings…** and Quit. Default
 global shortcuts: `PrintScreen` = region, `Ctrl+PrintScreen` = screen,
 `Alt+PrintScreen` = foreground window, `Shift+PrintScreen` = open last,
 `Ctrl+Shift+PrintScreen` / `Ctrl+Alt+PrintScreen` = start or stop a video /
@@ -343,13 +345,13 @@ or `tessdata` beside the executable. Windows OCR is not yet verified natively.
 
 ```text
 quikscope capture <region|output|window|screen> [options]
-quikscope record <video|animation> [region|output|window] [options]   run again to stop
+quikscope record <video|animation|gif> [region|output|window] [options]   run again to stop
 quikscope record <stop|pause|resume|toggle-pause|cancel|status>
 quikscope audio-devices      list devices recordings can include
 quikscope open-last          open the latest capture in the editor, with the tool you used last
 quikscope pick               pick a color anywhere on screen; prints its hex
 quikscope open [FILE]...     open images, animations and videos (no file: the latest capture)
-quikscope settings          open or focus capture/editor/recording preferences
+quikscope settings           open or focus capture/editor/recording preferences
 quikscope notifications <on|off|toggle|status>
 quikscope daemon             run the daemon in the foreground
 quikscope version            print the client's and the daemon's versions
@@ -417,6 +419,8 @@ save**) stops it, saves the file, puts it on the clipboard **as a file** (paste
 it into Discord, a browser upload or a file manager) and shows a notification
 with a thumbnail; clicking it opens the video editor or, for animations, the
 annotator. Nothing counts down: recording starts when the selection is made.
+`quikscope record gif` records an animation as GIF whatever
+`record.animation_format` says.
 
 | | Video | Animation |
 | --- | --- | --- |
@@ -426,7 +430,7 @@ annotator. Nothing counts down: recording starts when the selection is made.
 
 The region is selected over the live desktop like `capture region
 --no-freeze` (`Enter` or a click on empty space takes the whole output;
-Hyprland/X11 window snapping applies). `output` records the focused output,
+window snapping applies as for screenshots). `output` records the focused output,
 `window` the active window's current rectangle. A recording covers one
 output; a selection spanning several is clipped to the one holding most of it.
 While recording, a thin outline (the accent color) sits just outside the area.
@@ -435,7 +439,7 @@ have none.
 
 | Option | Effect |
 | --- | --- |
-| `--fps N` | Frames per second for this recording. |
+| `--fps N` | Frames per second for this recording (animations record at most 60). |
 | `--format F` | `mp4`, `mkv`, `mov`; `gif`, `webp`, `avif`, `jxl`. |
 | `--audio ID` | Record this device (repeat for several); `--no-audio` records none. Ids come from `quikscope audio-devices`; `default-output` is what you hear, `default-input` the default microphone. |
 | `--cursor`, `--edit`, `--notify`, `--clipboard` (and `--no-…`), `-o`, `-g` | As for `capture`. |
@@ -454,12 +458,14 @@ wide areas) is recorded scaled down, with a notification saying so.
 
 **Tray.** On Linux a status-notifier tray icon (Waybar, Noctalia, KDE,
 GNOME with the AppIndicator extension…) offers Record video/animation, the
-audio devices and frame rates; while recording it shows the elapsed time with
-Pause/Resume, Stop and save and Discard, and a click on the icon stops. While
-a stopped recording is saved it shows the percentage and **Cancel saving**,
-which discards a video and keeps an animation's lossless recording to export
-from the annotator. `record.tray = false` hides it. The Windows tray menu has
-the same items.
+audio devices and frame rates, Capture region, Open last capture, Pick color,
+Settings… and Quit; a click on the icon opens the latest capture. While
+recording it shows the elapsed time with Pause/Resume, Stop and save and
+Discard, and a click on the icon stops. While a stopped recording is saved
+it shows the percentage and **Cancel saving**, which discards a video and
+keeps an animation's lossless recording to export from the annotator.
+`record.tray = false` hides it. The Windows tray menu has the same items,
+plus screen and window capture and a notifications toggle.
 
 **Encoding.** quikscope has no FFmpeg dependency: it writes MP4, MOV and MKV
 itself and carries its own encoders. Videos are H.264, encoded on the GPU
@@ -540,12 +546,20 @@ copy text, copy, **Save**, settings and shortcut help bottom right.
 | Shortcut help | `?` / `F1` or the `?` button (bottom right); `Esc` dismisses help without closing the editor. Fits small windows with scrolling and a single-column layout; `F1` also works while editing text |
 | Text format (while typing or with text selected) | `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+Shift+.` / `Ctrl+Shift+,` bigger / smaller |
 | Zoom | `Ctrl`+scroll (one level per wheel notch), `Ctrl+=` / `Ctrl+-`, `Ctrl+0` fit, `Ctrl+1` actual pixels. Levels are 10% steps up to 100% and 25% steps above (100% = actual pixels); zoom changes ease in with a `cubic-bezier(0.22, 1, 0.36, 1)` curve and keep the point under the cursor fixed |
-| Close | `Esc` (when nothing is selected), `Ctrl+W` |
+| Close | `Esc` (when nothing is selected), `Ctrl+W`, `Ctrl+Q` |
 
 Style changes (color, size, fill) apply to every selected shape as one undo step.
 The font bar targets exactly one selected text shape (or text being edited). Closing the
 editor keeps its annotations in the daemon: `quikscope open-last` or another
 notification click brings them back.
+
+**Animations.** An animated file or an animation recording opens with a
+playback strip at the bottom: `Space` or the play button plays and pauses,
+clicking or dragging the strip scrubs, and the format button picks GIF,
+WebP, AVIF or JPEG XL. Drawings apply to every frame (drawing pauses
+playback). `Ctrl+S` and `Ctrl+C` re-encode the whole animation with the
+drawings, saved to the recordings folder or copied as a file; `Esc` cancels
+a running export, and closing the window lets it finish.
 
 **Drawing past the edges.** Annotations may extend beyond the screenshot,
 for example a label written beside it. The saved and copied image grows to
@@ -601,7 +615,8 @@ is never changed: every output is a new file.
 | Copy as a file (paste into a chat or file manager) | `Ctrl+C`; an untouched clip is copied as it is, otherwise exported first |
 | Annotate frame | `F`: opens the frame at full size in the annotator (saved only when you save it there) |
 | Cancel an export | `Esc` or the × beside the progress bar |
-| Close | `Esc`, `Ctrl+W` |
+| Shortcut help | `?` / `F1` or the `?` button |
+| Close | `Esc`, `Ctrl+W`, `Ctrl+Q`; an export still running finishes |
 
 Audio plays through the default output device, which is opened on the
 first play rather than when the editor opens; picture follows the audio
@@ -610,8 +625,8 @@ clock. Animation exports use the configured animation frame rate
 
 ## Performance
 
-Measured in a headless labwc session at 2560×1440 (software GL, release
-build). Other GPUs, drivers and refresh rates have not been benchmarked.
+Screenshot steps, measured in a headless labwc session at 2560×1440
+(software GL, release build):
 
 | Step | Time |
 | --- | --- |
@@ -633,6 +648,16 @@ captures measured a median of 1.36 ms with MIT-SHM (p95 1.69 ms), versus
 2.51 ms with plain GetImage (p95 4.40 ms). These capture-only numbers exclude
 PNG encoding and IPC. Reproduce with the `capture_latency_2560x1440` X11
 test described in [docs/testing.md](docs/testing.md).
+
+Recording, measured on one machine (Hyprland, RTX 5090, a 2560×1440 output,
+H.264 through Vulkan Video); other GPUs, drivers and compositors have not been
+benchmarked:
+
+| Recording | Result |
+| --- | --- |
+| 60 fps | 59.98 fps delivered, p99 frame interval 18 ms |
+| 120 fps | 120.08 fps delivered, p99 frame interval 11 ms |
+| H.264 encode per 1440p frame | 5.7 ms on Vulkan Video, 8.4 ms with OpenH264 (built without NASM) |
 
 ## Limitations
 
@@ -661,11 +686,12 @@ See [docs/testing.md](docs/testing.md), [docs/ipc.md](docs/ipc.md) and
 
 ### Branding assets
 
-Run `scripts/render-icons.sh` with resvg, ImageMagick 7 (`magick`) and Python 3
-to regenerate the committed PNG, multi-resolution ICO and PNG-backed ICNS
-assets in `assets/branding/`. The 16 px PNG uses the pixel-aligned symbolic
-variant; larger sizes use `icon.svg`. All icons have transparent backgrounds
-and use the UI accent (`#8f8cf2`). The banner's wordmark and tagline are
+Run `scripts/render-icons.sh` with resvg and ImageMagick 7 (`magick`) to
+regenerate the committed PNGs, Linux tray icons and multi-resolution ICO in
+`assets/branding/`. The 16 px PNG and the idle tray icon use the
+pixel-aligned symbolic variant; larger sizes use `icon.svg`, and the
+recording tray icon adds a red dot (`tray-recording.svg`). All icons have
+transparent backgrounds and use the UI accent (`#8f8cf2`). The banner's wordmark and tagline are
 outlines of the bundled Inter variable font (weight 650, optical size 32),
 so rendering needs no installed fonts.
 

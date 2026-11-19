@@ -1,13 +1,14 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-11-19
 
 ### Recording
 
 - `quikscope record video` and `quikscope record animation` record a region
   (selected over the live desktop), an output or the active window. Running the
   same command again stops and saves; `record pause|resume|cancel|status`
-  control the running recording.
+  control the running recording, and `record gif` records an animation as GIF
+  whatever the configured animation format.
 - Videos: MP4, MKV or MOV with H.264 picture and Opus sound, 60 fps by default,
   with desktop audio and any number of microphones or other devices mixed in
   (`quikscope audio-devices` lists them). H.264 is encoded on the GPU through
@@ -42,11 +43,11 @@
   in the log: Hyprland reads shared-memory captures back on its main thread,
   which can make games stutter. Recording also works on X11, Windows (Desktop
   Duplication) and, experimentally, through the ScreenCast portal on GNOME/KDE.
-  The portal's stored permission is kept per monitor: recording another
-  monitor asks again instead of recording the wrong one.
+  The portal's permission is remembered per monitor, so recording another
+  monitor asks again.
 - `default-output` and `default-input` follow the system's default device,
   also when it changes or disappears during a recording. On Windows any
-  device records, including 7.1 headsets.
+  device can be recorded, including multichannel (7.1) headsets.
 - On wlroots the recording outline stays visible over fullscreen windows.
 
 ### Editors
@@ -62,8 +63,8 @@
   side panel that appears while drawing, undo/redo and zoom sit bottom left and
   copy/save/settings bottom right.
 - Settings has a Recording section: formats and frame rates, recordings
-  folder, audio devices, encoder, outline, pointer, clipboard, notification,
-  editor and (Linux) tray options.
+  folder, audio devices, encoder, crash-safe MP4, outline, pointer, clipboard,
+  notification, editor and (Linux) tray options.
 
 ### Opening files
 
@@ -82,9 +83,9 @@
   the daemon).
 - `QUIKSCOPE_NO_PREWARM=1` on the daemon skips the GPU prewarm window at
   start-up.
-- A 0.2 configuration whose shortcut equals one of the new recording defaults
-  stays valid: that default is left unbound instead of the whole file being
-  rejected.
+- A 0.2 configuration whose `[hotkeys]` shortcut equals one of the new
+  recording defaults stays valid: that default is left unbound instead of the
+  whole file being rejected.
 - The daemon log has timestamps and keeps the previous run's lines:
   an auto-started daemon appends to `daemon.log`, which moves to
   `daemon.log.1` above 1 MiB.
@@ -95,18 +96,17 @@
   its codecs (H.264 through Vulkan Video or OpenH264, Opus, and native GIF,
   WebP, AVIF and JPEG XL encoders). Packages ship and depend on no codec
   libraries; building from source needs CMake and a C/C++ compiler (NASM
-  optional) besides the PipeWire, PulseAudio, ALSA and libgbm development files.
+  optional), and on Linux clang and the PipeWire, PulseAudio, ALSA and libgbm
+  development files.
 
 ### Fixed
 
-- Saving from two places at once (two screenshots in the same second, a
-  recording finishing while an editor saves, two exports of the same clip)
-  writes separate files instead of overwriting each other, also for the
-  annotator's Ctrl+S with a fixed `filename`.
-- Windows: a command that starts the daemon, run with its output captured
-  (`quikscope audio-devices | Out-String`, or `cmd /c "quikscope … > file"`
-  from a caller capturing `cmd`'s output), no longer hangs until the daemon
-  quits, and redirected output (`quikscope version > file`) is written.
+- Two screenshots saved at the same time (in the same second, or with a fixed
+  `filename`) are written to separate files instead of one overwriting the other.
+- Windows: a command that starts the daemon while its output is captured
+  (`quikscope version | Out-String`, or `cmd /c "quikscope … > file"` from a
+  caller capturing `cmd`'s output) no longer hangs until the daemon quits, and
+  output redirected to a file from `cmd` is written instead of lost.
 
 ### Removed
 

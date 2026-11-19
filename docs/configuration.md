@@ -139,8 +139,9 @@ field edit; fix or discard invalid edits before closing.
 
 Settings include frozen/live selection, clipboard, notifications, automatic
 editor opening, cursor inclusion, save folder/name, editor colour/stroke/font
-defaults, OCR languages and recording (formats, frame rates, audio devices,
-save folder, outline). OCR controls appear only when Tesseract is found;
+defaults, OCR languages and recording (formats, frame rates, folder, audio
+devices, encoder, crash-safe MP4, outline, pointer, clipboard, notification,
+editor opening and, on Linux, the tray icon). OCR controls appear only when Tesseract is found;
 otherwise the window explains that installation is needed. Windows displays
 the configured global shortcuts with enable/disable controls.
 
@@ -200,7 +201,8 @@ One notification lists what was recovered; clicking it opens the newest.
 | --- | --- |
 | `QUIKSCOPE_SOCKET` | IPC socket path. |
 | `QUIKSCOPE_LOG` | Log filter (`env_logger` syntax), e.g. `quikscope=debug` for per-step timings. |
-| `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | Standard locations. |
+| `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME` | Standard locations (the state directory keeps the ScreenCast portal's recording permission). |
+| `QUIKSCOPE_BACKEND` | Linux capture backend for the daemon: `wlroots`, `portal` or `x11` (see the README's Desktops section). |
 | `HYPRLAND_INSTANCE_SIGNATURE` | Hyprland instance to query; when unset, a single running instance is found automatically. |
 | `APPDATA`, `LOCALAPPDATA`, `USERPROFILE` | Windows config, cache/IPC and home locations. |
 | `QUIKSCOPE_WINDOWS_CAPTURE` | Windows capture method: `dxgi` (default with GDI availability fallback) or forced `gdi`, for measurements. |

@@ -102,7 +102,7 @@ Arch validation should install the makepkg-produced package with pacman.
 ## Windows
 
 `packaging/windows/installer.nsi` builds with NSIS 3 on Linux (`makensis`) and
-Windows. Pass `-DVERSION=0.2.0 -DSOURCE=/absolute/repo` on Linux; Windows uses
+Windows. Pass `-DVERSION=0.3.0 -DSOURCE=/absolute/repo` on Linux; Windows uses
 `/D`. The binary defaults to target/release/quikscope.exe and can be overridden
 with BINARY. OUTPUT can also be overridden. Missing branding ICO/report/binary
 is a build failure, not a silent fallback.

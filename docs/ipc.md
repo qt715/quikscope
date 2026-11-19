@@ -120,7 +120,7 @@ escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
 
 ## Lifecycle
 
-- `quikscope` commands other than `daemon` and `quit` start a detached daemon
+- `quikscope` commands other than `daemon`, `version` and `quit` start a detached daemon
   (`setsid`) when nothing listens on the socket, logging to
   `$XDG_CACHE_HOME/quikscope/daemon.log`, and wait up to 5 s for it. The log
   is appended to; above 1 MiB it moves to `daemon.log.1` first.
@@ -131,4 +131,4 @@ escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
   editor, even one already closed) and refuses new ones meanwhile, then
   replies, exits the daemon and removes the socket.
 - At start-up the daemon recovers what a daemon that died left behind (see
-  [crash recovery](configuration.md#recordings)).
+  [crash recovery](configuration.md#crash-recovery)).

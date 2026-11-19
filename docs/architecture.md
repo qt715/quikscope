@@ -137,6 +137,7 @@ desktop-specific window-query service is required; `Desktop` returns
 See the [Screenshot portal specification][portal-screenshot] for its
 permission and cursor limitations.
 
+### Windows
 
 GPUI's executable manifest requests per-monitor-v2 DPI awareness; quikscope
 verifies it (and sets it if absent) before creating any HWND. Its

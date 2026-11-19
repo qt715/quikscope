@@ -61,8 +61,9 @@ Native gates are `cargo build --release`, `cargo clippy --all-targets -- -D
 warnings`, and `cargo test`. The `windows-latest` CI job runs those gates
 with `--locked`: library tests, CLI parsing, CPU golden-image regressions and
 optional OCR tests. Missing Tesseract/models skip OCR unless
-`QUIKSCOPE_REQUIRE_OCR=1`. `editor_render` and `editor_ui` are cfg-excluded:
-GPUI 0.3.10 returns no headless renderer on Windows, regardless of GPU.
+`QUIKSCOPE_REQUIRE_OCR=1`. `editor_render`, `editor_ui`, `settings_ui` and
+`video_editor_ui` are cfg-excluded: GPUI 0.3.10 returns no headless renderer
+on Windows, regardless of GPU.
 The Linux-only `e2e` feature is not enabled by Windows CI.
 
 Native verification on a Windows 11 virtual machine at 2560×1440 / 96 DPI

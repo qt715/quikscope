@@ -22,7 +22,8 @@ boundary against same-user software. Such clients can request captures, open
 files and control the daemon. Do not expose the socket over a network or relax
 its directory permissions.
 
-Screenshots, saved images, the last-capture cache and daemon logs may contain
+Screenshots, recordings, saved images, the last-capture cache, the lossless
+animation recordings kept in the cache and daemon logs may contain
 sensitive information. Clipboard managers and notification services may retain
 data after a capture. In particular, `--text` includes extracted text in capture
 notifications, which can remain in notification history or appear on screen.
