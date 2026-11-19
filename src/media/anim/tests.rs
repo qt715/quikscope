@@ -111,14 +111,28 @@ fn check_round_trip(format: OutputFormat, ext: &str, tolerance: f64, exact_timin
 /// installed. An animated AVIF shows up as two streams, the primary still
 /// image and the sequence; the longest one counts.
 fn validate_with_ffprobe(path: &Path, frames: usize) {
-    let Ok(output) = Command::new("ffprobe")
+    let Ok(version) = Command::new("ffprobe").arg("-version").output() else {
+        return;
+    };
+    if path.extension().is_some_and(|ext| ext == "webp") {
+        let version = String::from_utf8_lossy(&version.stdout);
+        let major = ffmpeg_major_version(&version);
+        if major.is_none_or(|major| major < FFMPEG_ANIMATED_WEBP) {
+            let line = version.lines().next().unwrap_or_default();
+            eprintln!(
+                "skipping ffprobe check of {}: animated WebP needs FFmpeg \
+                 {FFMPEG_ANIMATED_WEBP} or later ({line})",
+                path.display()
+            );
+            return;
+        }
+    }
+    let output = Command::new("ffprobe")
         .args(["-v", "error", "-count_frames"])
         .args(["-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
         .arg(path)
         .output()
-    else {
-        return;
-    };
+        .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -136,6 +150,39 @@ fn validate_with_ffprobe(path: &Path, frames: usize) {
         "ffprobe frame count of {}",
         path.display()
     );
+}
+
+/// First FFmpeg release that decodes animated WebP: its Changelog lists
+/// "Animated WebP decoder" under version 9.0 (commit a3d8ba6613, "avcodec/webp:
+/// add support for Animated WebP decoding"). Older ffprobe fails with "image
+/// data not found" on any animated WebP.
+const FFMPEG_ANIMATED_WEBP: u32 = 9;
+
+/// Major release number from `ffprobe -version` ("ffprobe version 6.1.1-3ubuntu5
+/// ...", "n9.0.2", "8.0-full_build-www.gyan.dev"); `None` for snapshot builds
+/// ("N-120000-g...", "2026-01-02-git-..."), whose features cannot be told.
+fn ffmpeg_major_version(version: &str) -> Option<u32> {
+    let version = version
+        .strip_prefix("ffprobe version ")?
+        .split(' ')
+        .next()?;
+    let version = version.strip_prefix('n').unwrap_or(version);
+    version.split_once('.')?.0.parse().ok()
+}
+
+#[test]
+fn ffmpeg_major_version_reads_releases_only() {
+    let read = |s: &str| ffmpeg_major_version(&format!("ffprobe version {s} Copyright (c) 2007"));
+    assert_eq!(read("6.1.1-3ubuntu5"), Some(6));
+    assert_eq!(read("n9.0.2"), Some(9));
+    assert_eq!(read("8.0-full_build-www.gyan.dev"), Some(8));
+    assert_eq!(read("10.1"), Some(10));
+    assert_eq!(read("N-120000-g0123456789"), None);
+    assert_eq!(
+        read("2026-01-02-git-0123456789-full_build-www.gyan.dev"),
+        None
+    );
+    assert_eq!(ffmpeg_major_version("garbage"), None);
 }
 
 #[test]
@@ -167,7 +214,7 @@ fn jxl_keeps_alpha_and_large_frames_exactly() {
     let path = dir.path().join("alpha.jxl");
     let mut input = frames(301, 263);
     for (i, (image, _)) in input.iter_mut().enumerate() {
-        for (p, px) in image.data.chunks_exact_mut(4).enumerate() {
+        for (p, px) in image.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[3] = ((p * 7 + i * 31) % 256) as u8;
         }
     }
@@ -585,7 +632,7 @@ fn speed() {
     let noisy: Vec<_> = (0..8)
         .map(|i| {
             let mut image = desktop(w, h, i);
-            for px in image.data.chunks_exact_mut(4) {
+            for px in image.data.as_chunks_mut::<4>().0 {
                 seed ^= seed << 13;
                 seed ^= seed >> 17;
                 seed ^= seed << 5;

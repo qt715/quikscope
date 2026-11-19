@@ -72,7 +72,7 @@ pub fn rotate_into(
     let out_width = if rotation.swaps_axes() { h } else { w };
     for y in 0..h {
         let row = &src[y * pitch..y * pitch + w * 4];
-        for (x, pixel) in row.chunks_exact(4).enumerate() {
+        for (x, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
             let (dx, dy) = match rotation {
                 Rotation::Rotate90 => (h - 1 - y, x),
                 Rotation::Rotate180 => (w - 1 - x, h - 1 - y),
@@ -270,7 +270,7 @@ mod tests {
     ];
 
     fn blues(image: &Image) -> Vec<u8> {
-        image.data.chunks_exact(4).map(|p| p[0]).collect()
+        image.data.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
     }
 
     #[test]

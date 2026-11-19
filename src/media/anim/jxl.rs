@@ -228,7 +228,7 @@ impl AnimEncoder for JxlEncoder {
         let last = rects.len() - 1;
         for (i, rect) in rects.into_iter().enumerate() {
             let mut rgba = image.crop(rect).data;
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
             }
             let ticks = if i == last { ticks } else { 0 };

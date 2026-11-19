@@ -159,7 +159,7 @@ impl Frame {
         let swap = matches!(self.format, PixelFormat::Rgba | PixelFormat::Rgbx);
         let opaque = self.format.is_opaque();
         if swap || opaque {
-            for pixel in data.chunks_exact_mut(4) {
+            for pixel in data.as_chunks_mut::<4>().0 {
                 if swap {
                     pixel.swap(0, 2);
                 }

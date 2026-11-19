@@ -117,9 +117,10 @@ fn is_avif(head: &[u8]) -> bool {
         return false;
     };
     // Major brand, minor version (skipped), compatible brands.
-    let major = body.get(..4).into_iter();
-    let compatible = body.get(8..).unwrap_or_default().chunks_exact(4);
+    let major = body.first_chunk::<4>();
+    let compatible = body.get(8..).unwrap_or_default().as_chunks::<4>().0;
     major
+        .into_iter()
         .chain(compatible)
         .any(|brand| brand == b"avif" || brand == b"avis")
 }
@@ -227,12 +228,16 @@ fn browser_delay(delay: Duration) -> Duration {
 
 /// Converts 8-bit gray, gray+alpha, RGB or RGBA samples to BGRA.
 fn to_bgra(src: &[u8], channels: usize, dst: &mut [u8]) {
-    let pixels = dst.chunks_exact_mut(4).zip(src.chunks_exact(channels));
+    let pixels = dst
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.chunks_exact(channels));
     match channels {
-        1 => pixels.for_each(|(d, s)| d.copy_from_slice(&[s[0], s[0], s[0], 255])),
-        2 => pixels.for_each(|(d, s)| d.copy_from_slice(&[s[0], s[0], s[0], s[1]])),
-        3 => pixels.for_each(|(d, s)| d.copy_from_slice(&[s[2], s[1], s[0], 255])),
-        4 => pixels.for_each(|(d, s)| d.copy_from_slice(&[s[2], s[1], s[0], s[3]])),
+        1 => pixels.for_each(|(d, s)| *d = [s[0], s[0], s[0], 255]),
+        2 => pixels.for_each(|(d, s)| *d = [s[0], s[0], s[0], s[1]]),
+        3 => pixels.for_each(|(d, s)| *d = [s[2], s[1], s[0], 255]),
+        4 => pixels.for_each(|(d, s)| *d = [s[2], s[1], s[0], s[3]]),
         _ => unreachable!("{channels} channels"),
     }
 }

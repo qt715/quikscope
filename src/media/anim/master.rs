@@ -346,38 +346,25 @@ fn new_compressor() -> std::io::Result<zstd::bulk::Compressor<'static>> {
 /// `out = a ^ b`, eight bytes at a time.
 fn xor_into(out: &mut Vec<u8>, a: &[u8], b: &[u8]) {
     out.resize(a.len(), 0);
-    let mut out_words = out.chunks_exact_mut(8);
-    let mut a_words = a.chunks_exact(8);
-    let mut b_words = b.chunks_exact(8);
-    for ((o, x), y) in (&mut out_words).zip(&mut a_words).zip(&mut b_words) {
-        let v =
-            u64::from_ne_bytes(x.try_into().unwrap()) ^ u64::from_ne_bytes(y.try_into().unwrap());
-        o.copy_from_slice(&v.to_ne_bytes());
+    let (out_words, out_tail) = out.as_chunks_mut::<8>();
+    let (a_words, a_tail) = a.as_chunks::<8>();
+    let (b_words, b_tail) = b.as_chunks::<8>();
+    for ((o, x), y) in out_words.iter_mut().zip(a_words).zip(b_words) {
+        *o = (u64::from_ne_bytes(*x) ^ u64::from_ne_bytes(*y)).to_ne_bytes();
     }
-    let tail = out_words.into_remainder();
-    for ((o, x), y) in tail
-        .iter_mut()
-        .zip(a_words.remainder())
-        .zip(b_words.remainder())
-    {
+    for ((o, x), y) in out_tail.iter_mut().zip(a_tail).zip(b_tail) {
         *o = x ^ y;
     }
 }
 
 /// `frame ^= delta`, eight bytes at a time.
 fn xor_in_place(frame: &mut [u8], delta: &[u8]) {
-    let mut frame_words = frame.chunks_exact_mut(8);
-    let mut delta_words = delta.chunks_exact(8);
-    for (f, d) in (&mut frame_words).zip(&mut delta_words) {
-        let v = u64::from_ne_bytes((*f).try_into().unwrap())
-            ^ u64::from_ne_bytes(d.try_into().unwrap());
-        f.copy_from_slice(&v.to_ne_bytes());
+    let (frame_words, frame_tail) = frame.as_chunks_mut::<8>();
+    let (delta_words, delta_tail) = delta.as_chunks::<8>();
+    for (f, d) in frame_words.iter_mut().zip(delta_words) {
+        *f = (u64::from_ne_bytes(*f) ^ u64::from_ne_bytes(*d)).to_ne_bytes();
     }
-    for (f, d) in frame_words
-        .into_remainder()
-        .iter_mut()
-        .zip(delta_words.remainder())
-    {
+    for (f, d) in frame_tail.iter_mut().zip(delta_tail) {
         *f ^= d;
     }
 }
@@ -583,7 +570,9 @@ fn read_index(file: &mut BufReader<File>, file_len: u64) -> Result<Option<(Vec<E
         "corrupt master index"
     );
     let entries = entries
-        .chunks_exact(INDEX_ENTRY_LEN)
+        .as_chunks::<INDEX_ENTRY_LEN>()
+        .0
+        .iter()
         .map(|e| Entry {
             pts: Duration::from_nanos(u64::from_le_bytes(e[..8].try_into().unwrap())),
             offset: u64::from_le_bytes(e[8..16].try_into().unwrap()),

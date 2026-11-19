@@ -681,8 +681,8 @@ impl DecodedPicture {
         let shift = bpc - 8;
         let mut narrow = Vec::with_capacity(cols * rows);
         for row in plane.chunks_exact(stride) {
-            narrow.extend(row[..cols * 2].chunks_exact(2).map(|s| {
-                let v = u32::from(u16::from_ne_bytes([s[0], s[1]]));
+            narrow.extend(row[..cols * 2].as_chunks::<2>().0.iter().map(|&s| {
+                let v = u32::from(u16::from_ne_bytes(s));
                 ((v + (1 << (shift - 1))) >> shift).min(255) as u8
             }));
         }
@@ -785,8 +785,10 @@ impl DecodedPicture {
         for (row, src) in bgra.chunks_exact(stride as usize).enumerate() {
             let start = (y as usize + row) * out_stride + x as usize * 4;
             for (d, s) in out.data[start..start + src.len()]
-                .chunks_exact_mut(4)
-                .zip(src.chunks_exact(4))
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(src.as_chunks::<4>().0)
             {
                 d[..3].copy_from_slice(&s[..3]);
             }
@@ -808,7 +810,9 @@ impl DecodedPicture {
             let src = &plane[row * stride..row * stride + w as usize];
             let start = (y as usize + row) * out_stride + x as usize * 4;
             for (d, &a) in out.data[start..start + w as usize * 4]
-                .chunks_exact_mut(4)
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
                 .zip(src)
             {
                 d[3] = if full {
@@ -950,11 +954,12 @@ impl AnimEncoder for AvifEncoder {
             .push(u32::try_from(end - start).context("AVIF frame too long")?);
         // Straight alpha over black.
         self.flat.clear();
-        self.flat.extend(image.data.chunks_exact(4).flat_map(|px| {
-            let a = u16::from(px[3]);
-            let f = |c: u8| ((u16::from(c) * a + 127) / 255) as u8;
-            [f(px[0]), f(px[1]), f(px[2]), 255]
-        }));
+        self.flat
+            .extend(image.data.as_chunks::<4>().0.iter().flat_map(|px| {
+                let a = u16::from(px[3]);
+                let f = |c: u8| ((u16::from(c) * a + 127) / 255) as u8;
+                [f(px[0]), f(px[1]), f(px[2]), 255]
+            }));
         yuv::bgra_to_yuv420(
             &mut self.yuv,
             &self.flat,

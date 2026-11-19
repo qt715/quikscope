@@ -10,7 +10,6 @@ keywords = ["screenshot", "screen-recorder", "wayland", "annotation", "gif"]
 categories = ["multimedia::images", "gui"]
 default-run = "quikscope"
 repository = "https://github.com/qt715/quikscope"
-homepage = "https://github.com/qt715/quikscope"
 authors = ["quikscope contributors"]
 documentation = "https://github.com/qt715/quikscope/tree/main/docs"
 exclude = ["/.github", "/docs/images", "/scripts", "/packaging", "/CONTRIBUTING.md", "/SECURITY.md", "/CODE_OF_CONDUCT.md"]
@@ -130,7 +129,6 @@ rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "
 libc = "0.2"
 cpal = { version = "0.18.2", features = ["pipewire"] }
 libpulse-binding = "2.30"
-libpulse-simple-binding = "2.29"
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 pipewire = "0.10"
 rustix = { version = "1", features = ["event", "fs", "pipe"] }

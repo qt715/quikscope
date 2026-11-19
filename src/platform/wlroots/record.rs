@@ -826,7 +826,9 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for St
                     unsafe { memmap2::MmapOptions::new().len(size as usize).map(&file) }
                 {
                     s.format_table = map
-                        .chunks_exact(16)
+                        .as_chunks::<16>()
+                        .0
+                        .iter()
                         .map(|entry| {
                             (
                                 u32::from_ne_bytes(entry[..4].try_into().unwrap()),
@@ -837,10 +839,8 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for St
                 }
             }
             Event::TrancheFormats { indices } => {
-                for bytes in indices.chunks_exact(2) {
-                    if let Some(entry) = s
-                        .format_table
-                        .get(u16::from_ne_bytes(bytes.try_into().unwrap()) as usize)
+                for &bytes in indices.as_chunks::<2>().0 {
+                    if let Some(entry) = s.format_table.get(u16::from_ne_bytes(bytes) as usize)
                         && !s.modifiers.contains(entry)
                     {
                         s.modifiers.push(*entry);
@@ -1003,9 +1003,7 @@ fn solid_buffer(
     qh: &QueueHandle<State>,
 ) -> Result<(wl_buffer::WlBuffer, Shm)> {
     let (wl, mut shm) = allocate_shm(shm, width, height, width * 4, wl_shm::Format::Argb8888, qh)?;
-    for pixel in shm.map.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&OUTLINE_COLOUR);
-    }
+    shm.map.as_chunks_mut::<4>().0.fill(OUTLINE_COLOUR);
     Ok((wl, shm))
 }
 

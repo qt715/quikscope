@@ -367,7 +367,7 @@ mod tests {
         let mut output = resampler.process(&sine(16_000, 1, 440.0, 16_000)).unwrap();
         output.extend(resampler.flush().unwrap());
         assert_eq!(output.len(), (resampler.delay() + 48_000) * 2);
-        assert!(output.chunks_exact(2).all(|f| f[0] == f[1]));
+        assert!(output.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]));
         let measured = frequency(&output[9600..86_400], 2, 48_000);
         assert!((measured - 440.0).abs() < 0.5, "{measured} Hz");
     }

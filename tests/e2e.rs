@@ -702,7 +702,7 @@ fn geometry_capture_crops_exactly_and_saves() {
 
 /// Spread of a frame's green channel: a black or blank recording has none.
 fn green_spread(img: &Image) -> u8 {
-    let greens = img.data.chunks_exact(4).map(|p| p[1]);
+    let greens = img.data.as_chunks::<4>().0.iter().map(|p| p[1]);
     let (lo, hi) = greens.fold((255, 0), |(lo, hi), g| (g.min(lo), g.max(hi)));
     hi.saturating_sub(lo)
 }

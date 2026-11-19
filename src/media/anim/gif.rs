@@ -121,7 +121,7 @@ impl AnimDecoder for GifDecoder {
             if cy >= self.canvas.height as i32 {
                 break;
             }
-            for (x, rgba) in row.chunks_exact(4).enumerate() {
+            for (x, rgba) in row.as_chunks::<4>().0.iter().enumerate() {
                 let cx = rect.x + x as i32;
                 if cx >= self.canvas.width as i32 {
                     break;
@@ -219,7 +219,12 @@ impl AnimEncoder for GifEncoder {
         {
             return Ok(());
         }
-        let has_alpha = image.data.chunks_exact(4).any(|px| px[3] < ALPHA_THRESHOLD);
+        let has_alpha = image
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|px| px[3] < ALPHA_THRESHOLD);
         // "Restore to background" clears only the frame's own rectangle, so
         // the frame before one with transparency must cover the canvas.
         if has_alpha
@@ -274,7 +279,7 @@ fn quantize(image: &Image, rect: IRect, shown: Option<&Image>) -> Frame<'static>
         let row = &image.row(y as u32)[rect.x as usize * 4..rect.right() as usize * 4];
         let shown_row =
             shown.map(|s| &s.row(y as u32)[rect.x as usize * 4..rect.right() as usize * 4]);
-        for (x, px) in row.chunks_exact(4).enumerate() {
+        for (x, px) in row.as_chunks::<4>().0.iter().enumerate() {
             colors.push(Srgb::new(px[2], px[1], px[0]));
             let same = shown_row.is_some_and(|s| s[x * 4..x * 4 + 4] == *px);
             transparent.push(px[3] < ALPHA_THRESHOLD || same);

@@ -355,7 +355,9 @@ mod tests {
         let pre_skip = usize::from(encoder.pre_skip());
         assert!(pre_skip > 0 && pre_skip < FRAME);
         let packets: Vec<Vec<u8>> = input
-            .chunks_exact(FRAME * 2)
+            .as_chunks::<{ FRAME * 2 }>()
+            .0
+            .iter()
             .map(|frame| encoder.encode(frame).unwrap())
             .collect();
         assert!(encoder.encode(&input[..FRAME]).is_err());
@@ -429,7 +431,7 @@ mod tests {
                 .collect();
             let mut out = vec![0; MAX_PACKET * 6];
             let len = encoder.encode_float(&input, &mut out).unwrap();
-            for frame in decoder.decode(&out[..len]).unwrap().chunks_exact(6) {
+            for frame in decoder.decode(&out[..len]).unwrap().as_chunks::<6>().0 {
                 centre.push(frame[2]);
                 front_right.push(frame[1]);
             }

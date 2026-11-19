@@ -421,7 +421,7 @@ mod tests {
         for window in body[480..].chunks(96) {
             assert!(window.iter().any(|s| s.abs() > 0.05));
         }
-        assert!(mix.chunks_exact(2).all(|f| f[0] == f[1]));
+        assert!(mix.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]));
     }
 
     #[test]

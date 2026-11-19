@@ -348,8 +348,10 @@ impl Recording {
                 // equal to elapsed time.
                 PeekResult::Hole(bytes) => vec![0.0; bytes / 4],
                 PeekResult::Data(bytes) => bytes
-                    .chunks_exact(4)
-                    .map(|s| f32::from_le_bytes(s.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&s| f32::from_le_bytes(s))
                     .collect(),
             };
             self.stream

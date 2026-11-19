@@ -258,7 +258,7 @@ mod tests {
                     assert_eq!(yuv.data.len(), 6 * 4 * 3 / 2);
                     let back = to_bgra(&yuv);
                     assert_eq!((back.width, back.height), (6, 4));
-                    for px in back.data.chunks_exact(4) {
+                    for px in back.data.as_chunks::<4>().0 {
                         assert_close(px, rgb, &format!("{name} {format:?} {layout:?}"));
                         assert_eq!(px[3], 255, "opaque alpha");
                     }
@@ -338,7 +338,7 @@ mod tests {
             let yuv = to_yuv420(&src, stride, PixelFormat::Bgra, 4, 2, layout);
             let back = to_bgra(&yuv);
             assert_eq!((back.width, back.height), (4, 2));
-            for px in back.data.chunks_exact(4) {
+            for px in back.data.as_chunks::<4>().0 {
                 assert_close(px, [0, 200, 0], "cropped green");
             }
         }
@@ -348,13 +348,13 @@ mod tests {
     fn resize_averages_down_and_interpolates_up() {
         // 4x2 checker of black/white columns → 2x1 averages to grey.
         let mut image = Image::new(4, 2);
-        for (i, px) in image.data.chunks_exact_mut(4).enumerate() {
+        for (i, px) in image.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let v = if i % 2 == 0 { 0 } else { 255 };
-            px.copy_from_slice(&[v, v, v, 255]);
+            *px = [v, v, v, 255];
         }
         let small = resize(&image, 2, 1);
         assert_eq!((small.width, small.height, small.data.len()), (2, 1, 8));
-        for px in small.data.chunks_exact(4) {
+        for px in small.data.as_chunks::<4>().0 {
             assert!(px[0].abs_diff(128) <= 1, "{px:?}");
         }
 
@@ -363,7 +363,14 @@ mod tests {
             .copy_from_slice(&[0, 0, 0, 255, 200, 200, 200, 255]);
         let big = resize(&ramp, 8, 2);
         assert_eq!((big.width, big.height), (8, 2));
-        let row: Vec<u8> = big.data.chunks_exact(4).take(8).map(|p| p[0]).collect();
+        let row: Vec<u8> = big
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .take(8)
+            .map(|p| p[0])
+            .collect();
         assert!(row.windows(2).all(|w| w[0] <= w[1]), "monotonic {row:?}");
         assert!(row[3] > 0 && row[3] < 200, "interpolated {row:?}");
         assert_eq!(resize(&ramp, 2, 1), ramp);
