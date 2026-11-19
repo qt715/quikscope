@@ -1,7 +1,7 @@
 //! quikscope: a fast screenshot daemon with a GPUI annotation editor.
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-compile_error!("quikscope supports Linux, Windows and macOS only");
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+compile_error!("quikscope supports Linux and Windows only");
 
 pub mod cache;
 pub mod capture;

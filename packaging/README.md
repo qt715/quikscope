@@ -2,8 +2,8 @@
 
 The Packages workflow runs on `v*` tags or manual dispatch. Dispatch uploads
 artifacts only; tags create a **draft**, never a published release. Ensure the
-Cargo version, changelog version section and tag agree. All runs build Linux,
-Windows and a universal macOS bundle using the landed native backend and app assembler.
+Cargo version, changelog version section and tag agree. All runs build the
+Linux and Windows packages.
 
 ## Cut a release
 
@@ -14,7 +14,7 @@ Windows and a universal macOS bundle using the landed native backend and app ass
 4. With release-owner approval, push `v<VERSION>`. Review the generated draft,
    notes, checksums and platform assets before manually publishing it.
 
-No workflow applies a distribution signature, notarizes the app, publishes an AUR package, or
+No workflow applies a distribution signature, publishes an AUR package, or
 changes repository settings. While the repository is private, release/source
 URLs require GitHub access; an AUR submission is appropriate only after public
 source releases are accessible.
@@ -22,7 +22,7 @@ source releases are accessible.
 ## Licences and source
 
 Install `cargo-about 0.8.4` with `cargo install cargo-about --locked --version
-0.8.4`; run `packaging/licenses.sh`. about.toml enumerates **all four release
+0.8.4`; run `packaging/licenses.sh`. about.toml enumerates **both release
 targets**, includes build/dev/transitive dependencies and uses Cargo.lock.
 The generated THIRD-PARTY-LICENSES.html is committed and regenerated in every
 release job. It includes MPL-2.0 source download instructions for the exact
@@ -116,14 +116,3 @@ installer is unsigned; SmartScreen reputation is not bypassed automatically.
 silent lifecycle in a disposable signed-in Windows environment using task-owned
 `V:\qk-pkg` output. It refuses existing installs/config and schedules the daemon
 in the interactive session; it does not depend on PrintScreen.
-
-## macOS
-
-The job cross-builds both Apple architectures on macOS, uses lipo, then
-calls `packaging/macos/assemble-app.sh <universal-binary> <output.app>`.
-That script owns Info.plist substitution, the bundle executable/icon and
-licence placement. hdiutil wraps the app and Applications symlink into a UDZO
-.dmg. No create-dmg dependency is needed. The assembler ad-hoc signs the bundle;
-Developer ID signing and notarization remain release-owner operations. Both
-backend architectures and the Gatekeeper experience require native runner/user
-verification; a successful Linux packaging build does not validate macOS.

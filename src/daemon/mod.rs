@@ -121,7 +121,6 @@ pub fn run(socket: PathBuf) -> Result<()> {
     spawn_listener(listener, tx.clone());
 
     // Platform backends connect concurrently with GPUI start-up.
-    #[cfg(not(target_os = "macos"))]
     let services = std::thread::spawn({
         let tx = tx.clone();
         let config = config.clone();
@@ -139,45 +138,9 @@ pub fn run(socket: PathBuf) -> Result<()> {
     let app = gpui_platform::application()
         .with_assets(Assets)
         .with_quit_mode(QuitMode::Explicit);
-    // Finder hands documents to a running app as open-URL events, not argv.
-    #[cfg(target_os = "macos")]
-    app.on_open_urls({
-        let tx = tx.clone();
-        move |urls| {
-            for url in urls {
-                match url::Url::parse(&url)
-                    .ok()
-                    .and_then(|u| u.to_file_path().ok())
-                {
-                    Some(path) => {
-                        let _ =
-                            tx.unbounded_send(Msg::Desktop(Event::Request(Request::Open(path))));
-                    }
-                    None => log::warn!("ignoring non-file URL {url}"),
-                }
-            }
-        }
-    });
     app.run(move |cx: &mut App| {
         ui::init(cx);
-        // GPUI defaults to a regular application even when LSUIElement is set.
-        #[cfg(target_os = "macos")]
-        cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
-        #[cfg(not(target_os = "macos"))]
         let platform = Arc::new(services.join().expect("platform start-up panicked"));
-        #[cfg(target_os = "macos")]
-        let platform = Arc::new(platform::connect(
-            Arc::new(move |event| {
-                let _ = tx.unbounded_send(Msg::Desktop(event));
-            }),
-            &config,
-        ));
-        #[cfg(target_os = "macos")]
-        if let Some(shell) = &platform.shell
-            && let Err(error) = shell.set_hotkeys(&config.hotkeys)
-        {
-            log::warn!("registering macOS shortcuts: {error:#}");
-        }
         log::info!("platform backend: {}", platform.name);
         cx.set_global(EditorServices {
             config: config.clone(),
@@ -652,8 +615,6 @@ async fn pick(cx: &mut AsyncApp) -> Result<Option<Response>> {
 
 /// Shows `color` in the color window, reusing it when it is open.
 fn open_color_window(color: Rgba, cx: &mut App) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    cx.activate(true);
     let existing = cx.read_global::<Daemon, _>(|d, _| d.color);
     if let Some(handle) = existing
         && handle
@@ -978,7 +939,7 @@ async fn select_region(
     let selected = done.await.ok().flatten();
     #[cfg(target_os = "linux")]
     drop(selection_focus);
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     if let Some(barrier) = barrier {
         // DwmFlush can dispatch queued GPUI frame callbacks. The windows must
         // remain registered until native hiding/composition has completed.
@@ -991,7 +952,7 @@ async fn select_region(
     } else {
         daemon(cx, |d, _| d.selecting = false);
     }
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     if !live {
         daemon(cx, |d, _| d.selecting = false);
     }
@@ -1325,13 +1286,6 @@ fn apply_config(config: Arc<Config>, cx: &mut App) {
         {
             shell.update_hotkeys(&config.hotkeys);
         }
-        #[cfg(target_os = "macos")]
-        if d.config.hotkeys != config.hotkeys
-            && let Some(shell) = &d.platform.shell
-            && let Err(error) = shell.set_hotkeys(&config.hotkeys)
-        {
-            log::warn!("updating macOS shortcuts: {error:#}");
-        }
         d.notify = config.notify;
         d.config = config.clone();
     });
@@ -1349,8 +1303,6 @@ fn apply_config(config: Arc<Config>, cx: &mut App) {
 }
 
 fn open_settings(welcome: bool, cx: &mut App) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    cx.activate(true);
     let (config, existing) = cx.read_global::<Daemon, _>(|d, _| (d.config.clone(), d.settings));
     if let Some(handle) = existing
         && handle
@@ -1505,8 +1457,6 @@ async fn open_path(path: PathBuf, cx: &mut AsyncApp) -> Result<Option<Response>>
 
 /// Opens (or focuses) the video editor for video `id` at `path`.
 fn open_video(id: u64, path: PathBuf, cx: &mut App) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    cx.activate(true);
     let existing = cx.read_global::<Daemon, _>(|d, _| d.video_editors.get(&id).copied());
     if let Some(handle) = existing
         && handle
@@ -1623,8 +1573,6 @@ enum EditorTool {
 /// Opens (or focuses) the editor for shot `id`, keeping annotations from a
 /// previous editor session of the same shot.
 fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    cx.activate(true);
     let started = Instant::now();
     let (shot, existing) = cx.read_global::<Daemon, _>(|d, _| {
         (
@@ -1690,14 +1638,6 @@ fn open_editor(id: u64, tool: EditorTool, cx: &mut App) -> Result<()> {
                 EditorTool::Default => None,
             };
             let editor = cx.new(|cx| {
-                #[cfg(target_os = "macos")]
-                {
-                    cx.observe_window_activation(window, |_, window, _| {
-                        log::debug!("macOS editor key window: {}", window.is_window_active());
-                    })
-                    .detach();
-                    log::debug!("macOS editor key window: {}", window.is_window_active());
-                }
                 let mut editor = Editor::new(shot, doc, window, cx);
                 if let Some(tool) = last {
                     editor.tool = tool;

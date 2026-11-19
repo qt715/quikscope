@@ -24,8 +24,6 @@ pub(crate) use selection::SelectionBarrier;
 pub mod freedesktop;
 #[cfg(target_os = "linux")]
 pub mod hyprland;
-#[cfg(target_os = "macos")]
-pub mod macos;
 #[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(target_os = "linux")]
@@ -76,8 +74,7 @@ pub trait Clipboard: Send + Sync {
     fn set_text(&self, text: &str);
     /// Offers files (a finished recording) the way file managers copy them:
     /// `text/uri-list` and `x-special/gnome-copied-files` on Linux, `CF_HDROP`
-    /// on Windows, file URLs on macOS. Chat apps and file managers paste the
-    /// file itself.
+    /// on Windows. Chat apps and file managers paste the file itself.
     fn set_files(&self, paths: &[PathBuf]);
 }
 
@@ -126,7 +123,7 @@ pub trait ScreenRecorder: Send + Sync {
     fn outline(&self, region: IRect) -> Result<Box<dyn Send>>;
 }
 
-/// Recording status shown by a tray icon or menu-bar item.
+/// Recording status shown by a tray icon.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordingStatus {
     pub kind: crate::media::Kind,
@@ -150,8 +147,8 @@ pub struct TrayState {
 pub const VIDEO_FPS_CHOICES: [u32; 4] = [24, 30, 60, 120];
 pub const ANIMATION_FPS_CHOICES: [u32; 4] = [10, 15, 24, 30];
 
-/// A system tray icon or menu-bar menu with recording controls. Menu
-/// actions arrive as [`Event`]s.
+/// A system tray icon with recording controls. Menu actions arrive as
+/// [`Event`]s.
 pub trait Tray: Send + Sync {
     fn update(&self, state: &TrayState);
 }
@@ -201,8 +198,6 @@ pub enum Surfaces {
     X11,
     #[cfg(windows)]
     Windows,
-    #[cfg(target_os = "macos")]
-    MacOS,
     /// Fullscreen xdg-toplevel windows where layer-shell is unavailable.
     #[cfg(target_os = "linux")]
     Fullscreen,
@@ -222,12 +217,10 @@ pub struct Platform {
     pub capture_may_prompt: bool,
     /// Continuous capture for video and animation recording.
     pub recorder: Option<Arc<dyn ScreenRecorder>>,
-    /// Tray icon / menu-bar menu with recording controls.
+    /// Tray icon with recording controls.
     pub tray: Option<Arc<dyn Tray>>,
     #[cfg(windows)]
     pub(crate) shell: Option<Arc<windows::Shell>>,
-    #[cfg(target_os = "macos")]
-    pub(crate) shell: Option<macos::shell::Shell>,
 }
 
 /// Connects the backends for the current session. Missing pieces are
@@ -350,10 +343,6 @@ pub fn connect(events: EventSink, config: &crate::config::Config) -> Platform {
     {
         windows::connect(events, config)
     }
-    #[cfg(target_os = "macos")]
-    {
-        macos::connect(events, config)
-    }
 }
 
 impl Platform {
@@ -381,8 +370,6 @@ impl Platform {
             }
             #[cfg(windows)]
             Surfaces::Windows => Ok(windows::selection_outputs()?),
-            #[cfg(target_os = "macos")]
-            Surfaces::MacOS => macos::selection_outputs(),
         }
     }
 
@@ -510,19 +497,6 @@ impl Platform {
                     ..Default::default()
                 }
             }
-            #[cfg(target_os = "macos")]
-            Surfaces::MacOS => WindowOptions {
-                titlebar: None,
-                focus: true,
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                display_id,
-                kind: WindowKind::PopUp,
-                is_movable: false,
-                is_resizable: false,
-                is_minimizable: false,
-                window_background: WindowBackgroundAppearance::Opaque,
-                ..Default::default()
-            },
         }
     }
 
@@ -558,8 +532,6 @@ impl Platform {
             }
             #[cfg(windows)]
             Surfaces::Windows => None,
-            #[cfg(target_os = "macos")]
-            Surfaces::MacOS => None,
         }
     }
 }
@@ -568,14 +540,6 @@ impl Platform {
 /// of the output name; elsewhere the display whose bounds start at the
 /// output's logical origin.
 pub(crate) fn display_for(name: &str, logical: IRect, cx: &App) -> Option<DisplayId> {
-    #[cfg(target_os = "macos")]
-    if let Ok(id) = name.parse::<u64>() {
-        return cx
-            .displays()
-            .iter()
-            .find(|d| d.id() == DisplayId::new(id))
-            .map(|d| d.id());
-    }
     let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes());
     let displays = cx.displays();
     displays

@@ -3,8 +3,8 @@
 # quikscope
 
 A fast screenshot and screen recording tool for Linux (wlroots compositors
-such as Hyprland and sway, X11, and experimental GNOME/KDE portal support),
-Windows and macOS 12.3+, with built-in annotation and video editors written in
+such as Hyprland and sway, X11, and experimental GNOME/KDE portal support)
+and Windows, with built-in annotation and video editors written in
 [GPUI](https://gpui.rs).
 
 ![Region selection with a frozen-screen overlay](docs/images/region-selection.png)
@@ -24,12 +24,11 @@ keybind ─▶ quikscope capture region ─▶ frozen-screen selection ─▶ cl
   encoding finishes ~22 ms later. The editor paints its first frame ~5 ms after creation
   (see [Performance](#performance)).
 - **Desktop-specific backends.** `wlr-screencopy` on wlroots compositors, the
-  experimental Screenshot portal on GNOME/KDE, MIT-SHM on X11, DXGI on Windows,
-  and ScreenCaptureKit on macOS;
-  the backend is picked at start-up ([details](#desktops)).
+  experimental Screenshot portal on GNOME/KDE, MIT-SHM on X11 and DXGI on
+  Windows; the backend is picked at start-up ([details](#desktops)).
 - **Frozen or live region selection** (frozen by default), spanning outputs where
-  the backend permits, with window snapping on Hyprland, X11, Windows and macOS
-  (Windows and macOS snapping are not yet verified natively). Live selection dims outside the rectangle and
+  the backend permits, with window snapping on Hyprland, X11 and Windows
+  (Windows snapping is not yet verified natively). Live selection dims outside the rectangle and
   leaves a transparent hole; pixels are captured after selection closes.
 - **Excalidraw-style editor**: rectangle, ellipse, arrow, line, pen,
   highlighter, text, numbered steps, pixelate (redaction) and crop, with
@@ -83,14 +82,6 @@ The installer is unsigned. SmartScreen may warn; only proceed with **More info �
 Run anyway** after checking the download source and published SHA-256 checksum.
 See [Windows 10/11](#windows-1011) for usage and optional OCR setup.
 
-### macOS disk image
-
-Open `quikscope-<version>-macos-universal.dmg` and drag the app to Applications.
-The bundle supports Apple Silicon and Intel. It is ad-hoc signed, not
-Developer ID signed or notarized: right-click it in Finder and choose
-**Open**, or remove quarantine from the trusted installed app with
-`xattr -d com.apple.quarantine /Applications/quikscope.app`.
-
 ### Cargo
 
 Install from crates.io with Rust ≥ 1.95 and the platform development
@@ -116,7 +107,7 @@ sudo apt install clang libavcodec-dev libavformat-dev libavfilter-dev libavdevic
 
 On Windows set `FFMPEG_DIR` to an unpacked FFmpeg shared build
 (`packaging/ffmpeg.sh win64` fetches the LGPL one the installer uses) and put
-its `bin` on `PATH`; on macOS `brew install ffmpeg` is enough for a local build.
+its `bin` on `PATH`.
 Distribution FFmpeg builds without an H.264 encoder (Fedora's `ffmpeg-free`)
 can still record animations and use GPU H.264 encoders only.
 
@@ -159,7 +150,6 @@ The daemon picks a backend at start-up and logs it (`platform backend: …`);
 | GNOME (experimental) | Screenshot portal | one fullscreen window, one output | no |
 | X11 | MIT-SHM (GetImage remotely) | override-redirect popups | EWMH window managers |
 | Windows 10/11 | DXGI duplication (GDI fallback) | topmost popups | implemented, unverified |
-| macOS 12.3+ | ScreenCaptureKit | borderless popup panels, all displays | implemented, unverified |
 
 ### wlroots compositors
 
@@ -267,24 +257,6 @@ For diagnostics, `QUIKSCOPE_DEBUG_NO_LAYER_SHELL=1` on the daemon forces
 the single-output fullscreen path, even on a layer-shell compositor.
 Portal PNGs are not deleted: the API does not transfer ownership, and
 GNOME/KDE may save into Pictures rather than create disposable files.
-
-### macOS
-
-macOS 12.3 and later has a native ScreenCaptureKit backend on Apple Silicon
-and Intel, with Retina-resolution capture, window snapping, a menu-bar menu
-and configurable global shortcuts. Use the `.app` bundle for notifications.
-The first capture requests **Screen Recording** permission; allow quikscope
-in System Settings → Privacy & Security, and restart it if macOS asks.
-
-Defaults are **Cmd+Shift+2** (region), **Cmd+Shift+8** (screen),
-**Cmd+Shift+7** (window), and **Cmd+Shift+E** (open last). They deliberately
-leave macOS's Cmd+Shift+3/4/5 and Touch Bar Cmd+Shift+6 alone. Configuration lives in
-`~/Library/Application Support/quikscope/config.toml`; cache and the per-user
-Unix IPC socket live in `~/Library/Caches/quikscope`. Screenshots default to
-`~/Pictures/Screenshots`. `quikscope autostart on|off|status` manages a
-per-user LaunchAgent for subsequent logins.
-
-See [macOS build, bundle and verification notes](docs/macos.md).
 
 ### X11
 
@@ -404,9 +376,9 @@ Click, or press `Enter`, to pick that pixel; on a scaled output it is the
 physical pixel under the pointer. Right click, `Esc` or `q` cancels.
 The command prints the color (`#0067ed`) and opens a small window that copies
 it as HEX, RGB, CMYK, HSV or HSL with one click (`Ctrl+C` copies HEX, **Pick
-again** picks another). The Windows tray and macOS menu-bar menus have
-**Pick color**. In the editor, `I` or the color picker's eyedropper picks
-into the drawing color instead.
+again** picks another). The Windows tray menu has **Pick color**. In the
+editor, `I` or the color picker's eyedropper picks into the drawing color
+instead.
 
 ### Notifications on/off
 
@@ -468,16 +440,14 @@ the Settings window.
 GNOME with the AppIndicator extension…) offers Record video/animation, the
 audio devices and frame rates; while recording it shows the elapsed time with
 Pause/Resume, Stop and save and Discard, and a click on the icon stops.
-`record.tray = false` hides it. The Windows tray and macOS menu-bar menus have
-the same items.
+`record.tray = false` hides it. The Windows tray menu has the same items.
 
 **Encoding.** Videos use the first GPU encoder that works (NVENC, VAAPI,
-Quick Sync, AMF, Media Foundation on Windows, VideoToolbox on macOS), else a
-software H.264 encoder; `record.encoder = "software"` skips the GPU.
+Quick Sync, AMF, Media Foundation on Windows), else a software H.264 encoder;
+`record.encoder = "software"` skips the GPU.
 Animations are recorded losslessly to the cache first and encoded when you
 stop (GIF with a palette computed over the whole clip), so annotating them
-later loses nothing. macOS builds bundle an FFmpeg without WebP, AVIF and
-JPEG XL encoders: animations there are GIF.
+later loses nothing.
 
 **Capture.** On wlroots compositors frames are copied by the compositor into
 GPU buffers (DMA-BUF) and converted on quikscope's side; shared-memory
@@ -485,9 +455,8 @@ capture is never used for recordings because Hyprland reads it back
 synchronously on its main thread, which makes games stutter. On Hyprland with
 an NVIDIA RTX 5090 this sustained 56 fps at 1280×720 and 52 fps at 2560×1440
 with about 2 ms of CPU per frame. X11 uses MIT-SHM, Windows Desktop
-Duplication (`ddagrab`), macOS ScreenCaptureKit (with system audio on macOS
-13+), and GNOME/KDE the ScreenCast portal (experimental; the first recording
-asks for permission, later ones reuse the stored grant).
+Duplication (`ddagrab`), and GNOME/KDE the ScreenCast portal (experimental;
+the first recording asks for permission, later ones reuse the stored grant).
 
 ## Opening files
 
@@ -499,8 +468,7 @@ video editor. Without a file it opens the latest capture.
 The packages' desktop entry declares these types, so file managers list
 quikscope under **Open with** (`xdg-mime default quikscope.desktop video/mp4`
 makes it the default). The Windows installer adds it to Explorer's **Open
-with** menu, and the macOS app accepts files dropped on it or opened from
-Finder.
+with** menu.
 
 ## Editor
 
@@ -642,8 +610,6 @@ test described in [docs/testing.md](docs/testing.md).
 - X11 capture supports 24/32-bit TrueColor; monitors have no independent scale.
 - Windows frozen and live region selection were verified on one Windows 11
   monitor; Windows 10, mixed DPI, multiple monitors and window snapping remain unverified.
-- macOS overlay interaction, global shortcuts and notification clicks require
-  an interactive desktop; see [macOS verification](docs/macos.md).
 - Characters no installed font has are drawn as the font's missing-glyph
   box. Text is always left-aligned, also right-to-left text.
 

@@ -17,9 +17,4 @@ fn main() {
         .manifest_required()
         .expect("embedding the quikscope application icon");
     }
-    if target_os.as_deref() == Ok("macos") {
-        // The app bundles FFmpeg's @rpath dylibs in Contents/Frameworks
-        // (packaging/macos/assemble-app.sh).
-        println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path/../Frameworks");
-    }
 }

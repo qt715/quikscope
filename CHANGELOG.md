@@ -11,7 +11,7 @@
 - Videos: MP4, MKV or MOV (H.264 with AAC, or Opus in MKV), 60 fps by default,
   with desktop audio and any number of microphones or other devices mixed in
   (`quikscope audio-devices` lists them). GPU encoders (NVENC, VAAPI, Quick Sync,
-  AMF, Media Foundation, VideoToolbox) are used when they work.
+  AMF, Media Foundation) are used when they work.
 - Animations: GIF (two-pass palette), WebP, AVIF or JPEG XL, 30 fps by default,
   recorded losslessly first so annotating and re-exporting loses nothing.
 - A thin outline marks the recorded area without being recorded. Finished files
@@ -19,13 +19,11 @@
   notification with a thumbnail; clicking it opens the editor.
 - Linux system tray icon (StatusNotifierItem) with elapsed time, pause/resume,
   stop, discard, audio devices and frame rates; the same controls in the Windows
-  tray and macOS menu bar. New shortcuts on Windows (Ctrl+Shift+PrintScreen,
-  Alt+Shift+PrintScreen) and macOS (Cmd+Shift+9, Cmd+Shift+0).
+  tray. New shortcuts on Windows (Ctrl+Shift+PrintScreen, Alt+Shift+PrintScreen).
 - On wlroots compositors frames are copied into GPU buffers (DMA-BUF), never
   shared memory: Hyprland reads shared-memory captures back on its main thread,
   which makes games stutter. Recording also works on X11, Windows (Desktop
-  Duplication), macOS (ScreenCaptureKit) and, experimentally, through the
-  ScreenCast portal on GNOME/KDE.
+  Duplication) and, experimentally, through the ScreenCast portal on GNOME/KDE.
 
 ### Editors
 
@@ -48,14 +46,17 @@
 - `quikscope open` takes several files and opens the latest capture without
   one. The desktop entry (`quikscope open %F`) registers PNG, JPEG, WebP, GIF,
   AVIF, JPEG XL, MP4, MKV, MOV and WebM, so file managers can open them in
-  quikscope; the Windows installer adds quikscope to Explorer's Open with, and
-  the macOS app accepts files from Finder.
+  quikscope; the Windows installer adds quikscope to Explorer's Open with.
 
 ### Packaging
 
-- quikscope now links FFmpeg. The .deb/.rpm, Windows installer and macOS app
+- quikscope now links FFmpeg. The .deb/.rpm and Windows installer
   bundle an LGPL FFmpeg build; Arch and `cargo install` use the system FFmpeg
   (and need its development files, libgbm, PipeWire and PulseAudio libraries).
+
+### Removed
+
+- macOS support (last available in 0.2.0).
 
 ## 0.2.0 — 2026-11-17
 

@@ -125,51 +125,8 @@ jobs:
           name: quikscope-windows
           path: dist/*-installer.exe
           if-no-files-found: error
-  macos:
-    runs-on: macos-15
-    env:
-      MACOSX_DEPLOYMENT_TARGET: '12.3'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          target: aarch64-apple-darwin,x86_64-apple-darwin
-      - run: cargo install cargo-about --locked --version 0.8.4
-      - run: packaging/licenses.sh
-      - name: Check macOS packaging prerequisites
-        run: |
-          test -f packaging/macos/Info.plist
-          test -x packaging/macos/assemble-app.sh
-          test -f assets/branding/quikscope.icns
-      - run: brew install nasm
-      - name: Build LGPL FFmpeg for both architectures and merge them
-        run: |
-          packaging/macos/build-ffmpeg.sh arm64 "$HOME/ffmpeg/arm64"
-          packaging/macos/build-ffmpeg.sh x86_64 "$HOME/ffmpeg/x86_64"
-          mkdir -p "$HOME/ffmpeg/universal/lib"
-          cp "$HOME/ffmpeg/arm64/LICENSE.txt" "$HOME/ffmpeg/universal/"
-          for dylib in "$HOME"/ffmpeg/arm64/lib/lib*.dylib; do
-            name=$(basename "$dylib")
-            [[ "$name" =~ ^lib[a-z]+\.[0-9]+\.dylib$ ]] || continue
-            lipo -create "$dylib" "$HOME/ffmpeg/x86_64/lib/$name" -output "$HOME/ffmpeg/universal/lib/$name"
-          done
-      - run: FFMPEG_DIR="$HOME/ffmpeg/arm64" cargo build --frozen --release --target aarch64-apple-darwin --bin quikscope
-      - run: FFMPEG_DIR="$HOME/ffmpeg/x86_64" cargo build --frozen --release --target x86_64-apple-darwin --bin quikscope
-      - name: Assemble universal app and unsigned disk image
-        run: |
-          mkdir -p dist/dmg
-          lipo -create target/aarch64-apple-darwin/release/quikscope target/x86_64-apple-darwin/release/quikscope -output dist/quikscope
-          FFMPEG_LIB="$HOME/ffmpeg/universal/lib" packaging/macos/assemble-app.sh dist/quikscope dist/dmg/quikscope.app
-          ln -s /Applications dist/dmg/Applications
-          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
-          hdiutil create -volname quikscope -srcfolder dist/dmg -ov -format UDZO "dist/quikscope-$version-macos-universal.dmg"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: quikscope-macos
-          path: dist/*.dmg
-          if-no-files-found: error
   publish:
-    needs: [linux, windows, macos]
+    needs: [linux, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -186,7 +143,7 @@ jobs:
           # GitHub renames dot-files among release assets ("default.SRCINFO"),
           # which would break the checksum list; publish it as SRCINFO.
           mv .SRCINFO SRCINFO
-          sha256sum *.deb *.rpm *.exe *.dmg *-source.tar.gz PKGBUILD SRCINFO > SHA256SUMS
+          sha256sum *.deb *.rpm *.exe *-source.tar.gz PKGBUILD SRCINFO > SHA256SUMS
           cd ..
           python3 packaging/release-notes.py > dist/RELEASE-NOTES.txt
       - uses: actions/upload-artifact@v4
@@ -198,4 +155,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "quikscope $GITHUB_REF_NAME" --notes-file dist/RELEASE-NOTES.txt dist/*.deb dist/*.rpm dist/*.exe dist/*.dmg dist/*-source.tar.gz dist/PKGBUILD dist/SRCINFO dist/SHA256SUMS
+        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "quikscope $GITHUB_REF_NAME" --notes-file dist/RELEASE-NOTES.txt dist/*.deb dist/*.rpm dist/*.exe dist/*-source.tar.gz dist/PKGBUILD dist/SRCINFO dist/SHA256SUMS

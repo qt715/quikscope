@@ -59,7 +59,7 @@ fn input_row(input: &Input) -> AnyElement {
 }
 
 /// The audio devices recordings can include, listed off the UI thread
-/// because PulseAudio/WASAPI/Core Audio enumeration can block.
+/// because PulseAudio/WASAPI enumeration can block.
 enum AudioDevices {
     Loading,
     Ready(Vec<AudioDevice>),
@@ -114,7 +114,7 @@ pub struct Settings {
     items: Vec<&'static str>,
     /// Records the option bounds of segmented settings and the audio list.
     rows: HashMap<&'static str, ScrollHandle>,
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     bindings: [String; 4],
 }
 
@@ -136,7 +136,7 @@ impl Settings {
                 .unwrap_or(true)
         });
         let mut this = Self {
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(windows)]
             bindings: [
                 config.hotkeys.region.clone(),
                 config.hotkeys.screen.clone(),
@@ -670,7 +670,7 @@ impl Settings {
             )
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     fn shortcut(
         &self,
         index: usize,
@@ -1012,7 +1012,7 @@ impl Render for Settings {
                         .into_any_element(),
                 ));
             }
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(windows)]
             {
                 items.push((
                     "shortcuts",

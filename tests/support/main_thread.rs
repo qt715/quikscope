@@ -1,4 +1,4 @@
-// Cocoa's platform requires the process main thread, even for headless rendering.
+// GPUI UI suites create their platform on the process main thread, as the daemon does.
 // A single-thread libtest-mimic runner retains filtering and panic-based failures.
 macro_rules! main_thread_tests {
     ($($case:ident),+ $(,)?) => {

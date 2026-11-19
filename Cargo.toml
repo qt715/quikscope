@@ -47,7 +47,7 @@ name = "x11_e2e"
 path = "tests/x11_e2e.rs"
 required-features = ["e2e"]
 
-# Cocoa's platform must be created on the process main thread, not a libtest worker.
+# UI suites run their cases on the process main thread (tests/support/main_thread.rs).
 [[test]]
 name = "editor_render"
 path = "tests/support/editor_render_main.rs"
@@ -116,24 +116,6 @@ ash = "0.38"
 
 raw-window-handle = "0.6"
 x11rb = { version = "0.13.2", features = ["randr", "shm", "xfixes", "xtest", "present"] }
-url = "2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
-raw-window-handle = "0.6"
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["runtime_shaders", "font-kit"] }
-objc2 = "0.6"
-objc2-foundation = "0.3"
-objc2-app-kit = "0.3"
-objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
-objc2-user-notifications = "0.3"
-objc2-screen-capture-kit = "0.3"
-objc2-core-media = "0.3"
-objc2-core-video = "0.3"
-block2 = "0.6"
-dispatch2 = "0.3"
-core-foundation = "0.10"
-core-graphics = "0.24"
 url = "2"
 
 [target.'cfg(windows)'.dependencies]

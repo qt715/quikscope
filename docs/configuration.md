@@ -57,13 +57,13 @@ font_italic = false
 languages = []
 
 [record]
-# Where recordings are written (Windows: Videos\Screencasts, macOS:
-# ~/Movies/Screencasts). The file name is strftime-style without extension.
+# Where recordings are written (Windows: Videos\Screencasts). The file name is
+# strftime-style without extension.
 save_dir = "~/Videos/Screencasts"
 filename = "recording_%Y%m%d_%H%M%S"
 # "mp4", "mkv" or "mov" (H.264; AAC audio, Opus in MKV).
 video_format = "mp4"
-# "gif", "webp", "avif" or "jxl" (macOS builds: gif only, see README).
+# "gif", "webp", "avif" or "jxl".
 animation_format = "gif"
 # Frames per second: 1–240 for video, 1–60 for animations.
 video_fps = 60
@@ -83,13 +83,13 @@ notify = true
 # Open the video editor / annotator as soon as a recording stops.
 open_editor = false
 # "auto" uses a GPU encoder when one works (NVENC, VAAPI, QSV, AMF, Media
-# Foundation, VideoToolbox); "software" never does.
+# Foundation); "software" never does.
 encoder = "auto"
 # Linux: status-notifier tray icon with recording controls.
 tray = true
 
 [hotkeys]
-# Windows defaults (unused on Linux); see macOS defaults below.
+# Windows only (unused on Linux).
 # Empty string disables a shortcut. Modifiers: Ctrl, Alt, Shift, Win.
 # Keys: PrintScreen, F1–F24, A–Z, 0–9. Duplicate bindings are rejected.
 region = "PrintScreen"
@@ -101,19 +101,6 @@ open_last = "Shift+PrintScreen"
 record_video = "Ctrl+Shift+PrintScreen"
 record_animation = "Alt+Shift+PrintScreen"
 ```
-
-On macOS the same `[hotkeys]` section defaults to `Cmd+Shift+2` (region),
-`Cmd+Shift+8` (screen), `Cmd+Shift+7` (window), `Cmd+Shift+E` (open last),
-`Cmd+Shift+9` (record video) and `Cmd+Shift+0` (record animation).
-Modifiers are Cmd/Command, Ctrl/Control, Alt/Option and Shift; keys are
-A–Z, 0–9, F1–F20 and common navigation keys. Carbon binds physical US key
-positions, so shortcut labels on other keyboard layouts may differ.
-Empty strings disable bindings; duplicate bindings are rejected.
-macOS's Cmd+Shift+3/4/5 and Touch Bar Cmd+Shift+6 capture shortcuts are not overridden.
-
-macOS config: `~/Library/Application Support/quikscope/config.toml`;
-cache/IPC: `~/Library/Caches/quikscope`; default saves:
-`~/Pictures/Screenshots`. See [macOS](macos.md) for permissions and the bundle.
 
 Per-capture command-line flags (`--edit`, `--no-notify`, `--no-clipboard`,
 `--cursor`, `--freeze` / `--no-freeze`) override these defaults for one request.

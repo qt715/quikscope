@@ -54,17 +54,11 @@ print its hex color and open a window that copies it as HEX, RGB, CMYK, HSV or H
 editor; without a file it opens the latest capture.
 
 Commands talk to the daemon over a per-user local socket (override with
-QUIKSCOPE_SOCKET) and start it on demand. Windows/macOS: autostart <on|off|status>.
+QUIKSCOPE_SOCKET) and start it on demand. Windows: autostart <on|off|status>.
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    #[cfg(target_os = "macos")]
-    let args = if args.is_empty() {
-        vec!["daemon".into()]
-    } else {
-        args
-    };
     #[cfg(windows)]
     if args.first().map(String::as_str) != Some("daemon") {
         // Attach to the caller, but never allocate a console for the daemon.
@@ -128,15 +122,12 @@ fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
             quikscope::daemon::run(socket)?;
             return Ok(ExitCode::SUCCESS);
         }
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(windows)]
         "autostart" => {
             let [action] = rest.as_slice() else {
                 anyhow::bail!("usage: quikscope autostart <on|off|status>");
             };
-            #[cfg(windows)]
             let on = quikscope::platform::windows::autostart(action)?;
-            #[cfg(target_os = "macos")]
-            let on = quikscope::platform::macos::autostart(action)?;
             println!("autostart {}", if on { "on" } else { "off" });
             return Ok(ExitCode::SUCCESS);
         }

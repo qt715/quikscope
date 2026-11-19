@@ -31,7 +31,7 @@ pub struct Config {
     pub ocr: OcrConfig,
     /// Screen recording (video and animations).
     pub record: RecordConfig,
-    /// Native global shortcuts on Windows and macOS. Empty strings disable a binding.
+    /// Native global shortcuts on Windows. Empty strings disable a binding.
     pub hotkeys: Hotkeys,
 }
 
@@ -82,18 +82,8 @@ pub struct Hotkeys {
 
 impl Default for Hotkeys {
     fn default() -> Self {
-        // Recording shortcuts avoid the systems' own recorders (macOS
-        // Cmd+Shift+5, Windows 11 Snipping Tool Win+Shift+R, Game Bar Win+Alt+R).
-        #[cfg(target_os = "macos")]
-        return Self {
-            region: "Cmd+Shift+2".into(),
-            screen: "Cmd+Shift+8".into(),
-            window: "Cmd+Shift+7".into(),
-            open_last: "Cmd+Shift+E".into(),
-            record_video: "Cmd+Shift+9".into(),
-            record_animation: "Cmd+Shift+0".into(),
-        };
-        #[cfg(not(target_os = "macos"))]
+        // Recording shortcuts avoid the system's own recorders (Windows 11
+        // Snipping Tool Win+Shift+R, Game Bar Win+Alt+R).
         Self {
             region: "PrintScreen".into(),
             screen: "Ctrl+PrintScreen".into(),
@@ -107,7 +97,6 @@ impl Default for Hotkeys {
 
 /// Win32 modifier flags and virtual-key code, also validated on Linux so a
 /// shared configuration never silently changes meaning between platforms.
-#[cfg(not(target_os = "macos"))]
 pub fn parse_hotkey(value: &str) -> Result<Option<(u32, u32)>> {
     if value.is_empty() {
         return Ok(None);
@@ -138,11 +127,6 @@ pub fn parse_hotkey(value: &str) -> Result<Option<(u32, u32)>> {
         },
     };
     Ok(Some((flags, vk)))
-}
-
-#[cfg(target_os = "macos")]
-pub fn parse_hotkey(value: &str) -> Result<Option<(u32, u32)>> {
-    crate::platform::macos::shell::parse_hotkey(value)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -484,8 +468,6 @@ fn default_record_dir() -> String {
         .join("Screencasts")
         .to_string_lossy()
         .into_owned();
-    #[cfg(target_os = "macos")]
-    return "~/Movies/Screencasts".into();
     #[cfg(target_os = "linux")]
     "~/Videos/Screencasts".into()
 }
@@ -517,8 +499,6 @@ fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
 pub fn config_path() -> PathBuf {
     #[cfg(windows)]
     return home_env("APPDATA", "AppData/Roaming").join("quikscope/config.toml");
-    #[cfg(target_os = "macos")]
-    return home().join("Library/Application Support/quikscope/config.toml");
     #[cfg(target_os = "linux")]
     xdg_dir("XDG_CONFIG_HOME", ".config").join("quikscope/config.toml")
 }
@@ -526,8 +506,6 @@ pub fn config_path() -> PathBuf {
 pub fn cache_dir() -> PathBuf {
     #[cfg(windows)]
     return home_env("LOCALAPPDATA", "AppData/Local").join("quikscope");
-    #[cfg(target_os = "macos")]
-    return home().join("Library/Caches/quikscope");
     #[cfg(target_os = "linux")]
     xdg_dir("XDG_CACHE_HOME", ".cache").join("quikscope")
 }
@@ -560,15 +538,6 @@ pub fn socket_path() -> Result<PathBuf> {
     }
     #[cfg(windows)]
     return Ok(cache_dir().join("ipc.sock"));
-    #[cfg(target_os = "macos")]
-    {
-        let dir = cache_dir();
-        if let Some(parent) = dir.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        private_directory(&dir, unsafe { libc::geteuid() })?;
-        Ok(dir.join("ipc.sock"))
-    }
     #[cfg(target_os = "linux")]
     {
         // Keyed by display so a nested compositor or X server gets its own
@@ -589,13 +558,13 @@ pub fn socket_path() -> Result<PathBuf> {
     }
 }
 
-#[cfg(all(unix, any(target_os = "linux", test)))]
+#[cfg(target_os = "linux")]
 fn private_socket_dir(base: &Path) -> Result<PathBuf> {
     // Never repair a directory created by another user.
     private_socket_dir_for_uid(base, unsafe { libc::geteuid() })
 }
 
-#[cfg(all(unix, any(target_os = "linux", test)))]
+#[cfg(target_os = "linux")]
 fn private_socket_dir_for_uid(base: &Path, uid: u32) -> Result<PathBuf> {
     let path = base.join(format!("quikscope-{uid}"));
     private_directory(&path, uid)?;
@@ -746,7 +715,6 @@ mod tests {
         assert!(private_socket_dir_for_uid(base.path(), uid.wrapping_add(1)).is_err());
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn hotkeys_validate_modifiers_keys_and_collisions() {
         assert_eq!(parse_hotkey("Ctrl+Shift+F24").unwrap(), Some((6, 0x87)));
@@ -756,17 +724,6 @@ mod tests {
         assert!(parse_hotkey("F25").is_err());
         assert!(Config::parse("[hotkeys]\nregion = 'Ctrl+PrintScreen'").is_err());
         assert!(Config::parse("[hotkeys]\nregion = ''\nscreen = 'Win+S'").is_ok());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_hotkeys_validate_modifiers_keys_and_collisions() {
-        assert_eq!(parse_hotkey("Cmd+Shift+2").unwrap(), Some((768, 19)));
-        assert_eq!(parse_hotkey("").unwrap(), None);
-        assert!(parse_hotkey("Cmd+Command+A").is_err());
-        assert!(parse_hotkey("PrintScreen").is_err());
-        assert!(Config::parse("[hotkeys]\nregion = 'Cmd+Shift+8'").is_err());
-        assert!(Config::parse("[hotkeys]\nregion = ''\nscreen = 'Cmd+S'").is_ok());
     }
 
     #[test]

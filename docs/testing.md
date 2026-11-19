@@ -18,6 +18,11 @@ cargo test --features e2e --test e2e          # e2e (skips without a compositor)
 QUIKSCOPE_E2E=1 cargo test --features e2e --test e2e   # e2e, missing tools are failures
 ```
 
+The `editor_render`, `editor_ui`, `settings_ui` and `video_editor_ui` suites use
+a sequential `libtest-mimic` runner on the process main thread
+(`tests/support/main_thread.rs`). Test names, filtering, `--list` and failing
+exit codes are preserved; unlike libtest, this runner does not capture stdout.
+
 `cargo test --features e2e --test x11_e2e` starts its own Xvfb server and
 isolates HOME and XDG directories. It draws a known root pattern, compares
 screen and dragged-region captures pixel-for-pixel, reads PNGs through the
@@ -99,33 +104,6 @@ It reports resolution and median/p95 for 100 warm captures after ten
 warmups, separately for GDI and DXGI. DXGI availability fallback is explicitly
 labeled; do not call fallback timings duplication measurements. No latency
 numbers are asserted without running the benchmark on the target desktop.
-
-## macOS
-
-The native `macos` CI job uses an ARM64 macOS runner and cross-builds the
-Intel release with `MACOSX_DEPLOYMENT_TARGET=12.3`. It runs release build,
-warning-denying Clippy and `cargo test --locked`. GPUI 0.3.10 provides a Metal
-headless renderer on macOS, so GPU suites are not excluded as they are on
-Windows. A separate required English OCR check uses Homebrew Tesseract.
-The native job also mutates outward desktop-bound rounding, the Command
-modifier bit, complete-frame acceptance and private-font exclusion separately;
-each targeted regression test must fail an assertion, not merely fail to compile.
-Sources are restored before the full test suite. CoreText must resolve the bundled
-UI font as `Inter Variable`, without substituting a system font.
-The `editor_render`, `editor_ui` and `settings_ui` suites use a sequential
-`libtest-mimic` main-thread runner on every platform because Cocoa cannot create
-its GPUI platform on a libtest worker. Test names, filtering, `--list` and failing
-exit codes are preserved; unlike libtest, this runner does not capture stdout.
-
-The bundle smoke starts a daemon in a temporary HOME with onboarding already
-configured, requests a whole-screen saved capture, and reads promised PNG and
-TIFF from a separate NSPasteboard client. PNG pixels must match the saved
-capture. It opens the last capture, requires a native key-window activation,
-and checks `NSRunningApplication` still reports accessory policy while active.
-The final PNG includes the editor, the template status icon and a Dock without
-a quikscope tile. Artifacts include PNGs, daemon logs and the runner-only TCC
-grant attempt. See [macOS](macos.md#ci-and-verification-boundaries) for the exact
-permission setup and native-interaction limitations.
 
 ## Golden images
 
@@ -292,6 +270,5 @@ check, the Wayland e2e suite in an Arch Linux container with labwc and
 Tesseract, the X11 e2e suite on Ubuntu with private Xvfb servers, a Windows
 build with clippy and the non-GPU tests, and dependency licence/advisory checks.
 The separate `.github/workflows/release.yml` builds native `.deb`, `.rpm`,
-Arch source recipes and a Windows NSIS installer, with macOS `.dmg` packaging
-gated until the backend is ready. Dispatch uploads artifacts without publishing;
+Arch source recipes and a Windows NSIS installer. Dispatch uploads artifacts without publishing;
 `v*` tags create a draft release. See [package verification and release procedure](../packaging/README.md).

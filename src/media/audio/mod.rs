@@ -1,7 +1,6 @@
 //! Audio devices for recordings: listing them and capturing from them.
 //! Linux uses PulseAudio's API (served by PipeWire on current desktops),
-//! Windows WASAPI (loopback for outputs), macOS ScreenCaptureKit for desktop
-//! audio and Core Audio for inputs.
+//! Windows WASAPI (loopback for outputs).
 
 use anyhow::Result;
 
@@ -11,10 +10,6 @@ use super::{AudioDevice, AudioSource};
 mod linux;
 #[cfg(target_os = "linux")]
 use linux as sys;
-#[cfg(target_os = "macos")]
-pub(crate) mod macos;
-#[cfg(target_os = "macos")]
-use macos as sys;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
