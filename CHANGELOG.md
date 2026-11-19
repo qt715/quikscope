@@ -26,7 +26,9 @@
   stop, discard, audio devices and frame rates; the same controls in the Windows
   tray. New shortcuts on Windows (Ctrl+Shift+PrintScreen, Ctrl+Alt+PrintScreen).
 - `record status` reports `saving` while a stopped recording is being
-  finished.
+  finished. Quitting quikscope (`quikscope quit`, the tray's Quit, stopping its
+  service or logging out) saves a running recording first, and an unavailable
+  audio device is skipped with a warning.
 - On wlroots compositors frames are copied into GPU buffers (DMA-BUF) whenever
   the compositor offers them. Shared memory is only a fallback, with a warning
   in the log: Hyprland reads shared-memory captures back on its main thread,
@@ -80,24 +82,9 @@
 
 ### Fixed
 
-- Saving from two places at once (a recording finishing while the editor
-  saves, two editors, two exports of the same clip) writes separate files
-  instead of overwriting each other.
-- Quitting quikscope (`quikscope quit`, the tray's Quit, stopping its service
-  or logging out) while recording saves the recording instead of discarding it.
-- An unavailable or unplugged audio device is skipped with a warning instead
-  of keeping the recording from starting.
-- Regions with an odd width or height are recorded sharp (one pixel narrower)
-  instead of blurred.
-- Variable-delay GIFs keep their frame timing when annotated or re-exported.
-- Windows: recording works after a screenshot has been taken.
-- GNOME/KDE: recording through the ScreenCast portal works with the desktops'
-  real portals.
-- Recordings no longer swap red and blue on compositors that deliver
-  RGB-ordered frames.
-- `quikscope record gif` always records a GIF, whatever animation format is
-  configured.
-- Turning the tray off or on in Settings applies at once.
+- Saving from two places at once (two screenshots in the same second, a
+  recording finishing while an editor saves, two exports of the same clip)
+  writes separate files instead of overwriting each other.
 
 ### Removed
 

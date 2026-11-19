@@ -1,9 +1,10 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><title>quikscope third-party licences</title>
 <style>body{max-width:75em;margin:2em auto;font-family:sans-serif}pre{white-space:pre-wrap}</style>
 <h1>quikscope third-party licences</h1>
-<p>This report covers the full locked dependency tree, including build and test dependencies, for Linux x86_64, Windows x86_64 and macOS x86_64/ARM64. Some listed dependencies are not linked into a particular package.</p>
+<p>This report covers the full locked dependency tree, including build and test dependencies, for Linux x86_64 and Windows x86_64. Some listed dependencies are not linked into a particular package. The C and C++ libraries compiled into quikscope (libopus, OpenH264, libwebp, Zstandard and the Vulkan Memory Allocator) follow the crate licences with their own notices, then the bundled fonts and icons.</p>
+<p>OpenH264 is compiled from source. Cisco's H.264 patent licence covers only the OpenH264 binaries Cisco distributes, not this build.</p>
 <h2>MPL-2.0 source availability</h2>
-<p>The MPL-2.0 components (including dwrote and option-ext) are distributed unmodified. Their exact source, licence and version can be obtained using each component link below or from <code>https://crates.io/api/v1/crates/NAME/VERSION/download</code>. Cargo.lock identifies every version and checksum. MPL-covered source files remain available under MPL-2.0; this does not change quikscope's own MIT/Apache-2.0 licence.</p>
+<p>The MPL-2.0 components (including symphonia, dwrote and option-ext) are distributed unmodified. Their exact source, licence and version can be obtained using each component link below or from <code>https://crates.io/api/v1/crates/NAME/VERSION/download</code>. Cargo.lock identifies every version and checksum. MPL-covered source files remain available under MPL-2.0; this does not change quikscope's own MIT/Apache-2.0 licence.</p>
 <h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/clang-sys/1.9.1">clang-sys 1.9.1</a></li></ul><pre>
                                  Apache License
                            Version 2.0, January 2004
@@ -426,7 +427,7 @@ prospectively choose to deem waived or otherwise exclude such Section(s) of
 the License, but only in their entirety and only with respect to the Combined
 Software.
 
-</pre><h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/moxcms/0.8.1">moxcms 0.8.1</a></li><li><a href="https://crates.io/crates/pxfm/0.1.30">pxfm 0.1.30</a></li></ul><pre>                                 Apache License
+</pre><h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/moxcms/0.8.1">moxcms 0.8.1</a></li><li><a href="https://crates.io/crates/pxfm/0.1.30">pxfm 0.1.30</a></li><li><a href="https://crates.io/crates/yuv/0.8.20">yuv 0.8.20</a></li></ul><pre>                                 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
 
@@ -1230,7 +1231,7 @@ limitations under the License.
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-</pre><h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/dunce/1.0.5">dunce 1.0.5</a></li><li><a href="https://crates.io/crates/gl_generator/0.14.0">gl_generator 0.14.0</a></li><li><a href="https://crates.io/crates/khronos_api/3.1.0">khronos_api 3.1.0</a></li><li><a href="https://crates.io/crates/ryu/1.0.23">ryu 1.0.23</a></li><li><a href="https://crates.io/crates/spirv/0.4.0+sdk-1.4.341.0">spirv 0.4.0+sdk-1.4.341.0</a></li></ul><pre>Apache License
+</pre><h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/audio-codec-algorithms/0.8.1">audio-codec-algorithms 0.8.1</a></li><li><a href="https://crates.io/crates/dunce/1.0.5">dunce 1.0.5</a></li><li><a href="https://crates.io/crates/gl_generator/0.14.0">gl_generator 0.14.0</a></li><li><a href="https://crates.io/crates/khronos_api/3.1.0">khronos_api 3.1.0</a></li><li><a href="https://crates.io/crates/ryu/1.0.23">ryu 1.0.23</a></li><li><a href="https://crates.io/crates/spirv/0.4.0+sdk-1.4.341.0">spirv 0.4.0+sdk-1.4.341.0</a></li></ul><pre>Apache License
 Version 2.0, January 2004
 http://www.apache.org/licenses/
 
@@ -1303,7 +1304,7 @@ distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-</pre><h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/gpui-pre-apple/0.3.10">gpui-pre-apple 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-collections/0.3.10">gpui-pre-collections 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-derive-refineable/0.3.10">gpui-pre-derive-refineable 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-http-client/0.3.10">gpui-pre-http-client 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-linux/0.3.10">gpui-pre-linux 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-macos/0.3.10">gpui-pre-macos 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-macros/0.3.10">gpui-pre-macros 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-platform/0.3.10">gpui-pre-platform 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-refineable/0.3.10">gpui-pre-refineable 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-scheduler/0.3.10">gpui-pre-scheduler 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-shared-string/0.3.10">gpui-pre-shared-string 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-sum-tree/0.3.10">gpui-pre-sum-tree 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-util/0.3.10">gpui-pre-util 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-wgpu/0.3.10">gpui-pre-wgpu 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-windows/0.3.10">gpui-pre-windows 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-ztracing-macro/0.3.10">gpui-pre-ztracing-macro 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-ztracing/0.3.10">gpui-pre-ztracing 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre/0.3.10">gpui-pre 0.3.10</a></li></ul><pre>Copyright 2022 - 2025 Zed Industries, Inc.
+</pre><h2>Apache License 2.0</h2><ul><li><a href="https://crates.io/crates/gpui-pre-collections/0.3.10">gpui-pre-collections 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-derive-refineable/0.3.10">gpui-pre-derive-refineable 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-http-client/0.3.10">gpui-pre-http-client 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-linux/0.3.10">gpui-pre-linux 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-macros/0.3.10">gpui-pre-macros 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-platform/0.3.10">gpui-pre-platform 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-refineable/0.3.10">gpui-pre-refineable 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-scheduler/0.3.10">gpui-pre-scheduler 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-shared-string/0.3.10">gpui-pre-shared-string 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-sum-tree/0.3.10">gpui-pre-sum-tree 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-util/0.3.10">gpui-pre-util 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-wgpu/0.3.10">gpui-pre-wgpu 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-windows/0.3.10">gpui-pre-windows 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-ztracing-macro/0.3.10">gpui-pre-ztracing-macro 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre-ztracing/0.3.10">gpui-pre-ztracing 0.3.10</a></li><li><a href="https://crates.io/crates/gpui-pre/0.3.10">gpui-pre 0.3.10</a></li></ul><pre>Copyright 2022 - 2025 Zed Industries, Inc.
 
 
    Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
@@ -1525,7 +1526,104 @@ Apache License
 
 
    END OF TERMS AND CONDITIONS
-</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/arrayref/0.3.9">arrayref 0.3.9</a></li></ul><pre>Copyright (c) 2015 David Roundy &lt;roundyd@physics.oregonstate.edu&gt;
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/v_frame/0.3.9">v_frame 0.3.9</a></li></ul><pre>BSD 2-Clause License
+
+Copyright (c) 2017-2022, the rav1e contributors
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot;
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/rav1e/0.8.1">rav1e 0.8.1</a></li></ul><pre>BSD 2-Clause License
+
+Copyright (c) 2017-2023, the rav1e contributors
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot;
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/av1-grain/0.2.5">av1-grain 0.2.5</a></li></ul><pre>BSD 2-Clause License
+
+Copyright (c) 2022-2022, the rav1e contributors
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot;
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/openh264-sys2/0.9.10">openh264-sys2 0.9.10</a></li></ul><pre>Copyright (c) 2013, Cisco Systems
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/arrayref/0.3.9">arrayref 0.3.9</a></li></ul><pre>Copyright (c) 2015 David Roundy &lt;roundyd@physics.oregonstate.edu&gt;
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -1551,7 +1649,108 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/bindgen/0.72.1">bindgen 0.72.1</a></li><li><a href="https://crates.io/crates/bindgen/0.73.2">bindgen 0.73.2</a></li></ul><pre>BSD 3-Clause License
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/openh264/0.9.10">openh264 0.9.10</a></li></ul><pre>Copyright (c) &lt;year&gt; &lt;owner&gt; 
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/rav1d/1.1.0">rav1d 1.1.0</a></li></ul><pre>Copyright © 2018-2019, VideoLAN and dav1d authors
+Copyright © 2023-2024, VideoLAN, dav1d authors, and Internet Security Research Group
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 2-Clause &quot;Simplified&quot; License</h2><ul><li><a href="https://crates.io/crates/zstd-sys/2.1.3+zstd.1.5.7">zstd-sys 2.1.3+zstd.1.5.7</a></li></ul><pre>The decoders for legacy formats, in zstd/lib/legacy/, include code under the
+2-clause BSD license:
+
+BSD 2-Clause License
+
+Copyright (C) 2013-2016, Yann Collet.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+&quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/opusic-sys/0.7.7">opusic-sys 0.7.7</a></li></ul><pre>/***********************************************************************
+Copyright (C) 2015 Vidyo
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+- Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+- Neither the name of Internet Society, IETF or IETF Trust, nor the
+names of specific contributors, may be used to endorse or promote
+products derived from this software without specific prior written
+permission.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot;
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+***********************************************************************/
+
+#ifndef SILK_MACROS_ARM64_H
+#define SILK_MACROS_ARM64_H
+
+#include &lt;arm_neon.h&gt;
+
+#undef silk_ADD_SAT32
+#define silk_ADD_SAT32(a, b) (vqadds_s32((a), (b)))
+
+#undef silk_SUB_SAT32
+#define silk_SUB_SAT32(a, b) (vqsubs_s32((a), (b)))
+
+#endif /* SILK_MACROS_ARM64_H */
+</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/bindgen/0.72.1">bindgen 0.72.1</a></li></ul><pre>BSD 3-Clause License
 
 Copyright (c) 2013, Jyun-Yan You
 All rights reserved.
@@ -1569,6 +1768,34 @@ modification, are permitted provided that the following conditions are met:
 * Neither the name of the copyright holder nor the names of its
   contributors may be used to endorse or promote products derived from
   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot;
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/zstd-safe/7.4.1">zstd-safe 7.4.1</a></li><li><a href="https://crates.io/crates/zstd-sys/2.1.3+zstd.1.5.7">zstd-sys 2.1.3+zstd.1.5.7</a></li><li><a href="https://crates.io/crates/zstd/0.13.5">zstd 0.13.5</a></li></ul><pre>BSD 3-Clause License
+
+Copyright (c) 2026, Alexandre Bury
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot;
 AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -1610,6 +1837,18 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/alloc-no-stdlib/2.0.4">alloc-no-stdlib 2.0.4</a></li></ul><pre>Copyright (c) 2016 Dropbox, Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 </pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/subtle/2.6.1">subtle 2.6.1</a></li></ul><pre>Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.
 Copyright (c) 2016-2024 Isis Agora Lovecruft. All rights reserved.
 
@@ -1665,7 +1904,18 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/exr/1.74.2">exr 1.74.2</a></li><li><a href="https://crates.io/crates/sha1_smol/1.0.1">sha1_smol 1.0.1</a></li></ul><pre>Copyright (c) &lt;year&gt; &lt;owner&gt;. 
+</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/alloc-stdlib/0.2.4">alloc-stdlib 0.2.4</a></li><li><a href="https://crates.io/crates/exr/1.74.2">exr 1.74.2</a></li><li><a href="https://crates.io/crates/sha1_smol/1.0.1">sha1_smol 1.0.1</a></li></ul><pre>Copyright (c) &lt;year&gt; &lt;owner&gt;. 
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre><h2>BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License</h2><ul><li><a href="https://crates.io/crates/libwebp-sys2/0.1.11">libwebp-sys2 0.1.11</a></li><li><a href="https://crates.io/crates/libwebp-sys2/0.2.0">libwebp-sys2 0.2.0</a></li></ul><pre>Copyright 2018-2021 Masaki Hara
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
@@ -1702,7 +1952,7 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-</pre><h2>Creative Commons Zero v1.0 Universal</h2><ul><li><a href="https://crates.io/crates/tiny-keccak/2.0.2">tiny-keccak 2.0.2</a></li></ul><pre>Creative Commons Legal Code
+</pre><h2>Creative Commons Zero v1.0 Universal</h2><ul><li><a href="https://crates.io/crates/hexf-parse/0.2.1">hexf-parse 0.2.1</a></li><li><a href="https://crates.io/crates/hexf/0.2.1">hexf 0.2.1</a></li><li><a href="https://crates.io/crates/tiny-keccak/2.0.2">tiny-keccak 2.0.2</a></li><li><a href="https://crates.io/crates/to_method/1.1.0">to_method 1.1.0</a></li></ul><pre>Creative Commons Legal Code
 
 CC0 1.0 Universal
 
@@ -1929,7 +2179,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/metal/0.33.0">metal 0.33.0</a></li><li><a href="https://crates.io/crates/rayon-core/1.13.0">rayon-core 1.13.0</a></li><li><a href="https://crates.io/crates/rayon/1.12.0">rayon 1.12.0</a></li></ul><pre>Copyright (c) 2010 The Rust Project Developers
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/rayon-core/1.13.0">rayon-core 1.13.0</a></li><li><a href="https://crates.io/crates/rayon/1.12.0">rayon 1.12.0</a></li></ul><pre>Copyright (c) 2010 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -1954,7 +2204,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/core-foundation-sys/0.8.7">core-foundation-sys 0.8.7</a></li><li><a href="https://crates.io/crates/core-foundation/0.10.1">core-foundation 0.10.1</a></li><li><a href="https://crates.io/crates/core-graphics-types/0.2.0">core-graphics-types 0.2.0</a></li><li><a href="https://crates.io/crates/core-graphics/0.24.0">core-graphics 0.24.0</a></li><li><a href="https://crates.io/crates/core-text/21.0.0">core-text 21.0.0</a></li><li><a href="https://crates.io/crates/euclid/0.22.14">euclid 0.22.14</a></li></ul><pre>Copyright (c) 2012-2013 Mozilla Foundation
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/euclid/0.22.14">euclid 0.22.14</a></li></ul><pre>Copyright (c) 2012-2013 Mozilla Foundation
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2049,7 +2299,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/backtrace/0.3.77">backtrace 0.3.77</a></li><li><a href="https://crates.io/crates/cc/1.11.0">cc 1.11.0</a></li><li><a href="https://crates.io/crates/cfg-if/1.0.5">cfg-if 1.0.5</a></li><li><a href="https://crates.io/crates/find-msvc-tools/0.1.15">find-msvc-tools 0.1.15</a></li><li><a href="https://crates.io/crates/pkg-config/0.3.34">pkg-config 0.3.34</a></li><li><a href="https://crates.io/crates/rustc-demangle/0.1.28">rustc-demangle 0.1.28</a></li><li><a href="https://crates.io/crates/scoped-tls/1.0.1">scoped-tls 1.0.1</a></li><li><a href="https://crates.io/crates/wait-timeout/0.2.1">wait-timeout 0.2.1</a></li></ul><pre>Copyright (c) 2014 Alex Crichton
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/backtrace/0.3.77">backtrace 0.3.77</a></li><li><a href="https://crates.io/crates/cc/1.11.0">cc 1.11.0</a></li><li><a href="https://crates.io/crates/cfg-if/1.0.5">cfg-if 1.0.5</a></li><li><a href="https://crates.io/crates/cmake/0.1.58">cmake 0.1.58</a></li><li><a href="https://crates.io/crates/find-msvc-tools/0.1.15">find-msvc-tools 0.1.15</a></li><li><a href="https://crates.io/crates/jobserver/0.1.35">jobserver 0.1.35</a></li><li><a href="https://crates.io/crates/pkg-config/0.3.34">pkg-config 0.3.34</a></li><li><a href="https://crates.io/crates/rustc-demangle/0.1.28">rustc-demangle 0.1.28</a></li><li><a href="https://crates.io/crates/scoped-tls/1.0.1">scoped-tls 1.0.1</a></li><li><a href="https://crates.io/crates/wait-timeout/0.2.1">wait-timeout 0.2.1</a></li></ul><pre>Copyright (c) 2014 Alex Crichton
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2099,7 +2349,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/bitflags/1.3.2">bitflags 1.3.2</a></li><li><a href="https://crates.io/crates/bitflags/2.13.2">bitflags 2.13.2</a></li><li><a href="https://crates.io/crates/glob/0.3.4">glob 0.3.4</a></li><li><a href="https://crates.io/crates/log/0.4.35">log 0.4.35</a></li><li><a href="https://crates.io/crates/num-bigint-dig/0.9.1">num-bigint-dig 0.9.1</a></li><li><a href="https://crates.io/crates/num-bigint/0.4.8">num-bigint 0.4.8</a></li><li><a href="https://crates.io/crates/num-complex/0.4.6">num-complex 0.4.6</a></li><li><a href="https://crates.io/crates/num-derive/0.4.2">num-derive 0.4.2</a></li><li><a href="https://crates.io/crates/num-integer/0.1.47">num-integer 0.1.47</a></li><li><a href="https://crates.io/crates/num-iter/0.1.46">num-iter 0.1.46</a></li><li><a href="https://crates.io/crates/num-rational/0.4.2">num-rational 0.4.2</a></li><li><a href="https://crates.io/crates/num-traits/0.2.19">num-traits 0.2.19</a></li><li><a href="https://crates.io/crates/num/0.4.3">num 0.4.3</a></li><li><a href="https://crates.io/crates/regex-automata/0.4.18">regex-automata 0.4.18</a></li><li><a href="https://crates.io/crates/regex-syntax/0.8.11">regex-syntax 0.8.11</a></li><li><a href="https://crates.io/crates/regex/1.13.1">regex 1.13.1</a></li></ul><pre>Copyright (c) 2014 The Rust Project Developers
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/primal-check/0.3.4">primal-check 0.3.4</a></li></ul><pre>Copyright (c) 2014 Huon Wilson
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/bitflags/1.3.2">bitflags 1.3.2</a></li><li><a href="https://crates.io/crates/bitflags/2.13.2">bitflags 2.13.2</a></li><li><a href="https://crates.io/crates/glob/0.3.4">glob 0.3.4</a></li><li><a href="https://crates.io/crates/log/0.4.35">log 0.4.35</a></li><li><a href="https://crates.io/crates/num-bigint-dig/0.9.1">num-bigint-dig 0.9.1</a></li><li><a href="https://crates.io/crates/num-bigint/0.4.8">num-bigint 0.4.8</a></li><li><a href="https://crates.io/crates/num-complex/0.4.6">num-complex 0.4.6</a></li><li><a href="https://crates.io/crates/num-derive/0.4.2">num-derive 0.4.2</a></li><li><a href="https://crates.io/crates/num-integer/0.1.47">num-integer 0.1.47</a></li><li><a href="https://crates.io/crates/num-iter/0.1.46">num-iter 0.1.46</a></li><li><a href="https://crates.io/crates/num-rational/0.4.2">num-rational 0.4.2</a></li><li><a href="https://crates.io/crates/num-traits/0.2.19">num-traits 0.2.19</a></li><li><a href="https://crates.io/crates/num/0.4.3">num 0.4.3</a></li><li><a href="https://crates.io/crates/regex-automata/0.4.18">regex-automata 0.4.18</a></li><li><a href="https://crates.io/crates/regex-lite/0.1.9">regex-lite 0.1.9</a></li><li><a href="https://crates.io/crates/regex-syntax/0.8.11">regex-syntax 0.8.11</a></li><li><a href="https://crates.io/crates/regex/1.13.1">regex 1.13.1</a></li></ul><pre>Copyright (c) 2014 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2214,7 +2488,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/coreaudio-rs/0.14.2">coreaudio-rs 0.14.2</a></li><li><a href="https://crates.io/crates/either/1.19.0">either 1.19.0</a></li><li><a href="https://crates.io/crates/itertools/0.13.0">itertools 0.13.0</a></li><li><a href="https://crates.io/crates/itertools/0.14.0">itertools 0.14.0</a></li></ul><pre>Copyright (c) 2015
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/either/1.19.0">either 1.19.0</a></li><li><a href="https://crates.io/crates/itertools/0.13.0">itertools 0.13.0</a></li><li><a href="https://crates.io/crates/itertools/0.14.0">itertools 0.14.0</a></li></ul><pre>Copyright (c) 2015
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2277,7 +2551,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/ordered-float/5.5.1">ordered-float 5.5.1</a></li></ul><pre>Copyright (c) 2015 Jonathan Reem
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/new_debug_unreachable/1.0.6">new_debug_unreachable 1.0.6</a></li><li><a href="https://crates.io/crates/ordered-float/5.5.1">ordered-float 5.5.1</a></li></ul><pre>Copyright (c) 2015 Jonathan Reem
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2352,7 +2626,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/gimli/0.34.0">gimli 0.34.0</a></li><li><a href="https://crates.io/crates/heck/0.4.1">heck 0.4.1</a></li><li><a href="https://crates.io/crates/heck/0.5.0">heck 0.5.0</a></li><li><a href="https://crates.io/crates/unicode-bidi/0.3.18">unicode-bidi 0.3.18</a></li><li><a href="https://crates.io/crates/unicode-properties/0.1.5">unicode-properties 0.1.5</a></li><li><a href="https://crates.io/crates/unicode-segmentation/1.13.3">unicode-segmentation 1.13.3</a></li><li><a href="https://crates.io/crates/unicode-width/0.2.3">unicode-width 0.2.3</a></li></ul><pre>Copyright (c) 2015 The Rust Project Developers
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/gimli/0.34.0">gimli 0.34.0</a></li><li><a href="https://crates.io/crates/heck/0.5.0">heck 0.5.0</a></li><li><a href="https://crates.io/crates/unicode-bidi/0.3.18">unicode-bidi 0.3.18</a></li><li><a href="https://crates.io/crates/unicode-properties/0.1.5">unicode-properties 0.1.5</a></li><li><a href="https://crates.io/crates/unicode-segmentation/1.13.3">unicode-segmentation 1.13.3</a></li><li><a href="https://crates.io/crates/unicode-width/0.2.3">unicode-width 0.2.3</a></li></ul><pre>Copyright (c) 2015 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2377,6 +2651,25 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/rustfft/6.4.1">rustfft 6.4.1</a></li><li><a href="https://crates.io/crates/strength_reduce/0.2.4">strength_reduce 0.2.4</a></li></ul><pre>Copyright (c) 2015 The RustFFT Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/quick-error/1.2.3">quick-error 1.2.3</a></li><li><a href="https://crates.io/crates/quick-error/2.0.1">quick-error 2.0.1</a></li></ul><pre>Copyright (c) 2015 The quick-error Developers
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -2737,7 +3030,32 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/libtest-mimic/0.8.2">libtest-mimic 0.8.2</a></li></ul><pre>Copyright (c) 2016 Project Developers
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/assert_matches/1.5.0">assert_matches 1.5.0</a></li></ul><pre>Copyright (c) 2016 Murarth
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/atomig/0.4.3">atomig 0.4.3</a></li><li><a href="https://crates.io/crates/libtest-mimic/0.8.2">libtest-mimic 0.8.2</a></li></ul><pre>Copyright (c) 2016 Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2787,7 +3105,26 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/atomic/0.5.3">atomic 0.5.3</a></li><li><a href="https://crates.io/crates/lock_api/0.4.14">lock_api 0.4.14</a></li><li><a href="https://crates.io/crates/parking_lot/0.12.5">parking_lot 0.12.5</a></li><li><a href="https://crates.io/crates/parking_lot_core/0.9.12">parking_lot_core 0.9.12</a></li><li><a href="https://crates.io/crates/rustc_version/0.4.1">rustc_version 0.4.1</a></li></ul><pre>Copyright (c) 2016 The Rust Project Developers
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/opus/0.4.0">opus 0.4.0</a></li></ul><pre>Copyright (c) 2016 Tad Hardesty
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/atomic/0.5.3">atomic 0.5.3</a></li><li><a href="https://crates.io/crates/lock_api/0.4.14">lock_api 0.4.14</a></li><li><a href="https://crates.io/crates/nasm-rs/0.3.2">nasm-rs 0.3.2</a></li><li><a href="https://crates.io/crates/parking_lot/0.12.5">parking_lot 0.12.5</a></li><li><a href="https://crates.io/crates/parking_lot_core/0.9.12">parking_lot_core 0.9.12</a></li><li><a href="https://crates.io/crates/rustc_version/0.4.1">rustc_version 0.4.1</a></li></ul><pre>Copyright (c) 2016 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2988,6 +3325,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/bitstream-io/2.6.0">bitstream-io 2.6.0</a></li><li><a href="https://crates.io/crates/bitstream-io/4.10.0">bitstream-io 4.10.0</a></li></ul><pre>Copyright (c) 2017 Brian Langenberger
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/fnv/1.0.7">fnv 1.0.7</a></li></ul><pre>Copyright (c) 2017 Contributors
 
 Permission is hereby granted, free of charge, to any
@@ -3057,7 +3419,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/heapless/0.9.3">heapless 0.9.3</a></li></ul><pre>Copyright (c) 2017 Jorge Aparicio
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/aligned/0.4.3">aligned 0.4.3</a></li><li><a href="https://crates.io/crates/heapless/0.9.3">heapless 0.9.3</a></li></ul><pre>Copyright (c) 2017 Jorge Aparicio
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -3107,6 +3469,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/by_address/1.2.1">by_address 1.2.1</a></li></ul><pre>Copyright (c) 2017 Matt Brubeck
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/stable_deref_trait/1.2.1">stable_deref_trait 1.2.1</a></li></ul><pre>Copyright (c) 2017 Robert Grosse
 
 Permission is hereby granted, free of charge, to any
@@ -3131,26 +3518,7 @@ SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/foreign-types-macros/0.2.4">foreign-types-macros 0.2.4</a></li><li><a href="https://crates.io/crates/foreign-types-shared/0.3.1">foreign-types-shared 0.3.1</a></li><li><a href="https://crates.io/crates/foreign-types/0.5.0">foreign-types 0.5.0</a></li></ul><pre>Copyright (c) 2017 The foreign-types Developers
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/version-compare/0.2.1">version-compare 0.2.1</a></li></ul><pre>Copyright (c) 2017 Tim Visée
+DEALINGS IN THE SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/version-compare/0.2.1">version-compare 0.2.1</a></li></ul><pre>Copyright (c) 2017 Tim Visée
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -3221,6 +3589,31 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/signal-hook-registry/1.4.8">signal-hook-registry 1.4.8</a></li></ul><pre>Copyright (c) 2017 tokio-jsonrpc developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/askama/0.15.6">askama 0.15.6</a></li><li><a href="https://crates.io/crates/askama_derive/0.15.6">askama_derive 0.15.6</a></li><li><a href="https://crates.io/crates/askama_macros/0.15.6">askama_macros 0.15.6</a></li><li><a href="https://crates.io/crates/askama_parser/0.15.6">askama_parser 0.15.6</a></li></ul><pre>Copyright (c) 2017-2020 Dirkjan Ochtman
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -3345,7 +3738,57 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/hash32/0.3.1">hash32 0.3.1</a></li></ul><pre>Copyright (c) 2018 Jorge Aparicio
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/h264-reader/0.8.0">h264-reader 0.8.0</a></li><li><a href="https://crates.io/crates/rfc6381-codec/0.2.0">rfc6381-codec 0.2.0</a></li></ul><pre>Copyright (c) 2018 David Holroyd
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/rand_xoshiro/0.8.2">rand_xoshiro 0.8.2</a></li></ul><pre>Copyright (c) 2018 Developers of the Rand project
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/as-slice/0.2.1">as-slice 0.2.1</a></li><li><a href="https://crates.io/crates/hash32/0.3.1">hash32 0.3.1</a></li></ul><pre>Copyright (c) 2018 Jorge Aparicio
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -3826,31 +4269,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/mach2/0.6.0">mach2 0.6.0</a></li></ul><pre>Copyright (c) 2019 Nick Fitzgerald, 2021 Yuki Okushi
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the &quot;Software&quot;), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/ppv-lite86/0.2.21">ppv-lite86 0.2.21</a></li></ul><pre>Copyright (c) 2019 The CryptoCorrosion Contributors
 
 Permission is hereby granted, free of charge, to any
@@ -4088,7 +4506,50 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/document-features/0.2.12">document-features 0.2.12</a></li></ul><pre>Copyright (c) 2020 Olivier Goffart &lt;ogoffart@sixtyfps.io&gt;
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/four-cc/0.4.0">four-cc 0.4.0</a></li><li><a href="https://crates.io/crates/mpeg4-audio-const/0.2.0">mpeg4-audio-const 0.2.0</a></li></ul><pre>Copyright (c) 2020 David Holroyd
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/rubato/5.1.0">rubato 5.1.0</a></li></ul><pre>Copyright (c) 2020 Henrik Enquist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/document-features/0.2.12">document-features 0.2.12</a></li></ul><pre>Copyright (c) 2020 Olivier Goffart &lt;ogoffart@sixtyfps.io&gt;
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -4158,6 +4619,25 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/no_std_io2/0.9.4">no_std_io2 0.9.4</a></li></ul><pre>Copyright (c) 2020-2021  Brendan Molloy &lt;brendan@bbqsrc.net&gt;
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/pollster/0.2.5">pollster 0.2.5</a></li><li><a href="https://crates.io/crates/pollster/0.4.0">pollster 0.4.0</a></li></ul><pre>Copyright (c) 2020-2021 Joshua Barretto
 
 Permission is hereby granted, free of charge, to any
@@ -4209,6 +4689,31 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/cpufeatures/0.3.1">cpufeatures 0.3.1</a></li></ul><pre>Copyright (c) 2020-2026 The RustCrypto Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/matroska-demuxer/0.8.1">matroska-demuxer 0.8.1</a></li></ul><pre>Copyright (c) 2021 Nils Hasenbanck
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4359,6 +4864,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/transpose/0.2.3">transpose 0.2.3</a></li></ul><pre>Copyright (c) 2022 The transpose Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/strict-num/0.1.1">strict-num 0.1.1</a></li></ul><pre>Copyright (c) 2022 Yevhenii Reizner
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -4386,25 +4916,6 @@ the Software without restriction, including without limitation the rights to
 use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
 of the Software, and to permit persons to whom the Software is furnished to do
 so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/powerfmt/0.2.1">powerfmt 0.2.1</a></li></ul><pre>Copyright (c) 2023 Jacob Pratt et al.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
@@ -4459,25 +4970,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/deranged/0.5.9">deranged 0.5.9</a></li></ul><pre>Copyright (c) 2024 Jacob Pratt et al.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/zbus/5.19.0">zbus 5.19.0</a></li><li><a href="https://crates.io/crates/zbus_macros/5.19.0">zbus_macros 5.19.0</a></li><li><a href="https://crates.io/crates/zbus_names/4.3.5">zbus_names 4.3.5</a></li><li><a href="https://crates.io/crates/zbus_xml/5.2.1">zbus_xml 5.2.1</a></li><li><a href="https://crates.io/crates/zvariant/5.15.1">zvariant 5.15.1</a></li><li><a href="https://crates.io/crates/zvariant_derive/5.15.1">zvariant_derive 5.15.1</a></li></ul><pre>Copyright (c) 2024 Zeeshan Ali Khan &amp; zbus contributors
 
 Permission is hereby granted, free of charge, to any
@@ -4503,6 +4995,43 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/windowfunctions/0.1.1">windowfunctions 0.1.1</a></li></ul><pre>Copyright (c) 2025 Henrik Enquist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/audioadapter-buffers/5.2.0">audioadapter-buffers 5.2.0</a></li><li><a href="https://crates.io/crates/audioadapter-sample/5.2.0">audioadapter-sample 5.2.0</a></li><li><a href="https://crates.io/crates/audioadapter/5.0.0">audioadapter 5.0.0</a></li></ul><pre>Copyright (c) 2026 Henrik Enquist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/bit-set/0.10.0">bit-set 0.10.0</a></li></ul><pre>Copyright (c) 2026 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
@@ -4553,45 +5082,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/annotate-snippets/0.11.5">annotate-snippets 0.11.5</a></li><li><a href="https://crates.io/crates/anstream/1.0.0">anstream 1.0.0</a></li><li><a href="https://crates.io/crates/anstyle-parse/1.0.0">anstyle-parse 1.0.0</a></li><li><a href="https://crates.io/crates/anstyle-query/1.1.5">anstyle-query 1.1.5</a></li><li><a href="https://crates.io/crates/anstyle-wincon/3.0.11">anstyle-wincon 3.0.11</a></li><li><a href="https://crates.io/crates/anstyle/1.0.14">anstyle 1.0.14</a></li><li><a href="https://crates.io/crates/clap/4.6.7">clap 4.6.7</a></li><li><a href="https://crates.io/crates/clap_builder/4.6.7">clap_builder 4.6.7</a></li><li><a href="https://crates.io/crates/clap_derive/4.6.7">clap_derive 4.6.7</a></li><li><a href="https://crates.io/crates/clap_lex/1.1.1">clap_lex 1.1.1</a></li><li><a href="https://crates.io/crates/colorchoice/1.0.5">colorchoice 1.0.5</a></li><li><a href="https://crates.io/crates/env_filter/2.0.0">env_filter 2.0.0</a></li><li><a href="https://crates.io/crates/env_logger/0.11.11">env_logger 0.11.11</a></li><li><a href="https://crates.io/crates/is_terminal_polyfill/1.70.2">is_terminal_polyfill 1.70.2</a></li><li><a href="https://crates.io/crates/once_cell_polyfill/1.70.2">once_cell_polyfill 1.70.2</a></li><li><a href="https://crates.io/crates/serde_spanned/0.6.9">serde_spanned 0.6.9</a></li><li><a href="https://crates.io/crates/serde_spanned/1.1.2">serde_spanned 1.1.2</a></li><li><a href="https://crates.io/crates/toml/0.8.23">toml 0.8.23</a></li><li><a href="https://crates.io/crates/toml/0.9.12+spec-1.1.0">toml 0.9.12+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml/1.2.0+spec-1.1.0">toml 1.2.0+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_datetime/0.6.11">toml_datetime 0.6.11</a></li><li><a href="https://crates.io/crates/toml_datetime/0.7.5+spec-1.1.0">toml_datetime 0.7.5+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_datetime/1.1.2+spec-1.1.0">toml_datetime 1.1.2+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_edit/0.22.27">toml_edit 0.22.27</a></li><li><a href="https://crates.io/crates/toml_edit/0.25.18+spec-1.1.0">toml_edit 0.25.18+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_parser/1.1.5+spec-1.1.0">toml_parser 1.1.5+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_write/0.1.2">toml_write 0.1.2</a></li><li><a href="https://crates.io/crates/toml_writer/1.2.0+spec-1.1.0">toml_writer 1.2.0+spec-1.1.0</a></li></ul><pre>Copyright (c) Individual contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/num-conv/0.2.2">num-conv 0.2.2</a></li></ul><pre>Copyright (c) Jacob Pratt
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/time-core/0.1.9">time-core 0.1.9</a></li><li><a href="https://crates.io/crates/time/0.3.55">time 0.3.55</a></li></ul><pre>Copyright (c) Jacob Pratt et al.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/annotate-snippets/0.11.5">annotate-snippets 0.11.5</a></li><li><a href="https://crates.io/crates/anstream/1.0.0">anstream 1.0.0</a></li><li><a href="https://crates.io/crates/anstyle-parse/1.0.0">anstyle-parse 1.0.0</a></li><li><a href="https://crates.io/crates/anstyle-query/1.1.5">anstyle-query 1.1.5</a></li><li><a href="https://crates.io/crates/anstyle-wincon/3.0.11">anstyle-wincon 3.0.11</a></li><li><a href="https://crates.io/crates/anstyle/1.0.14">anstyle 1.0.14</a></li><li><a href="https://crates.io/crates/clap/4.6.7">clap 4.6.7</a></li><li><a href="https://crates.io/crates/clap_builder/4.6.7">clap_builder 4.6.7</a></li><li><a href="https://crates.io/crates/clap_derive/4.6.7">clap_derive 4.6.7</a></li><li><a href="https://crates.io/crates/clap_lex/1.1.1">clap_lex 1.1.1</a></li><li><a href="https://crates.io/crates/colorchoice/1.0.5">colorchoice 1.0.5</a></li><li><a href="https://crates.io/crates/env_filter/2.0.0">env_filter 2.0.0</a></li><li><a href="https://crates.io/crates/env_logger/0.11.11">env_logger 0.11.11</a></li><li><a href="https://crates.io/crates/is_terminal_polyfill/1.70.2">is_terminal_polyfill 1.70.2</a></li><li><a href="https://crates.io/crates/once_cell_polyfill/1.70.2">once_cell_polyfill 1.70.2</a></li><li><a href="https://crates.io/crates/serde_spanned/1.1.2">serde_spanned 1.1.2</a></li><li><a href="https://crates.io/crates/toml/0.9.12+spec-1.1.0">toml 0.9.12+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml/1.2.0+spec-1.1.0">toml 1.2.0+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_datetime/0.7.5+spec-1.1.0">toml_datetime 0.7.5+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_datetime/1.1.2+spec-1.1.0">toml_datetime 1.1.2+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_edit/0.25.18+spec-1.1.0">toml_edit 0.25.18+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_parser/1.1.5+spec-1.1.0">toml_parser 1.1.5+spec-1.1.0</a></li><li><a href="https://crates.io/crates/toml_writer/1.2.0+spec-1.1.0">toml_writer 1.2.0+spec-1.1.0</a></li></ul><pre>Copyright (c) Individual contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -4800,7 +5291,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/zerocopy-derive/0.8.63">zerocopy-derive 0.8.63</a></li><li><a href="https://crates.io/crates/zerocopy/0.8.63">zerocopy 0.8.63</a></li></ul><pre>Copyright 2023 The Fuchsia Authors
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/zerocopy-derive/0.7.35">zerocopy-derive 0.7.35</a></li><li><a href="https://crates.io/crates/zerocopy-derive/0.8.63">zerocopy-derive 0.8.63</a></li><li><a href="https://crates.io/crates/zerocopy/0.7.35">zerocopy 0.7.35</a></li><li><a href="https://crates.io/crates/zerocopy/0.8.63">zerocopy 0.8.63</a></li></ul><pre>Copyright 2023 The Fuchsia Authors
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4899,6 +5390,27 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/tap/1.0.1">tap 1.0.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2017 Elliot Linder &lt;darfink@gmail.com&gt;
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/notify-rust/4.18.2">notify-rust 4.18.2</a></li></ul><pre>MIT License
 
 Copyright (c) 2017 Hendrik Sollich
@@ -4923,6 +5435,48 @@ SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/static_assertions/1.1.0">static_assertions 1.1.0</a></li></ul><pre>MIT License
 
 Copyright (c) 2017 Nikolai Vazquez
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/built/0.8.1">built 0.8.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2017-2023 Lukas Lueg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/arg_enum_proc_macro/0.3.4">arg_enum_proc_macro 0.3.4</a></li></ul><pre>MIT License
+
+Copyright (c) 2018 Luca Barbato
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -5025,6 +5579,27 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/bitvec/1.1.1">bitvec 1.1.1</a></li><li><a href="https://crates.io/crates/wyz/0.5.1">wyz 0.5.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2018 myrrlyn (Alexander Payne)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/bytemuck/1.25.2">bytemuck 1.25.2</a></li><li><a href="https://crates.io/crates/bytemuck_derive/1.12.1">bytemuck_derive 1.12.1</a></li></ul><pre>MIT License
 
 Copyright (c) 2019 Daniel &quot;Lokathor&quot; Gee.
@@ -5097,6 +5672,48 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/noop_proc_macro/0.3.0">noop_proc_macro 0.3.0</a></li></ul><pre>MIT License
+
+Copyright (c) 2019 Luca Barbato
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/av-scenechange/0.14.1">av-scenechange 0.14.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2019 Multimedia and Rust
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/raw-window-handle/0.6.2">raw-window-handle 0.6.2</a></li></ul><pre>MIT License
 
 Copyright (c) 2019 Osspial
@@ -5118,9 +5735,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/strum/0.28.0">strum 0.28.0</a></li><li><a href="https://crates.io/crates/strum_macros/0.28.0">strum_macros 0.28.0</a></li></ul><pre>MIT License
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/strum/0.26.3">strum 0.26.3</a></li><li><a href="https://crates.io/crates/strum/0.28.0">strum 0.28.0</a></li><li><a href="https://crates.io/crates/strum_macros/0.26.4">strum_macros 0.26.4</a></li><li><a href="https://crates.io/crates/strum_macros/0.28.0">strum_macros 0.28.0</a></li></ul><pre>MIT License
 
 Copyright (c) 2019 Peter Glotfelty
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/radium/0.7.0">radium 0.7.0</a></li></ul><pre>MIT License
+
+Copyright (c) 2019 kneecaw (Nika Layzell)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -5142,6 +5780,48 @@ SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/ashpd/0.13.13">ashpd 0.13.13</a></li></ul><pre>MIT License
 
 Copyright (c) 2020 Bilal Elmoussaoui
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/wide/1.7.1">wide 1.7.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2020 Daniel &quot;Lokathor&quot; Gee
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/realfft/3.5.1">realfft 3.5.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2020 Henrik Enquist and RealFFT contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -5234,9 +5914,72 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/funty/2.0.0">funty 2.0.0</a></li></ul><pre>MIT License
+
+Copyright (c) 2020 myrrlyn (Alexander Payne)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/sys-locale/0.3.2">sys-locale 0.3.2</a></li></ul><pre>MIT License
 
 Copyright (c) 2021 1Password
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/maybe-rayon/0.1.1">maybe-rayon 0.1.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2021 Joshua Holmer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/fast_image_resize/6.1.0">fast_image_resize 6.1.0</a></li></ul><pre>MIT License
+
+Copyright (c) 2021 Kirill Kuzminykh
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -5318,7 +6061,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/reborrow/0.5.5">reborrow 0.5.5</a></li></ul><pre>MIT License
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/aligned-vec/0.6.4">aligned-vec 0.6.4</a></li><li><a href="https://crates.io/crates/reborrow/0.5.5">reborrow 0.5.5</a></li></ul><pre>MIT License
 
 Copyright (c) 2022 sarah
 
@@ -5339,6 +6082,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/safe_arch/1.2.0">safe_arch 1.2.0</a></li></ul><pre>MIT License
+
+Copyright (c) 2023 Daniel &quot;Lokathor&quot; Gee.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the &quot;Software&quot;), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/is-docker/0.2.0">is-docker 0.2.0</a></li><li><a href="https://crates.io/crates/is-wsl/0.4.0">is-wsl 0.4.0</a></li></ul><pre>MIT License
 
 Copyright (c) 2023 Sean Larkin
@@ -5402,6 +6154,69 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/equator-macro/0.4.2">equator-macro 0.4.2</a></li><li><a href="https://crates.io/crates/equator/0.4.2">equator 0.4.2</a></li></ul><pre>MIT License
+
+Copyright (c) 2023 sarah
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/visibility/0.1.1">visibility 0.1.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2024 Daniel Henry-Mantilla
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/mp4-atom/0.17.1">mp4-atom 0.17.1</a></li></ul><pre>MIT License
+
+Copyright (c) 2024 Luke Curley
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/core_maths/0.1.1">core_maths 0.1.1</a></li></ul><pre>MIT License
 
 Copyright (c) 2024 Robert Bastian
@@ -5443,7 +6258,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/naga-types/30.0.1">naga-types 30.0.1</a></li><li><a href="https://crates.io/crates/naga/30.0.1">naga 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-core-deps-apple/30.0.1">wgpu-core-deps-apple 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-core-deps-windows-linux-android/30.0.1">wgpu-core-deps-windows-linux-android 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-core/30.0.1">wgpu-core 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-hal/30.0.1">wgpu-hal 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-naga-bridge/30.0.1">wgpu-naga-bridge 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-types/30.0.1">wgpu-types 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu/30.0.1">wgpu 30.0.1</a></li></ul><pre>MIT License
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/naga-types/30.0.1">naga-types 30.0.1</a></li><li><a href="https://crates.io/crates/naga/30.0.1">naga 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-core-deps-windows-linux-android/30.0.1">wgpu-core-deps-windows-linux-android 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-core/30.0.1">wgpu-core 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-hal/30.0.1">wgpu-hal 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-naga-bridge/30.0.1">wgpu-naga-bridge 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu-types/30.0.1">wgpu-types 30.0.1</a></li><li><a href="https://crates.io/crates/wgpu/30.0.1">wgpu 30.0.1</a></li></ul><pre>MIT License
 
 Copyright (c) 2025 The gfx-rs developers
 
@@ -5505,7 +6320,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/accesskit/0.24.1">accesskit 0.24.1</a></li><li><a href="https://crates.io/crates/accesskit_atspi_common/0.19.1">accesskit_atspi_common 0.19.1</a></li><li><a href="https://crates.io/crates/accesskit_consumer/0.38.0">accesskit_consumer 0.38.0</a></li><li><a href="https://crates.io/crates/accesskit_macos/0.26.3">accesskit_macos 0.26.3</a></li><li><a href="https://crates.io/crates/accesskit_unix/0.22.1">accesskit_unix 0.22.1</a></li><li><a href="https://crates.io/crates/accesskit_windows/0.34.0">accesskit_windows 0.34.0</a></li><li><a href="https://crates.io/crates/block2/0.6.2">block2 0.6.2</a></li><li><a href="https://crates.io/crates/block/0.1.6">block 0.1.6</a></li><li><a href="https://crates.io/crates/chrono/0.4.45">chrono 0.4.45</a></li><li><a href="https://crates.io/crates/cookie-factory/0.3.3">cookie-factory 0.3.3</a></li><li><a href="https://crates.io/crates/dasp_sample/0.11.0">dasp_sample 0.11.0</a></li><li><a href="https://crates.io/crates/dispatch2/0.3.1">dispatch2 0.3.1</a></li><li><a href="https://crates.io/crates/harfrust/0.5.2">harfrust 0.5.2</a></li><li><a href="https://crates.io/crates/libm/0.2.16">libm 0.2.16</a></li><li><a href="https://crates.io/crates/lyon/1.0.19">lyon 1.0.19</a></li><li><a href="https://crates.io/crates/lyon_algorithms/1.0.22">lyon_algorithms 1.0.22</a></li><li><a href="https://crates.io/crates/lyon_geom/1.0.20">lyon_geom 1.0.20</a></li><li><a href="https://crates.io/crates/lyon_path/1.0.19">lyon_path 1.0.19</a></li><li><a href="https://crates.io/crates/lyon_tessellation/1.0.23">lyon_tessellation 1.0.23</a></li><li><a href="https://crates.io/crates/mac-notification-sys/0.6.15">mac-notification-sys 0.6.15</a></li><li><a href="https://crates.io/crates/malloc_buf/0.0.6">malloc_buf 0.0.6</a></li><li><a href="https://crates.io/crates/objc-sys/0.3.5">objc-sys 0.3.5</a></li><li><a href="https://crates.io/crates/objc2-app-kit/0.2.2">objc2-app-kit 0.2.2</a></li><li><a href="https://crates.io/crates/objc2-app-kit/0.3.2">objc2-app-kit 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-audio-toolbox/0.3.2">objc2-audio-toolbox 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-av-foundation/0.3.2">objc2-av-foundation 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-cloud-kit/0.3.2">objc2-cloud-kit 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-audio-types/0.3.2">objc2-core-audio-types 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-audio/0.3.2">objc2-core-audio 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-data/0.3.2">objc2-core-data 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-foundation/0.3.2">objc2-core-foundation 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-graphics/0.3.2">objc2-core-graphics 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-image/0.3.2">objc2-core-image 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-location/0.3.2">objc2-core-location 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-media/0.3.2">objc2-core-media 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-text/0.3.2">objc2-core-text 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-core-video/0.3.2">objc2-core-video 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-encode/4.1.0">objc2-encode 4.1.0</a></li><li><a href="https://crates.io/crates/objc2-foundation/0.2.2">objc2-foundation 0.2.2</a></li><li><a href="https://crates.io/crates/objc2-foundation/0.3.2">objc2-foundation 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-metal/0.3.2">objc2-metal 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-quartz-core/0.3.2">objc2-quartz-core 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-screen-capture-kit/0.3.2">objc2-screen-capture-kit 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-security/0.3.2">objc2-security 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-uniform-type-identifiers/0.3.2">objc2-uniform-type-identifiers 0.3.2</a></li><li><a href="https://crates.io/crates/objc2-user-notifications/0.3.2">objc2-user-notifications 0.3.2</a></li><li><a href="https://crates.io/crates/objc2/0.5.3">objc2 0.5.3</a></li><li><a href="https://crates.io/crates/objc2/0.6.5">objc2 0.6.5</a></li><li><a href="https://crates.io/crates/pathfinder_geometry/0.5.1">pathfinder_geometry 0.5.1</a></li><li><a href="https://crates.io/crates/pathfinder_simd/0.5.6">pathfinder_simd 0.5.6</a></li><li><a href="https://crates.io/crates/profiling-procmacros/1.0.18">profiling-procmacros 1.0.18</a></li><li><a href="https://crates.io/crates/profiling/1.0.18">profiling 1.0.18</a></li><li><a href="https://crates.io/crates/pulp-wasm-simd-flag/0.1.1">pulp-wasm-simd-flag 0.1.1</a></li><li><a href="https://crates.io/crates/seahash/4.1.0">seahash 4.1.0</a></li><li><a href="https://crates.io/crates/svg_fmt/0.4.5">svg_fmt 0.4.5</a></li><li><a href="https://crates.io/crates/taffy/0.15.1">taffy 0.15.1</a></li><li><a href="https://crates.io/crates/tauri-winrt-notification/0.8.1">tauri-winrt-notification 0.8.1</a></li><li><a href="https://crates.io/crates/windows-collections/0.3.2">windows-collections 0.3.2</a></li><li><a href="https://crates.io/crates/windows-core/0.58.0">windows-core 0.58.0</a></li><li><a href="https://crates.io/crates/windows-core/0.62.2">windows-core 0.62.2</a></li><li><a href="https://crates.io/crates/windows-future/0.3.2">windows-future 0.3.2</a></li><li><a href="https://crates.io/crates/windows-implement/0.58.0">windows-implement 0.58.0</a></li><li><a href="https://crates.io/crates/windows-implement/0.60.2">windows-implement 0.60.2</a></li><li><a href="https://crates.io/crates/windows-interface/0.58.0">windows-interface 0.58.0</a></li><li><a href="https://crates.io/crates/windows-interface/0.59.3">windows-interface 0.59.3</a></li><li><a href="https://crates.io/crates/windows-link/0.2.1">windows-link 0.2.1</a></li><li><a href="https://crates.io/crates/windows-numerics/0.3.1">windows-numerics 0.3.1</a></li><li><a href="https://crates.io/crates/windows-registry/0.6.1">windows-registry 0.6.1</a></li><li><a href="https://crates.io/crates/windows-result/0.2.0">windows-result 0.2.0</a></li><li><a href="https://crates.io/crates/windows-result/0.4.1">windows-result 0.4.1</a></li><li><a href="https://crates.io/crates/windows-strings/0.1.0">windows-strings 0.1.0</a></li><li><a href="https://crates.io/crates/windows-strings/0.5.1">windows-strings 0.5.1</a></li><li><a href="https://crates.io/crates/windows-sys/0.48.0">windows-sys 0.48.0</a></li><li><a href="https://crates.io/crates/windows-sys/0.61.2">windows-sys 0.61.2</a></li><li><a href="https://crates.io/crates/windows-targets/0.48.5">windows-targets 0.48.5</a></li><li><a href="https://crates.io/crates/windows-targets/0.52.6">windows-targets 0.52.6</a></li><li><a href="https://crates.io/crates/windows-threading/0.2.1">windows-threading 0.2.1</a></li><li><a href="https://crates.io/crates/windows-version/0.1.7">windows-version 0.1.7</a></li><li><a href="https://crates.io/crates/windows/0.58.0">windows 0.58.0</a></li><li><a href="https://crates.io/crates/windows/0.62.2">windows 0.62.2</a></li><li><a href="https://crates.io/crates/windows_x86_64_gnu/0.48.5">windows_x86_64_gnu 0.48.5</a></li><li><a href="https://crates.io/crates/windows_x86_64_gnu/0.52.6">windows_x86_64_gnu 0.52.6</a></li><li><a href="https://crates.io/crates/windows_x86_64_msvc/0.48.5">windows_x86_64_msvc 0.48.5</a></li><li><a href="https://crates.io/crates/windows_x86_64_msvc/0.52.6">windows_x86_64_msvc 0.52.6</a></li><li><a href="https://crates.io/crates/xim-ctext/0.3.0">xim-ctext 0.3.0</a></li><li><a href="https://crates.io/crates/xim-parser/0.2.2">xim-parser 0.2.2</a></li><li><a href="https://crates.io/crates/zune-inflate/0.2.54">zune-inflate 0.2.54</a></li></ul><pre>MIT License
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/accesskit/0.24.1">accesskit 0.24.1</a></li><li><a href="https://crates.io/crates/accesskit_atspi_common/0.19.1">accesskit_atspi_common 0.19.1</a></li><li><a href="https://crates.io/crates/accesskit_consumer/0.38.0">accesskit_consumer 0.38.0</a></li><li><a href="https://crates.io/crates/accesskit_unix/0.22.1">accesskit_unix 0.22.1</a></li><li><a href="https://crates.io/crates/accesskit_windows/0.34.0">accesskit_windows 0.34.0</a></li><li><a href="https://crates.io/crates/atomig-macro/0.4.0">atomig-macro 0.4.0</a></li><li><a href="https://crates.io/crates/brotli-decompressor/5.0.3">brotli-decompressor 5.0.3</a></li><li><a href="https://crates.io/crates/chrono/0.4.45">chrono 0.4.45</a></li><li><a href="https://crates.io/crates/cookie-factory/0.3.3">cookie-factory 0.3.3</a></li><li><a href="https://crates.io/crates/dasp_sample/0.11.0">dasp_sample 0.11.0</a></li><li><a href="https://crates.io/crates/harfrust/0.5.2">harfrust 0.5.2</a></li><li><a href="https://crates.io/crates/hex-slice/0.1.4">hex-slice 0.1.4</a></li><li><a href="https://crates.io/crates/libm/0.2.16">libm 0.2.16</a></li><li><a href="https://crates.io/crates/lyon/1.0.19">lyon 1.0.19</a></li><li><a href="https://crates.io/crates/lyon_algorithms/1.0.22">lyon_algorithms 1.0.22</a></li><li><a href="https://crates.io/crates/lyon_geom/1.0.20">lyon_geom 1.0.20</a></li><li><a href="https://crates.io/crates/lyon_path/1.0.19">lyon_path 1.0.19</a></li><li><a href="https://crates.io/crates/lyon_tessellation/1.0.23">lyon_tessellation 1.0.23</a></li><li><a href="https://crates.io/crates/mp4ra-rust/0.3.0">mp4ra-rust 0.3.0</a></li><li><a href="https://crates.io/crates/palette_math/0.7.7">palette_math 0.7.7</a></li><li><a href="https://crates.io/crates/pathfinder_geometry/0.5.1">pathfinder_geometry 0.5.1</a></li><li><a href="https://crates.io/crates/pathfinder_simd/0.5.6">pathfinder_simd 0.5.6</a></li><li><a href="https://crates.io/crates/profiling-procmacros/1.0.18">profiling-procmacros 1.0.18</a></li><li><a href="https://crates.io/crates/profiling/1.0.18">profiling 1.0.18</a></li><li><a href="https://crates.io/crates/pulp-wasm-simd-flag/0.1.1">pulp-wasm-simd-flag 0.1.1</a></li><li><a href="https://crates.io/crates/quantette/0.6.0">quantette 0.6.0</a></li><li><a href="https://crates.io/crates/seahash/4.1.0">seahash 4.1.0</a></li><li><a href="https://crates.io/crates/simd_helpers/0.1.0">simd_helpers 0.1.0</a></li><li><a href="https://crates.io/crates/svg_fmt/0.4.5">svg_fmt 0.4.5</a></li><li><a href="https://crates.io/crates/taffy/0.15.1">taffy 0.15.1</a></li><li><a href="https://crates.io/crates/tauri-winrt-notification/0.8.1">tauri-winrt-notification 0.8.1</a></li><li><a href="https://crates.io/crates/vk-mem/0.4.0">vk-mem 0.4.0</a></li><li><a href="https://crates.io/crates/windows-collections/0.3.2">windows-collections 0.3.2</a></li><li><a href="https://crates.io/crates/windows-core/0.58.0">windows-core 0.58.0</a></li><li><a href="https://crates.io/crates/windows-core/0.62.2">windows-core 0.62.2</a></li><li><a href="https://crates.io/crates/windows-future/0.3.2">windows-future 0.3.2</a></li><li><a href="https://crates.io/crates/windows-implement/0.58.0">windows-implement 0.58.0</a></li><li><a href="https://crates.io/crates/windows-implement/0.60.2">windows-implement 0.60.2</a></li><li><a href="https://crates.io/crates/windows-interface/0.58.0">windows-interface 0.58.0</a></li><li><a href="https://crates.io/crates/windows-interface/0.59.3">windows-interface 0.59.3</a></li><li><a href="https://crates.io/crates/windows-link/0.2.1">windows-link 0.2.1</a></li><li><a href="https://crates.io/crates/windows-numerics/0.3.1">windows-numerics 0.3.1</a></li><li><a href="https://crates.io/crates/windows-registry/0.6.1">windows-registry 0.6.1</a></li><li><a href="https://crates.io/crates/windows-result/0.2.0">windows-result 0.2.0</a></li><li><a href="https://crates.io/crates/windows-result/0.4.1">windows-result 0.4.1</a></li><li><a href="https://crates.io/crates/windows-strings/0.1.0">windows-strings 0.1.0</a></li><li><a href="https://crates.io/crates/windows-strings/0.5.1">windows-strings 0.5.1</a></li><li><a href="https://crates.io/crates/windows-sys/0.48.0">windows-sys 0.48.0</a></li><li><a href="https://crates.io/crates/windows-sys/0.61.2">windows-sys 0.61.2</a></li><li><a href="https://crates.io/crates/windows-targets/0.48.5">windows-targets 0.48.5</a></li><li><a href="https://crates.io/crates/windows-targets/0.52.6">windows-targets 0.52.6</a></li><li><a href="https://crates.io/crates/windows-threading/0.2.1">windows-threading 0.2.1</a></li><li><a href="https://crates.io/crates/windows-version/0.1.7">windows-version 0.1.7</a></li><li><a href="https://crates.io/crates/windows/0.58.0">windows 0.58.0</a></li><li><a href="https://crates.io/crates/windows/0.62.2">windows 0.62.2</a></li><li><a href="https://crates.io/crates/windows_x86_64_gnu/0.48.5">windows_x86_64_gnu 0.48.5</a></li><li><a href="https://crates.io/crates/windows_x86_64_gnu/0.52.6">windows_x86_64_gnu 0.52.6</a></li><li><a href="https://crates.io/crates/windows_x86_64_msvc/0.48.5">windows_x86_64_msvc 0.48.5</a></li><li><a href="https://crates.io/crates/windows_x86_64_msvc/0.52.6">windows_x86_64_msvc 0.52.6</a></li><li><a href="https://crates.io/crates/xim-ctext/0.3.0">xim-ctext 0.3.0</a></li><li><a href="https://crates.io/crates/xim-parser/0.2.2">xim-parser 0.2.2</a></li><li><a href="https://crates.io/crates/zune-inflate/0.2.54">zune-inflate 0.2.54</a></li></ul><pre>MIT License
 
 Copyright (c) &lt;year&gt; &lt;copyright holders&gt;
 
@@ -5523,27 +6338,6 @@ LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE A
 EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 USE OR OTHER DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/objc/0.2.7">objc 0.2.7</a></li></ul><pre>MIT License
-
-Copyright (c) Steven Sheldon
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/simd-adler32/0.3.10">simd-adler32 0.3.10</a></li></ul><pre>MIT License
 
 Copyright (c) [2021] [Marvin Countryman]
@@ -5763,7 +6557,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/flume/0.12.0">flume 0.12.0</a></li><li><a href="https://crates.io/crates/rustc-hash/2.1.3">rustc-hash 2.1.3</a></li></ul><pre>Permission is hereby granted, free of charge, to any
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/flume/0.12.0">flume 0.12.0</a></li><li><a href="https://crates.io/crates/mkv-element/0.4.0">mkv-element 0.4.0</a></li><li><a href="https://crates.io/crates/rustc-hash/2.1.3">rustc-hash 2.1.3</a></li></ul><pre>Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
 documentation files (the &quot;Software&quot;), to deal in the
 Software without restriction, including without
@@ -5785,7 +6579,7 @@ SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/adler2/2.0.1">adler2 2.0.1</a></li><li><a href="https://crates.io/crates/anyhow/1.0.104">anyhow 1.0.104</a></li><li><a href="https://crates.io/crates/async-channel/2.5.0">async-channel 2.5.0</a></li><li><a href="https://crates.io/crates/async-executor/1.14.1">async-executor 1.14.1</a></li><li><a href="https://crates.io/crates/async-fs/2.2.0">async-fs 2.2.0</a></li><li><a href="https://crates.io/crates/async-io/2.6.0">async-io 2.6.0</a></li><li><a href="https://crates.io/crates/async-lock/3.5.0">async-lock 3.5.0</a></li><li><a href="https://crates.io/crates/async-net/2.0.0">async-net 2.0.0</a></li><li><a href="https://crates.io/crates/async-process/2.5.0">async-process 2.5.0</a></li><li><a href="https://crates.io/crates/async-signal/0.2.14">async-signal 0.2.14</a></li><li><a href="https://crates.io/crates/async-task/4.7.1">async-task 4.7.1</a></li><li><a href="https://crates.io/crates/async-trait/0.1.92">async-trait 0.1.92</a></li><li><a href="https://crates.io/crates/atomic-waker/1.1.2">atomic-waker 1.1.2</a></li><li><a href="https://crates.io/crates/blocking/1.7.0">blocking 1.7.0</a></li><li><a href="https://crates.io/crates/concurrent-queue/2.5.0">concurrent-queue 2.5.0</a></li><li><a href="https://crates.io/crates/displaydoc/0.2.7">displaydoc 0.2.7</a></li><li><a href="https://crates.io/crates/dyn-clone/1.0.20">dyn-clone 1.0.20</a></li><li><a href="https://crates.io/crates/endi/1.1.1">endi 1.1.1</a></li><li><a href="https://crates.io/crates/enumn/0.1.14">enumn 0.1.14</a></li><li><a href="https://crates.io/crates/event-listener-strategy/0.5.4">event-listener-strategy 0.5.4</a></li><li><a href="https://crates.io/crates/event-listener/5.4.2">event-listener 5.4.2</a></li><li><a href="https://crates.io/crates/fastrand/2.5.0">fastrand 2.5.0</a></li><li><a href="https://crates.io/crates/futures-lite/2.6.1">futures-lite 2.6.1</a></li><li><a href="https://crates.io/crates/inventory/0.3.25">inventory 0.3.25</a></li><li><a href="https://crates.io/crates/itoa/1.0.18">itoa 1.0.18</a></li><li><a href="https://crates.io/crates/khronos-egl/6.0.0">khronos-egl 6.0.0</a></li><li><a href="https://crates.io/crates/lazy_static/1.5.1">lazy_static 1.5.1</a></li><li><a href="https://crates.io/crates/linux-raw-sys/0.12.1">linux-raw-sys 0.12.1</a></li><li><a href="https://crates.io/crates/minimal-lexical/0.2.1">minimal-lexical 0.2.1</a></li><li><a href="https://crates.io/crates/once_cell/1.21.4">once_cell 1.21.4</a></li><li><a href="https://crates.io/crates/ordered-stream/0.2.0">ordered-stream 0.2.0</a></li><li><a href="https://crates.io/crates/parking/2.2.1">parking 2.2.1</a></li><li><a href="https://crates.io/crates/paste/1.0.15">paste 1.0.15</a></li><li><a href="https://crates.io/crates/pastey/0.2.3">pastey 0.2.3</a></li><li><a href="https://crates.io/crates/pin-project-internal/1.1.13">pin-project-internal 1.1.13</a></li><li><a href="https://crates.io/crates/pin-project-lite/0.2.17">pin-project-lite 0.2.17</a></li><li><a href="https://crates.io/crates/pin-project/1.1.13">pin-project 1.1.13</a></li><li><a href="https://crates.io/crates/piper/0.2.5">piper 0.2.5</a></li><li><a href="https://crates.io/crates/polling/3.11.0">polling 3.11.0</a></li><li><a href="https://crates.io/crates/proc-macro-crate/3.5.0">proc-macro-crate 3.5.0</a></li><li><a href="https://crates.io/crates/proc-macro2/1.0.107">proc-macro2 1.0.107</a></li><li><a href="https://crates.io/crates/quote/1.0.47">quote 1.0.47</a></li><li><a href="https://crates.io/crates/ref-cast-impl/1.0.27">ref-cast-impl 1.0.27</a></li><li><a href="https://crates.io/crates/ref-cast/1.0.27">ref-cast 1.0.27</a></li><li><a href="https://crates.io/crates/rustc-hash/1.1.0">rustc-hash 1.1.0</a></li><li><a href="https://crates.io/crates/rustix/1.1.6">rustix 1.1.6</a></li><li><a href="https://crates.io/crates/rustversion/1.0.23">rustversion 1.0.23</a></li><li><a href="https://crates.io/crates/semver/1.0.28">semver 1.0.28</a></li><li><a href="https://crates.io/crates/serde/1.0.229">serde 1.0.229</a></li><li><a href="https://crates.io/crates/serde_bytes/0.11.19">serde_bytes 0.11.19</a></li><li><a href="https://crates.io/crates/serde_core/1.0.229">serde_core 1.0.229</a></li><li><a href="https://crates.io/crates/serde_derive/1.0.229">serde_derive 1.0.229</a></li><li><a href="https://crates.io/crates/serde_derive_internals/0.30.0">serde_derive_internals 0.30.0</a></li><li><a href="https://crates.io/crates/serde_json/1.0.154">serde_json 1.0.154</a></li><li><a href="https://crates.io/crates/serde_repr/0.1.21">serde_repr 0.1.21</a></li><li><a href="https://crates.io/crates/smol/2.0.2">smol 2.0.2</a></li><li><a href="https://crates.io/crates/smol_str/0.3.7">smol_str 0.3.7</a></li><li><a href="https://crates.io/crates/syn/2.0.119">syn 2.0.119</a></li><li><a href="https://crates.io/crates/syn/3.0.9">syn 3.0.9</a></li><li><a href="https://crates.io/crates/system-deps/7.0.8">system-deps 7.0.8</a></li><li><a href="https://crates.io/crates/thiserror-impl/1.0.69">thiserror-impl 1.0.69</a></li><li><a href="https://crates.io/crates/thiserror-impl/2.0.21">thiserror-impl 2.0.21</a></li><li><a href="https://crates.io/crates/thiserror/1.0.69">thiserror 1.0.69</a></li><li><a href="https://crates.io/crates/thiserror/2.0.21">thiserror 2.0.21</a></li><li><a href="https://crates.io/crates/unicode-ident/1.0.27">unicode-ident 1.0.27</a></li><li><a href="https://crates.io/crates/waker-fn/1.2.0">waker-fn 1.2.0</a></li><li><a href="https://crates.io/crates/zbus-lockstep-macros/0.5.2">zbus-lockstep-macros 0.5.2</a></li><li><a href="https://crates.io/crates/zbus-lockstep/0.5.2">zbus-lockstep 0.5.2</a></li><li><a href="https://crates.io/crates/zed-font-kit/0.14.1-zed">zed-font-kit 0.14.1-zed</a></li><li><a href="https://crates.io/crates/zmij/1.0.23">zmij 1.0.23</a></li><li><a href="https://crates.io/crates/zvariant_utils/4.2.0">zvariant_utils 4.2.0</a></li></ul><pre>Permission is hereby granted, free of charge, to any
+DEALINGS IN THE SOFTWARE.</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/adler2/2.0.1">adler2 2.0.1</a></li><li><a href="https://crates.io/crates/anyhow/1.0.104">anyhow 1.0.104</a></li><li><a href="https://crates.io/crates/async-channel/2.5.0">async-channel 2.5.0</a></li><li><a href="https://crates.io/crates/async-executor/1.14.1">async-executor 1.14.1</a></li><li><a href="https://crates.io/crates/async-fs/2.2.0">async-fs 2.2.0</a></li><li><a href="https://crates.io/crates/async-io/2.6.0">async-io 2.6.0</a></li><li><a href="https://crates.io/crates/async-lock/3.5.0">async-lock 3.5.0</a></li><li><a href="https://crates.io/crates/async-net/2.0.0">async-net 2.0.0</a></li><li><a href="https://crates.io/crates/async-process/2.5.0">async-process 2.5.0</a></li><li><a href="https://crates.io/crates/async-signal/0.2.14">async-signal 0.2.14</a></li><li><a href="https://crates.io/crates/async-task/4.7.1">async-task 4.7.1</a></li><li><a href="https://crates.io/crates/async-trait/0.1.92">async-trait 0.1.92</a></li><li><a href="https://crates.io/crates/atomic-waker/1.1.2">atomic-waker 1.1.2</a></li><li><a href="https://crates.io/crates/basic-toml/0.1.10">basic-toml 0.1.10</a></li><li><a href="https://crates.io/crates/blocking/1.7.0">blocking 1.7.0</a></li><li><a href="https://crates.io/crates/concurrent-queue/2.5.0">concurrent-queue 2.5.0</a></li><li><a href="https://crates.io/crates/displaydoc/0.2.7">displaydoc 0.2.7</a></li><li><a href="https://crates.io/crates/dyn-clone/1.0.20">dyn-clone 1.0.20</a></li><li><a href="https://crates.io/crates/endi/1.1.1">endi 1.1.1</a></li><li><a href="https://crates.io/crates/enumn/0.1.14">enumn 0.1.14</a></li><li><a href="https://crates.io/crates/event-listener-strategy/0.5.4">event-listener-strategy 0.5.4</a></li><li><a href="https://crates.io/crates/event-listener/5.4.2">event-listener 5.4.2</a></li><li><a href="https://crates.io/crates/fastrand/2.5.0">fastrand 2.5.0</a></li><li><a href="https://crates.io/crates/futures-lite/2.6.1">futures-lite 2.6.1</a></li><li><a href="https://crates.io/crates/inventory/0.3.25">inventory 0.3.25</a></li><li><a href="https://crates.io/crates/itoa/1.0.18">itoa 1.0.18</a></li><li><a href="https://crates.io/crates/jxl-bitstream/1.1.0">jxl-bitstream 1.1.0</a></li><li><a href="https://crates.io/crates/jxl-coding/1.0.1">jxl-coding 1.0.1</a></li><li><a href="https://crates.io/crates/jxl-color/0.11.0">jxl-color 0.11.0</a></li><li><a href="https://crates.io/crates/jxl-frame/0.13.3">jxl-frame 0.13.3</a></li><li><a href="https://crates.io/crates/jxl-grid/0.6.2">jxl-grid 0.6.2</a></li><li><a href="https://crates.io/crates/jxl-image/0.13.0">jxl-image 0.13.0</a></li><li><a href="https://crates.io/crates/jxl-jbr/0.2.1">jxl-jbr 0.2.1</a></li><li><a href="https://crates.io/crates/jxl-modular/0.11.3">jxl-modular 0.11.3</a></li><li><a href="https://crates.io/crates/jxl-oxide-common/1.0.0">jxl-oxide-common 1.0.0</a></li><li><a href="https://crates.io/crates/jxl-oxide/0.12.6">jxl-oxide 0.12.6</a></li><li><a href="https://crates.io/crates/jxl-render/0.12.4">jxl-render 0.12.4</a></li><li><a href="https://crates.io/crates/jxl-threadpool/1.0.0">jxl-threadpool 1.0.0</a></li><li><a href="https://crates.io/crates/jxl-vardct/0.11.1">jxl-vardct 0.11.1</a></li><li><a href="https://crates.io/crates/khronos-egl/6.0.0">khronos-egl 6.0.0</a></li><li><a href="https://crates.io/crates/lazy_static/1.5.1">lazy_static 1.5.1</a></li><li><a href="https://crates.io/crates/linux-raw-sys/0.12.1">linux-raw-sys 0.12.1</a></li><li><a href="https://crates.io/crates/minimal-lexical/0.2.1">minimal-lexical 0.2.1</a></li><li><a href="https://crates.io/crates/once_cell/1.21.4">once_cell 1.21.4</a></li><li><a href="https://crates.io/crates/ordered-stream/0.2.0">ordered-stream 0.2.0</a></li><li><a href="https://crates.io/crates/parking/2.2.1">parking 2.2.1</a></li><li><a href="https://crates.io/crates/paste/1.0.15">paste 1.0.15</a></li><li><a href="https://crates.io/crates/pastey/0.1.1">pastey 0.1.1</a></li><li><a href="https://crates.io/crates/pastey/0.2.3">pastey 0.2.3</a></li><li><a href="https://crates.io/crates/pin-project-internal/1.1.13">pin-project-internal 1.1.13</a></li><li><a href="https://crates.io/crates/pin-project-lite/0.2.17">pin-project-lite 0.2.17</a></li><li><a href="https://crates.io/crates/pin-project/1.1.13">pin-project 1.1.13</a></li><li><a href="https://crates.io/crates/piper/0.2.5">piper 0.2.5</a></li><li><a href="https://crates.io/crates/polling/3.11.0">polling 3.11.0</a></li><li><a href="https://crates.io/crates/proc-macro-crate/3.5.0">proc-macro-crate 3.5.0</a></li><li><a href="https://crates.io/crates/proc-macro2/1.0.107">proc-macro2 1.0.107</a></li><li><a href="https://crates.io/crates/quote/1.0.47">quote 1.0.47</a></li><li><a href="https://crates.io/crates/ref-cast-impl/1.0.27">ref-cast-impl 1.0.27</a></li><li><a href="https://crates.io/crates/ref-cast/1.0.27">ref-cast 1.0.27</a></li><li><a href="https://crates.io/crates/rustc-hash/1.1.0">rustc-hash 1.1.0</a></li><li><a href="https://crates.io/crates/rustix/1.1.6">rustix 1.1.6</a></li><li><a href="https://crates.io/crates/rustversion/1.0.23">rustversion 1.0.23</a></li><li><a href="https://crates.io/crates/semver/1.0.28">semver 1.0.28</a></li><li><a href="https://crates.io/crates/serde/1.0.229">serde 1.0.229</a></li><li><a href="https://crates.io/crates/serde_bytes/0.11.19">serde_bytes 0.11.19</a></li><li><a href="https://crates.io/crates/serde_core/1.0.229">serde_core 1.0.229</a></li><li><a href="https://crates.io/crates/serde_derive/1.0.229">serde_derive 1.0.229</a></li><li><a href="https://crates.io/crates/serde_derive_internals/0.30.0">serde_derive_internals 0.30.0</a></li><li><a href="https://crates.io/crates/serde_json/1.0.154">serde_json 1.0.154</a></li><li><a href="https://crates.io/crates/serde_repr/0.1.21">serde_repr 0.1.21</a></li><li><a href="https://crates.io/crates/smol/2.0.2">smol 2.0.2</a></li><li><a href="https://crates.io/crates/smol_str/0.3.7">smol_str 0.3.7</a></li><li><a href="https://crates.io/crates/syn/1.0.109">syn 1.0.109</a></li><li><a href="https://crates.io/crates/syn/2.0.119">syn 2.0.119</a></li><li><a href="https://crates.io/crates/syn/3.0.9">syn 3.0.9</a></li><li><a href="https://crates.io/crates/system-deps/7.0.8">system-deps 7.0.8</a></li><li><a href="https://crates.io/crates/thiserror-impl/1.0.69">thiserror-impl 1.0.69</a></li><li><a href="https://crates.io/crates/thiserror-impl/2.0.21">thiserror-impl 2.0.21</a></li><li><a href="https://crates.io/crates/thiserror/1.0.69">thiserror 1.0.69</a></li><li><a href="https://crates.io/crates/thiserror/2.0.21">thiserror 2.0.21</a></li><li><a href="https://crates.io/crates/unicode-ident/1.0.27">unicode-ident 1.0.27</a></li><li><a href="https://crates.io/crates/waker-fn/1.2.0">waker-fn 1.2.0</a></li><li><a href="https://crates.io/crates/webp-animation/0.10.0">webp-animation 0.10.0</a></li><li><a href="https://crates.io/crates/zbus-lockstep-macros/0.5.2">zbus-lockstep-macros 0.5.2</a></li><li><a href="https://crates.io/crates/zbus-lockstep/0.5.2">zbus-lockstep 0.5.2</a></li><li><a href="https://crates.io/crates/zed-font-kit/0.14.1-zed">zed-font-kit 0.14.1-zed</a></li><li><a href="https://crates.io/crates/zmij/1.0.23">zmij 1.0.23</a></li><li><a href="https://crates.io/crates/zvariant_utils/4.2.0">zvariant_utils 4.2.0</a></li></ul><pre>Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
 documentation files (the &quot;Software&quot;), to deal in the
 Software without restriction, including without
@@ -5871,7 +6665,7 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/raw-window-metal/1.1.0">raw-window-metal 1.1.0</a></li><li><a href="https://crates.io/crates/siphasher/1.0.4">siphasher 1.0.4</a></li></ul><pre>Permission is hereby granted, free of charge, to any person obtaining a copy
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/siphasher/1.0.4">siphasher 1.0.4</a></li></ul><pre>Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
 in the Software without restriction, including without limitation the rights
 to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
@@ -6066,6 +6860,28 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/palette/0.7.7">palette 0.7.7</a></li><li><a href="https://crates.io/crates/palette_derive/0.7.7">palette_derive 0.7.7</a></li></ul><pre>The MIT License (MIT)
+
+Copyright (c) 2015 Erik Hedvall
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/raw-cpuid/11.6.0">raw-cpuid 11.6.0</a></li></ul><pre>The MIT License (MIT)
 
 Copyright (c) 2015 Gerd Zellweger
@@ -6110,6 +6926,28 @@ THE SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/gif/0.14.2">gif 0.14.2</a></li></ul><pre>The MIT License (MIT)
 
 Copyright (c) 2015 nwin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/y4m/0.8.0">y4m 0.8.0</a></li></ul><pre>The MIT License (MIT)
+
+Copyright (c) 2015-2019 PistonDevelopers
+Copyright (c) 2019 image-rs contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -6428,6 +7266,27 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/gpu-video/0.5.0">gpu-video 0.5.0</a></li></ul><pre>The MIT License (MIT)
+
+Copyright (c) 2024 Software Mansion &lt;swmansion.com&gt;
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 </pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/weezl/0.1.12">weezl 0.1.12</a></li></ul><pre>The MIT License (MIT)
 
 Copyright (c) HeroicKatora 2020
@@ -6583,7 +7442,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-</pre><h2>Mozilla Public License 2.0</h2><ul><li><a href="https://crates.io/crates/cbindgen/0.28.0">cbindgen 0.28.0</a></li></ul><pre>Mozilla Public License Version 2.0
+</pre><h2>Mozilla Public License 2.0</h2><ul><li><a href="https://crates.io/crates/symphonia-codec-aac/0.6.1">symphonia-codec-aac 0.6.1</a></li><li><a href="https://crates.io/crates/symphonia-common/0.6.1">symphonia-common 0.6.1</a></li><li><a href="https://crates.io/crates/symphonia-core/0.6.1">symphonia-core 0.6.1</a></li><li><a href="https://crates.io/crates/symphonia-metadata/0.6.1">symphonia-metadata 0.6.1</a></li></ul><pre>Mozilla Public License Version 2.0
 &#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;
 
 1. Definitions
@@ -6620,7 +7479,7 @@ THE SOFTWARE.
     means any form of the work other than Source Code Form.
 
 1.7. &quot;Larger Work&quot;
-    means a work that combines Covered Software with other material, in
+    means a work that combines Covered Software with other material, in 
     a separate file or files, that is not Covered Software.
 
 1.8. &quot;License&quot;
@@ -6955,8 +7814,7 @@ Exhibit B - &quot;Incompatible With Secondary Licenses&quot; Notice
 ---------------------------------------------------------
 
   This Source Code Form is &quot;Incompatible With Secondary Licenses&quot;, as
-  defined by the Mozilla Public License, v. 2.0.
-</pre><h2>Mozilla Public License 2.0</h2><ul><li><a href="https://crates.io/crates/dwrote/0.11.5">dwrote 0.11.5</a></li><li><a href="https://crates.io/crates/option-ext/0.2.0">option-ext 0.2.0</a></li></ul><pre>Mozilla Public License Version 2.0
+  defined by the Mozilla Public License, v. 2.0.</pre><h2>Mozilla Public License 2.0</h2><ul><li><a href="https://crates.io/crates/dwrote/0.11.5">dwrote 0.11.5</a></li><li><a href="https://crates.io/crates/option-ext/0.2.0">option-ext 0.2.0</a></li></ul><pre>Mozilla Public License Version 2.0
 &#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;
 
 1. Definitions
@@ -7477,28 +8335,6 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to &lt;http://unlicense.org/&gt;
-</pre><h2>Do What The F*ck You Want To Public License</h2><ul><li><a href="https://crates.io/crates/ffmpeg-next/9.1.0">ffmpeg-next 9.1.0</a></li></ul><pre>            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-                    Version 2, December 2004
-
- Everyone is permitted to copy and distribute verbatim or modified
- copies of this license document, and changing it is allowed as long
- as the name is changed.
-
-            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
-
-  0. You just DO WHAT THE FUCK YOU WANT TO.
-</pre><h2>Do What The F*ck You Want To Public License</h2><ul><li><a href="https://crates.io/crates/ffmpeg-sys-next/9.1.1">ffmpeg-sys-next 9.1.1</a></li></ul><pre>DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-Version 2, December 2004
-
-Copyright (C) 2004 Sam Hocevar &lt;sam@hocevar.net&gt;
-
-Everyone is permitted to copy and distribute verbatim or modified copies of this license document, and changing it is allowed as long as the name is changed.
-
-DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
-
-  0. You just DO WHAT THE FUCK YOU WANT TO.
 </pre><h2>zlib License</h2><ul><li><a href="https://crates.io/crates/slotmap/1.1.1">slotmap 1.1.1</a></li></ul><pre>Copyright (c) 2021 Orson Peters &lt;orsonpeters@gmail.com&gt;
 
 This software is provided &#x27;as-is&#x27;, without any express or implied warranty. In
@@ -7538,6 +8374,182 @@ the following restrictions:
 
 3. This notice may not be removed or altered from any source distribution.</pre>
 
+<h1>Bundled C and C++ libraries</h1>
+<h2>libopus (BSD-3-Clause)</h2><p>Built from the source in opusic-sys 0.7.7.</p><pre>Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+                    Jean-Marc Valin, Timothy B. Terriberry,
+                    CSIRO, Gregory Maxwell, Mark Borgerding,
+                    Erik de Castro Lopo, Mozilla, Amazon
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of Internet Society, IETF or IETF Trust, nor the
+names of specific contributors, may be used to endorse or promote
+products derived from this software without specific prior written
+permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS&#x27;&#x27; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Opus is subject to the royalty-free patent licenses which are
+specified at:
+
+Xiph.Org Foundation:
+https://datatracker.ietf.org/ipr/1524/
+
+Microsoft Corporation:
+https://datatracker.ietf.org/ipr/1914/
+
+Broadcom Corporation:
+https://datatracker.ietf.org/ipr/1526/
+</pre>
+<h2>OpenH264 (BSD-2-Clause)</h2><p>Built from the source in openh264-sys2 0.9.10.</p><pre>Copyright (c) 2013, Cisco Systems
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.</pre>
+<h2>libwebp (BSD-3-Clause)</h2><p>Built from the source in libwebp-sys2 0.1.11, libwebp-sys2 0.2.0.</p><pre>Copyright (c) 2010, Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+
+  * Neither the name of Google nor the names of its contributors may
+    be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+&quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+</pre>
+<h2>libwebp additional IP rights grant (patents)</h2><p>Built from the source in libwebp-sys2 0.1.11, libwebp-sys2 0.2.0.</p><pre>Additional IP Rights Grant (Patents)
+------------------------------------
+
+&quot;These implementations&quot; means the copyrightable works that implement the WebM
+codecs distributed by Google as part of the WebM Project.
+
+Google hereby grants to you a perpetual, worldwide, non-exclusive, no-charge,
+royalty-free, irrevocable (except as stated in this section) patent license to
+make, have made, use, offer to sell, sell, import, transfer, and otherwise
+run, modify and propagate the contents of these implementations of WebM, where
+such license applies only to those patent claims, both currently owned by
+Google and acquired in the future, licensable by Google that are necessarily
+infringed by these implementations of WebM. This grant does not include claims
+that would be infringed only as a consequence of further modification of these
+implementations. If you or your agent or exclusive licensee institute or order
+or agree to the institution of patent litigation or any other patent
+enforcement activity against any entity (including a cross-claim or
+counterclaim in a lawsuit) alleging that any of these implementations of WebM
+or any code incorporated within any of these implementations of WebM
+constitute direct or contributory patent infringement, or inducement of
+patent infringement, then any patent rights granted to you under this License
+for these implementations of WebM shall terminate as of the date such
+litigation is filed.
+</pre>
+<h2>Zstandard (BSD-3-Clause)</h2><p>Built from the source in zstd-sys 2.1.3+zstd.1.5.7.</p><pre>BSD License
+
+For Zstandard software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS &quot;AS IS&quot; AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</pre>
+<h2>Vulkan Memory Allocator (MIT)</h2><p>Built from the source in vk-mem 0.4.0.</p><pre>Copyright (c) 2017-2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+</pre>
+<h1>Bundled assets</h1>
 <h2>Inter fonts — SIL Open Font License</h2><pre>Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
