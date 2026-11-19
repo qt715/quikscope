@@ -1508,6 +1508,19 @@ mod tests {
         assert!(recover_masters(root, &own.dir).is_empty());
     }
 
+    /// Waits until nobody holds `dir`'s lock. Dropping it here does not
+    /// free it at once while a sibling test spawns a process: until that
+    /// child execs, it shares every open file description, this lock's
+    /// included. A daemon's lock is freed by its exit, which has no such
+    /// window, so this is a test-only wait.
+    fn released(dir: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !lock_is_free(&dir.join(LOCK)) {
+            assert!(Instant::now() < deadline, "{} stays locked", dir.display());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn masters_survive_another_instance_and_stale_ones_are_removed() {
         let root = tempfile::tempdir().unwrap();
@@ -1523,6 +1536,7 @@ mod tests {
         // directory is empty and held.
         let dead = a.dir.clone();
         drop(a);
+        released(&dead);
         let a = Masters::claim(root, Path::new("/run/user/1/quikscope-wayland-1.sock"));
         assert_eq!(a.dir, dead);
         assert!(!a.dir.join("1-100.master").exists());
@@ -1536,7 +1550,9 @@ mod tests {
         expected.sort();
         assert_eq!(left, expected, "the moved-aside directory is removed");
         // A directory whose daemon exited without cleaning up is removed.
+        let b_dir = b.dir.clone();
         drop(b);
+        released(&b_dir);
         clean_masters(root, &a.dir);
         assert_eq!(
             std::fs::read_dir(root).unwrap().count(),
