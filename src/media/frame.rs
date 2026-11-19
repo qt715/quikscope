@@ -49,6 +49,19 @@ pub struct Frame {
     pub captured: Instant,
 }
 
+/// Describes the frame without its pixels (for test failures and logs).
+impl std::fmt::Debug for Frame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("stride", &self.stride)
+            .field("format", &self.format)
+            .field("captured", &self.captured)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Frame {
     /// Takes ownership of (or borrows from a pool) `height` rows of pixels.
     pub fn from_pixels(

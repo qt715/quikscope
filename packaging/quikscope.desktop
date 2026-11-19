@@ -8,7 +8,7 @@ Icon=quikscope
 Terminal=false
 Categories=Graphics;Utility;
 Keywords=screenshot;annotate;capture;record;screencast;gif;video;
-MimeType=image/png;image/jpeg;image/webp;image/gif;image/avif;image/jxl;image/apng;video/mp4;video/x-matroska;video/quicktime;video/webm;
+MimeType=image/png;image/jpeg;image/webp;image/gif;image/avif;image/jxl;image/apng;video/mp4;video/x-matroska;video/quicktime;
 StartupNotify=false
 Actions=region;screen;record-video;record-animation;
 

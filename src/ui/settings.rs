@@ -99,6 +99,30 @@ const SEGMENTED: [(&str, &str, &[&str]); 5] = [
     ("record-encoder", "Encoder", &["record", "encoder"]),
 ];
 
+/// Windows global shortcuts: config key under `[hotkeys]` and label, in
+/// the order [`shortcut_values`] returns them.
+#[cfg(windows)]
+const SHORTCUTS: [(&str, &str); 6] = [
+    ("region", "Region"),
+    ("screen", "Screen"),
+    ("window", "Window"),
+    ("open_last", "Open last"),
+    ("record_video", "Record video"),
+    ("record_animation", "Record animation"),
+];
+
+#[cfg(windows)]
+fn shortcut_values(h: &crate::config::Hotkeys) -> [&String; SHORTCUTS.len()] {
+    [
+        &h.region,
+        &h.screen,
+        &h.window,
+        &h.open_last,
+        &h.record_video,
+        &h.record_animation,
+    ]
+}
+
 pub struct Settings {
     config: Arc<Config>,
     path: PathBuf,
@@ -115,7 +139,7 @@ pub struct Settings {
     /// Records the option bounds of segmented settings and the audio list.
     rows: HashMap<&'static str, ScrollHandle>,
     #[cfg(windows)]
-    bindings: [String; 4],
+    bindings: [String; SHORTCUTS.len()],
 }
 
 impl Settings {
@@ -137,12 +161,7 @@ impl Settings {
         });
         let mut this = Self {
             #[cfg(windows)]
-            bindings: [
-                config.hotkeys.region.clone(),
-                config.hotkeys.screen.clone(),
-                config.hotkeys.window.clone(),
-                config.hotkeys.open_last.clone(),
-            ],
+            bindings: shortcut_values(&config.hotkeys).map(Clone::clone),
             config,
             path,
             welcome,
@@ -703,22 +722,11 @@ impl Settings {
             ))
             .on_click(cx.listener(move |this, _, _, cx| {
                 let defaults = crate::config::Hotkeys::default();
-                let fallback = [
-                    &defaults.region,
-                    &defaults.screen,
-                    &defaults.window,
-                    &defaults.open_last,
-                ];
-                let current = [
-                    &this.config.hotkeys.region,
-                    &this.config.hotkeys.screen,
-                    &this.config.hotkeys.window,
-                    &this.config.hotkeys.open_last,
-                ][index]
-                    .clone();
+                let fallback = shortcut_values(&defaults)[index].clone();
+                let current = shortcut_values(&this.config.hotkeys)[index].clone();
                 let value = if current.is_empty() {
                     if this.bindings[index].is_empty() {
-                        fallback[index].clone()
+                        fallback
                     } else {
                         this.bindings[index].clone()
                     }
@@ -1047,12 +1055,8 @@ impl Render for Settings {
                         .child(crate::platform::windows::PRINT_SCREEN_NOTICE)
                         .into_any_element(),
                 ));
-                for (index, key, label, binding) in [
-                    (0, "region", "Region", &c.hotkeys.region),
-                    (1, "screen", "Screen", &c.hotkeys.screen),
-                    (2, "window", "Window", &c.hotkeys.window),
-                    (3, "open_last", "Open last", &c.hotkeys.open_last),
-                ] {
+                let values = shortcut_values(&c.hotkeys);
+                for (index, (&(key, label), binding)) in SHORTCUTS.iter().zip(values).enumerate() {
                     items.push((
                         key,
                         self.shortcut(index, key, label, binding, cx)

@@ -136,7 +136,7 @@ impl Item {
     fn recording_label(&self) -> Option<String> {
         let recording = self.state.recording.as_ref()?;
         if recording.saving {
-            return Some("Saving recording…".into());
+            return Some(recording.saving_label());
         }
         let elapsed = recording.elapsed
             + if recording.paused {
@@ -266,7 +266,16 @@ impl ksni::Tray for Item {
             .into()
         };
         let mut menu = match (&self.state.recording, self.recording_label()) {
-            (Some(r), Some(label)) if r.saving => vec![disabled(label)],
+            (Some(r), Some(label)) if r.saving => {
+                let mut items = vec![disabled(label)];
+                if r.save_cancellable() {
+                    items.push(Self::action(
+                        "Cancel saving",
+                        Request::RecordControl(RecordAction::Cancel),
+                    ));
+                }
+                items
+            }
             (Some(r), Some(label)) => vec![
                 disabled(label),
                 Self::action(
@@ -559,6 +568,7 @@ mod tests {
             at: Instant::now(),
             paused: false,
             saving: false,
+            progress: None,
         });
         tray.update(&state);
         wait_for(|| label(&children(&menu, 0)[0]).starts_with("● Recording 0:12"));
@@ -649,6 +659,15 @@ mod tests {
         assert!(
             events.recv_timeout(Duration::from_millis(300)).is_err(),
             "activating while saving sends nothing"
+        );
+        // Saving a stopped recording shows its progress and can be cancelled.
+        state.recording.as_mut().unwrap().progress = Some(42);
+        tray.update(&state);
+        wait_for(|| label(&children(&menu, 0)[0]) == "Saving recording… 42%");
+        click(&menu, &find(&menu, 0, "Cancel saving"));
+        assert_eq!(
+            receive(),
+            Event::Request(Request::RecordControl(RecordAction::Cancel))
         );
         state.recording = None;
         tray.update(&state);

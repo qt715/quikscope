@@ -135,9 +135,28 @@ pub struct RecordingStatus {
     pub elapsed: std::time::Duration,
     pub at: std::time::Instant,
     pub paused: bool,
-    /// Stopped (or discarded) and still being written: a tray offers no
-    /// recording controls until it is done, and the clock stands still.
+    /// Stopped (or discarded) and still being written: a tray offers only
+    /// to cancel the save until it is done, and the clock stands still.
     pub saving: bool,
+    /// While saving a stopped recording, the percentage written; `None`
+    /// while a discarded one is torn down.
+    pub progress: Option<u8>,
+}
+
+impl RecordingStatus {
+    /// The tray's label while saving.
+    pub fn saving_label(&self) -> String {
+        match self.progress {
+            Some(percent) => format!("Saving recording… {percent}%"),
+            None => "Saving recording…".into(),
+        }
+    }
+
+    /// Whether a tray offers to cancel the save: only a stopped recording
+    /// being written has one to cancel.
+    pub fn save_cancellable(&self) -> bool {
+        self.saving && self.progress.is_some()
+    }
 }
 
 /// Everything a tray menu shows.

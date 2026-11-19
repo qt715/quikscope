@@ -13,9 +13,13 @@
   (`quikscope audio-devices` lists them). H.264 is encoded on the GPU through
   Vulkan Video (NVIDIA, AMD and Intel with recent drivers), otherwise by the
   built-in OpenH264 software encoder.
-- MP4 recordings are fragmented by default, so a file stays playable up to its
-  last second if quikscope or the machine dies mid-recording;
+- MP4 recordings are fragmented by default and written under their final
+  name, so a crash or kill leaves a file that plays up to its last fragment;
   `record.mp4_fragmented = false` writes a classic MP4 when recording ends.
+  The next daemon start recovers a classic MP4 or MOV cut short this way, and
+  reopens animations that were never encoded in the annotator.
+- A capture larger than any H.264 encoder on the machine accepts is recorded
+  scaled down, with a notification.
 - Animations: GIF (palette per frame, dithered), WebP, AVIF or JPEG XL, 30 fps
   by default, recorded losslessly first so annotating and re-exporting loses
   nothing. Every frame keeps its exact display time.
@@ -24,16 +28,26 @@
   notification with a thumbnail; clicking it opens the editor.
 - Linux system tray icon (StatusNotifierItem) with elapsed time, pause/resume,
   stop, discard, audio devices and frame rates; the same controls in the Windows
-  tray. New shortcuts on Windows (Ctrl+Shift+PrintScreen, Ctrl+Alt+PrintScreen).
-- `record status` reports `saving` while a stopped recording is being
-  finished. Quitting quikscope (`quikscope quit`, the tray's Quit, stopping its
-  service or logging out) saves a running recording first, and an unavailable
-  audio device is skipped with a warning.
+  tray. New shortcuts on Windows (Ctrl+Shift+PrintScreen, Ctrl+Alt+PrintScreen),
+  which Settings can enable and disable like the others.
+- `record status` reports `saving 42` (percent written) while a stopped
+  recording is being finished, and the tray shows the percentage; `record
+  cancel` or the tray's Cancel saving stop a long save, keeping an animation's
+  lossless recording. Quitting quikscope (`quikscope quit`, the tray's Quit,
+  stopping its service or logging out) saves a running recording and waits
+  for exports and saves still running; the systemd unit allows ten minutes
+  for that. An unavailable audio device is skipped with a warning.
 - On wlroots compositors frames are copied into GPU buffers (DMA-BUF) whenever
   the compositor offers them. Shared memory is only a fallback, with a warning
   in the log: Hyprland reads shared-memory captures back on its main thread,
   which can make games stutter. Recording also works on X11, Windows (Desktop
   Duplication) and, experimentally, through the ScreenCast portal on GNOME/KDE.
+  The portal's stored permission is kept per monitor: recording another
+  monitor asks again instead of recording the wrong one.
+- `default-output` and `default-input` follow the system's default device,
+  also when it changes or disappears during a recording. On Windows any
+  device records, including 7.1 headsets.
+- On wlroots the recording outline stays visible over fullscreen windows.
 
 ### Editors
 
@@ -55,7 +69,7 @@
 
 - `quikscope open` takes several files and opens the latest capture without
   one. The desktop entry (`quikscope open %F`) registers PNG, JPEG, WebP, GIF,
-  AVIF, JPEG XL, MP4, MKV, MOV and WebM, so file managers can open them in
+  AVIF, JPEG XL, MP4, MKV and MOV, so file managers can open them in
   quikscope; the Windows installer adds quikscope to Explorer's Open with.
 - Videos must be H.264 (with AAC, Opus or no sound); HEVC, VP9 and AV1 videos
   are not supported. Animated GIF, WebP, AVIF, JPEG XL and APNG files open in
@@ -71,6 +85,9 @@
 - A 0.2 configuration whose shortcut equals one of the new recording defaults
   stays valid: that default is left unbound instead of the whole file being
   rejected.
+- The daemon log has timestamps and keeps the previous run's lines:
+  an auto-started daemon appends to `daemon.log`, which moves to
+  `daemon.log.1` above 1 MiB.
 
 ### Packaging
 
@@ -84,7 +101,11 @@
 
 - Saving from two places at once (two screenshots in the same second, a
   recording finishing while an editor saves, two exports of the same clip)
-  writes separate files instead of overwriting each other.
+  writes separate files instead of overwriting each other, also for the
+  annotator's Ctrl+S with a fixed `filename`.
+- Windows: a command that starts the daemon, run with its output captured
+  (`quikscope audio-devices | Out-String`), no longer hangs until the daemon
+  quits, and redirected output (`quikscope version > file`) is written.
 
 ### Removed
 

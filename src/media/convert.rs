@@ -27,6 +27,27 @@ pub fn to_yuv420(
     height: u32,
     layout: YuvLayout,
 ) -> Yuv420 {
+    let mut picture = Yuv420 {
+        width,
+        height,
+        layout,
+        data: Vec::new(),
+    };
+    to_yuv420_into(pixels, stride, format, width, height, layout, &mut picture);
+    picture
+}
+
+/// [`to_yuv420`] into `out`, reusing its buffer: a recorder converting every
+/// frame avoids allocating a picture each time.
+pub fn to_yuv420_into(
+    pixels: &[u8],
+    stride: usize,
+    format: PixelFormat,
+    width: u32,
+    height: u32,
+    layout: YuvLayout,
+    out: &mut Yuv420,
+) {
     assert!(
         width > 0 && height > 0 && width.is_multiple_of(2) && height.is_multiple_of(2),
         "4:2:0 needs even, non-zero sizes, got {width}x{height}"
@@ -40,8 +61,12 @@ pub fn to_yuv420(
     let stride = u32::try_from(stride).expect("row stride fits in u32");
     let bgr = matches!(format, PixelFormat::Bgra | PixelFormat::Bgrx);
 
-    let mut data = vec![0; w * h * 3 / 2];
-    let (y_plane, chroma) = data.split_at_mut(w * h);
+    out.width = width;
+    out.height = height;
+    out.layout = layout;
+    // Every byte is overwritten below; only the length matters.
+    out.data.resize(w * h * 3 / 2, 0);
+    let (y_plane, chroma) = out.data.split_at_mut(w * h);
     // Alpha is ignored either way, so the X formats share the A converters.
     let converted = match layout {
         YuvLayout::Nv12 => {
@@ -79,12 +104,6 @@ pub fn to_yuv420(
         }
     };
     converted.expect("plane sizes checked above");
-    Yuv420 {
-        width,
-        height,
-        layout,
-        data,
-    }
 }
 
 /// Converts a decoded picture to a BGRA image of the same size.
@@ -276,6 +295,25 @@ mod tests {
         assert!(cb > 200 && cr < 128, "Cb {cb} Cr {cr}");
         assert_eq!(&nv12.data[8..], &[cb, cr, cb, cr]);
         assert_eq!(&i420.data[8..], &[cb, cb, cr, cr]);
+    }
+
+    /// A reused picture comes out exactly like a fresh one, whatever size,
+    /// layout and contents it had before.
+    #[test]
+    fn converting_into_a_used_picture_matches_a_fresh_one() {
+        let src = solid([255, 140, 20], PixelFormat::Bgra, 6, 4, 0);
+        let mut reused = to_yuv420(
+            &solid([0, 0, 255], PixelFormat::Bgra, 8, 8, 0),
+            32,
+            PixelFormat::Bgra,
+            8,
+            8,
+            YuvLayout::Nv12,
+        );
+        for layout in [YuvLayout::I420, YuvLayout::Nv12] {
+            to_yuv420_into(&src, 24, PixelFormat::Bgra, 6, 4, layout, &mut reused);
+            assert_eq!(reused, to_yuv420(&src, 24, PixelFormat::Bgra, 6, 4, layout));
+        }
     }
 
     #[test]

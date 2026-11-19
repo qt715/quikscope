@@ -1,5 +1,5 @@
 [Unit]
-Description=quikscope screenshot daemon
+Description=quikscope screenshot and screen recording daemon
 After=graphical-session.target
 PartOf=graphical-session.target
 
@@ -8,6 +8,10 @@ ExecStart=/usr/bin/quikscope daemon
 Restart=on-failure
 # The daemon owns the clipboard and editor windows; stop with the session.
 KillMode=mixed
+# Stopping saves a running recording first, and encoding a long animation
+# (AVIF, lossless JPEG XL) can take minutes; the default 90 s would kill
+# the encode. A second SIGTERM still exits at once.
+TimeoutStopSec=10min
 
 [Install]
 WantedBy=graphical-session.target

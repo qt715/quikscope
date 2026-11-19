@@ -445,19 +445,21 @@ impl Image {
     /// bytes, so reloading after a daemon restart is a single read with no
     /// decode step.
     pub fn write_raw(&self, path: &Path, scale: f32) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        write_atomic(path, |mut f| {
-            let mut header = Vec::with_capacity(20);
-            header.extend_from_slice(RAW_MAGIC);
-            header.extend_from_slice(&self.width.to_le_bytes());
-            header.extend_from_slice(&self.height.to_le_bytes());
-            header.extend_from_slice(&scale.to_le_bytes());
-            f.write_all(&header)?;
-            f.write_all(&self.data)?;
-            Ok(())
-        })
+        let file = OutputFile::replace(path)?;
+        File::create(file.part())
+            .map_err(anyhow::Error::from)
+            .and_then(|mut f| {
+                let mut header = Vec::with_capacity(20);
+                header.extend_from_slice(RAW_MAGIC);
+                header.extend_from_slice(&self.width.to_le_bytes());
+                header.extend_from_slice(&self.height.to_le_bytes());
+                header.extend_from_slice(&scale.to_le_bytes());
+                f.write_all(&header)?;
+                f.write_all(&self.data)?;
+                Ok(())
+            })
+            .with_context(|| format!("writing {}", file.path().display()))?;
+        file.commit().map(drop)
     }
 
     pub fn read_raw(path: &Path) -> Result<(Image, f32)> {
@@ -493,32 +495,6 @@ impl Image {
         );
         Ok((Image::from_bgra(w, h, data)?, scale))
     }
-}
-
-/// Writes `path` through a private temp file and a rename, so readers see
-/// either the old or the complete new file. The temp file is removed when
-/// `write` fails.
-fn write_atomic(path: &Path, write: impl FnOnce(File) -> Result<()>) -> Result<()> {
-    let tmp = temp_path(path);
-    let result = File::create(&tmp)
-        .with_context(|| format!("creating {}", tmp.display()))
-        .and_then(write)
-        .and_then(|()| std::fs::rename(&tmp, path).map_err(Into::into));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-
-/// A temp-file name next to `path` that no other writer (thread or
-/// process) uses, so concurrent atomic writes never share a partial file.
-fn temp_path(path: &Path) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.{n}.part", std::process::id()));
-    path.with_file_name(name)
 }
 
 fn as_u32(bytes: &[u8]) -> &[u32] {

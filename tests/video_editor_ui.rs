@@ -733,10 +733,11 @@ pub(super) fn export_can_be_cancelled_and_leaves_no_file() {
     assert!(left.is_empty(), "{left:?}");
 }
 
-/// Saving an untouched video copies it as it is, byte for byte.
+/// Saving an untouched video copies it as it is, byte for byte; saving it
+/// untouched again from the recordings folder makes no duplicate.
 pub(super) fn untouched_save_copies_the_source_exactly() {
     let (path, info) = fixture();
-    let mut ui = Ui::open(&path, info);
+    let mut ui = Ui::open(&path, info.clone());
     let message = ui.export(|ui| ui.ctrl("s"));
     assert!(message.starts_with("Saved"), "{message}");
     let mp4 = ui.recordings("mp4");
@@ -745,6 +746,14 @@ pub(super) fn untouched_save_copies_the_source_exactly() {
         std::fs::read(&mp4[0]).unwrap(),
         std::fs::read(&path).unwrap()
     );
+
+    let recordings = ui.dir.path().join("recordings");
+    let mut saved = Ui::with_config(&mp4[0], info, |config| {
+        config.record.save_dir = recordings.display().to_string();
+    });
+    let message = saved.export(|ui| ui.ctrl("s"));
+    assert!(message.starts_with("Already saved as"), "{message}");
+    assert_eq!(ui.recordings("mp4"), mp4, "no duplicate");
 }
 
 /// Closing the window mid-export lets the export finish; a notification

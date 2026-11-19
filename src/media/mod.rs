@@ -239,7 +239,10 @@ pub struct MediaInfo {
     pub width: u32,
     pub height: u32,
     pub duration: Duration,
-    /// Average frame rate (0 when unknown).
+    /// Nominal frame rate (0 when unknown): for videos and recording
+    /// masters the rate of the most common frame interval, which a variable
+    /// frame rate recording's static stretches do not lower; for other
+    /// animations the average.
     pub fps: f64,
     /// Number of frames, known for animations; `None` for videos.
     pub frames: Option<u64>,

@@ -26,10 +26,10 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 
@@ -47,6 +47,9 @@ const TRAILER_MAGIC: &[u8; 8] = b"QSMEND\0\0";
 const TRAILER_LEN: u64 = 16;
 /// Longest stretch of delta frames; bounds the work of a seek.
 const KEY_INTERVAL: Duration = Duration::from_secs(2);
+/// Longest time written frames stay in the buffer: what a killed recording
+/// loses at most (plus frames still being compressed).
+const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// Fast enough for live capture while still finding the zero runs.
 const ZSTD_LEVEL: i32 = 1;
 
@@ -98,6 +101,10 @@ pub struct MasterWriter {
     previous: Option<Arc<Vec<u8>>>,
     last_pts: Option<Duration>,
     last_key: Duration,
+    /// Last time the buffer went to disk, and whether records were written
+    /// into it since.
+    flushed: Instant,
+    unflushed: bool,
 }
 
 impl MasterWriter {
@@ -113,6 +120,9 @@ impl MasterWriter {
         header.extend_from_slice(&height.to_le_bytes());
         header.resize(HEADER_LEN as usize, 0);
         out.write_all(&header)?;
+        // On disk at once: a master cut off before its first keyframe still
+        // identifies itself.
+        out.flush()?;
 
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let count = (threads / 2).clamp(2, 4);
@@ -144,11 +154,14 @@ impl MasterWriter {
             previous: None,
             last_pts: None,
             last_key: Duration::ZERO,
+            flushed: Instant::now(),
+            unflushed: false,
         })
     }
 
-    /// Appends a BGRA frame shown from `pts` (strictly increasing).
-    pub fn push(&mut self, frame: &Image, pts: Duration) -> Result<()> {
+    /// Appends a BGRA frame shown from `pts` (strictly increasing). Takes
+    /// the frame so its pixels go to the compression workers uncopied.
+    pub fn push(&mut self, frame: Image, pts: Duration) -> Result<()> {
         ensure!(
             (frame.width, frame.height) == (self.width, self.height),
             "{}x{} frame for a {}x{} master",
@@ -166,7 +179,7 @@ impl MasterWriter {
         }
         self.last_pts = Some(pts);
 
-        let current = Arc::new(frame.data.clone());
+        let current = Arc::new(frame.data);
         let previous = if key { None } else { self.previous.take() };
         self.previous = Some(current.clone());
         let (done, result) = mpsc::sync_channel(1);
@@ -184,6 +197,28 @@ impl MasterWriter {
         Ok(())
     }
 
+    /// Writes the frames whose compression has finished, in order, without
+    /// waiting for the others, and puts them on disk if [`FLUSH_INTERVAL`]
+    /// has passed. Call it while the recording idles: on a static screen no
+    /// further frames push the earlier ones out, and a killed recording
+    /// keeps only what reached the disk.
+    pub fn write_ready(&mut self) -> Result<()> {
+        while let Some(pending) = self.pending.front() {
+            match pending.result.try_recv() {
+                Ok(payload) => {
+                    let pending = self.pending.pop_front().expect("front exists");
+                    self.write_record(&pending, payload)?;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => bail!("master compression thread exited"),
+            }
+        }
+        if self.unflushed && self.flushed.elapsed() >= FLUSH_INTERVAL {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
     fn write_oldest(&mut self) -> Result<()> {
         let Some(pending) = self.pending.pop_front() else {
             return Ok(());
@@ -191,8 +226,12 @@ impl MasterWriter {
         let payload = pending
             .result
             .recv()
-            .context("master compression thread exited")?
-            .context("compressing master frame")?;
+            .context("master compression thread exited")?;
+        self.write_record(&pending, payload)
+    }
+
+    fn write_record(&mut self, pending: &Pending, payload: std::io::Result<Vec<u8>>) -> Result<()> {
+        let payload = payload.context("compressing master frame")?;
         let len = u32::try_from(payload.len()).context("master frame too large")?;
         let mut header = [0; RECORD_HEADER_LEN as usize];
         header[..4].copy_from_slice(RECORD_MAGIC);
@@ -201,6 +240,14 @@ impl MasterWriter {
         header[16..20].copy_from_slice(&len.to_le_bytes());
         self.out.write_all(&header)?;
         self.out.write_all(&payload)?;
+        self.unflushed = true;
+        // A killed recording keeps what reached the disk, which the scan in
+        // `open` recovers: every keyframe (one per KEY_INTERVAL) and at
+        // least once per FLUSH_INTERVAL. Flushing every frame would cost a
+        // write call at capture rate.
+        if pending.key || self.flushed.elapsed() >= FLUSH_INTERVAL {
+            self.flush()?;
+        }
         self.index.push(Entry {
             pts: pending.pts,
             offset: self.offset,
@@ -208,6 +255,15 @@ impl MasterWriter {
             key: pending.key,
         });
         self.offset += RECORD_HEADER_LEN + u64::from(len);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.out
+            .flush()
+            .with_context(|| format!("writing {}", self.path.display()))?;
+        self.flushed = Instant::now();
+        self.unflushed = false;
         Ok(())
     }
 
@@ -394,10 +450,26 @@ impl MasterReader {
         })
     }
 
+    /// The most common interval between frames, in whole milliseconds:
+    /// the capture rate of a recording whose static stretches made the
+    /// average far lower. `None` for a single frame.
+    pub fn nominal_interval(&self) -> Option<Duration> {
+        let mut counts = std::collections::HashMap::<u128, usize>::new();
+        for pair in self.index.windows(2) {
+            *counts
+                .entry((pair[1].pts - pair[0].pts).as_millis().max(1))
+                .or_default() += 1;
+        }
+        let (ms, _) = counts
+            .into_iter()
+            .max_by_key(|&(ms, count)| (count, std::cmp::Reverse(ms)))?;
+        Some(Duration::from_millis(ms as u64))
+    }
+
     /// Positions the reader so that `next_frame` returns the frame showing
     /// at `to` (from the first frame, as [`AnimFrame::pts`]).
     pub fn seek(&mut self, to: Duration) -> Result<()> {
-        let at = self.index[0].pts + to;
+        let at = self.index[0].pts.saturating_add(to);
         let target = self
             .index
             .partition_point(|e| e.pts <= at)
@@ -519,11 +591,17 @@ fn read_index(file: &mut BufReader<File>, file_len: u64) -> Result<Option<(Vec<E
             key: e[20] == 0,
         })
         .collect::<Vec<_>>();
+    // Readers subtract these times and seek to these offsets: a damaged
+    // index must fail here (and fall back to the scan), never later.
     let ordered = entries.windows(2).all(|w| w[0].pts < w[1].pts);
-    let inside = entries
-        .iter()
-        .all(|e| e.offset + RECORD_HEADER_LEN + u64::from(e.len) <= offset);
-    ensure!(ordered && inside, "corrupt master index");
+    let ends_last = entries.last().is_none_or(|last| end >= last.pts);
+    let inside = entries.iter().all(|e| {
+        e.offset >= HEADER_LEN
+            && e.offset
+                .checked_add(RECORD_HEADER_LEN + u64::from(e.len))
+                .is_some_and(|record_end| record_end <= offset)
+    });
+    ensure!(ordered && ends_last && inside, "corrupt master index");
     Ok(Some((entries, end)))
 }
 

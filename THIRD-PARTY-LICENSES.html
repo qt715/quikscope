@@ -6816,7 +6816,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/aho-corasick/1.1.5">aho-corasick 1.1.5</a></li><li><a href="https://crates.io/crates/byteorder-lite/0.1.0">byteorder-lite 0.1.0</a></li><li><a href="https://crates.io/crates/byteorder/1.5.0">byteorder 1.5.0</a></li><li><a href="https://crates.io/crates/memchr/2.8.3">memchr 2.8.3</a></li><li><a href="https://crates.io/crates/walkdir/2.5.0">walkdir 2.5.0</a></li></ul><pre>The MIT License (MIT)
+</pre><h2>MIT License</h2><ul><li><a href="https://crates.io/crates/aho-corasick/1.1.5">aho-corasick 1.1.5</a></li><li><a href="https://crates.io/crates/byteorder-lite/0.1.0">byteorder-lite 0.1.0</a></li><li><a href="https://crates.io/crates/byteorder/1.5.0">byteorder 1.5.0</a></li><li><a href="https://crates.io/crates/jiff-core/0.1.2">jiff-core 0.1.2</a></li><li><a href="https://crates.io/crates/jiff/0.2.39">jiff 0.2.39</a></li><li><a href="https://crates.io/crates/memchr/2.8.3">memchr 2.8.3</a></li><li><a href="https://crates.io/crates/walkdir/2.5.0">walkdir 2.5.0</a></li></ul><pre>The MIT License (MIT)
 
 Copyright (c) 2015 Andrew Gallant
 
@@ -8548,6 +8548,63 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+</pre>
+<h1>Vendored Rust code</h1>
+<h2>zune-jpegxl 0.5.2, modified (Zlib)</h2><pre>zlib License
+
+(C) zune-image developers
+
+This software is provided &#x27;as-is&#x27;, without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+</pre>
+<h2>zune-jpegxl modifications notice</h2><pre>This directory is a modified copy of zune-jpegxl 0.5.2
+(https://crates.io/crates/zune-jpegxl/0.5.2, upstream
+https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpegxl,
+commit a019244c4a8a4eb713e85fa77f9e18f841d6271b), by Caleb Etemesi,
+licensed under MIT OR Apache-2.0 OR Zlib (LICENSE-MIT, LICENSE-APACHE,
+LICENSE-ZLIB). quikscope uses it, and distributes this modified copy,
+under the Zlib licence option (LICENSE-ZLIB); the MIT and Apache-2.0
+texts are kept as they came with the original. As the Zlib licence
+requires, this copy is marked as altered (the changes are listed below)
+and its licence notices are kept unchanged.
+
+It is compiled as a private module of quikscope (src/media/anim/jxl.rs
+includes src/lib.rs with #[path]) rather than as its own crate, so that
+quikscope can still be packaged and installed from crates.io. Hence there is
+no Cargo.toml here; it depends on zune-core 0.5 through quikscope.
+
+Changes from upstream:
+
+- Animation (src/encoder.rs): `JxlAnimation` and `JxlFrame` plus
+  `JxlSimpleEncoder::encode_frame`, which writes one frame of an animated
+  codestream. The first frame&#x27;s image header carries the extra fields with
+  an AnimationHeader (ticks per second, loop count) and default tone
+  mapping; every frame header carries its duration, frames other than the
+  last are saved as reference frame 1, and a frame may cover only part of
+  the canvas (custom size and origin), replacing that region of reference
+  frame 1. The bit layout follows the JPEG XL codestream specification as
+  parsed by jxl-oxide (jxl-image ImageMetadata/AnimationHeader, jxl-frame
+  FrameHeader). The still-image path (`encode`) writes what it did before.
+- Threads: images with several groups are coded by a fixed number of
+  worker threads that take groups from a shared counter, instead of one
+  thread per group with the caller spinning while too many were running.
+  The no_std build path is gone.
+- Module form: `crate::` paths became `super::`, the crate-level
+  attributes, `extern crate` lines, std/threads feature gates, trace
+  logging and the doc examples (which named the crate) were removed.
 </pre>
 <h1>Bundled assets</h1>
 <h2>Inter fonts — SIL Open Font License</h2><pre>Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)

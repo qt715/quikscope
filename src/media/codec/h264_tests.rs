@@ -408,13 +408,33 @@ fn openh264_output_is_deterministic() {
     }
 }
 
+/// Super-ultrawide screens and multi-monitor regions encode in software
+/// up to H.264 level 5.2; only what is beyond it is refused.
 #[test]
-fn openh264_refuses_pictures_beyond_its_level() {
-    let err = h264_soft::Encoder::open(&config(4096, 2160))
+fn openh264_encodes_up_to_level_5_2() {
+    assert!(h264_soft::fits_level(5120, 1440, 60));
+    assert!(h264_soft::fits_level(3840, 2160, 60));
+    assert!(!h264_soft::fits_level(5120, 1440, 75), "macroblock rate");
+    assert!(!h264_soft::fits_level(7680, 2160, 30), "frame size");
+    assert!(!h264_soft::fits_level(11520, 32, 30), "aspect");
+    let err = h264_soft::Encoder::open(&config(7680, 2160))
         .err()
-        .expect("4096x2160 refused");
-    assert!(err.to_string().contains("at most 3840x2160"), "{err}");
-    assert!(h264_soft::Encoder::open(&config(2160, 3840)).is_ok());
+        .expect("7680x2160 refused");
+    assert!(err.to_string().contains("level 5.2"), "{err}");
+    assert!(!super::h264_fits(
+        7680,
+        2160,
+        30,
+        EncoderPreference::Software
+    ));
+
+    let (width, height) = (5120, 1440);
+    let mut encoder = h264_soft::Encoder::open(&config(width, height)).unwrap();
+    let source = pictures(width, height, 4, YuvLayout::I420);
+    let frames = encode(&mut encoder, &source, &[]);
+    assert_eq!(frames.len(), 4);
+    let decoded = decode(&mut h264_soft::Decoder::open().unwrap(), &frames);
+    check_decoded("OpenH264 5120x1440", &decoded, &source);
 }
 
 #[test]
@@ -559,19 +579,19 @@ fn run(command: &mut Command) -> Vec<u8> {
 /// Access units with their pts, in decode order.
 type Stream = Vec<(Vec<u8>, Duration)>;
 
-/// A High-profile x264 stream with B-pyramids, plus ffmpeg's own decode as
-/// I420 pictures in presentation order. `None` without an ffmpeg CLI that
-/// has libx264.
-fn x264_b_frames(dir: &Path) -> Option<(Stream, Vec<Yuv420>)> {
+/// A High-profile (CABAC) x264 stream made with extra `options`, plus
+/// ffmpeg's own decode as I420 pictures in presentation order. `None`
+/// without an ffmpeg CLI that has libx264.
+fn x264_stream(dir: &Path, options: &[&str]) -> Option<(Stream, Vec<Yuv420>)> {
     let encoders = Command::new("ffmpeg")
         .args(["-hide_banner", "-encoders"])
         .output();
     if !encoders.is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains("libx264")) {
-        eprintln!("skipping: no ffmpeg CLI with libx264 to make a B-frame stream");
+        eprintln!("skipping: no ffmpeg CLI with libx264 to make an x264 stream");
         return None;
     }
     let (width, height, count) = (192, 108, 30);
-    let mp4 = dir.join("b.mp4");
+    let mp4 = dir.join("x264.mp4");
     run(Command::new("ffmpeg")
         .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
         .arg(format!("testsrc2=size={width}x{height}:rate=30"))
@@ -582,15 +602,10 @@ fn x264_b_frames(dir: &Path) -> Option<(Stream, Vec<Yuv420>)> {
             "libx264",
             "-profile:v",
             "high",
-            "-bf",
-            "3",
-            "-b_strategy",
-            "0",
-            "-g",
-            "12",
             "-pix_fmt",
             "yuv420p",
         ])
+        .args(options)
         .arg(&mp4));
     let packets = String::from_utf8(run(Command::new("ffprobe")
         .args([
@@ -623,10 +638,6 @@ fn x264_b_frames(dir: &Path) -> Option<(Stream, Vec<Yuv420>)> {
         ]));
     let units = access_units(&annexb);
     assert_eq!(units.len(), pts.len(), "access units vs packets");
-    assert!(
-        pts.windows(2).any(|w| w[1] < w[0]),
-        "stream has no reordered B-frames"
-    );
     let raw = run(Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(&mp4)
@@ -675,9 +686,15 @@ fn check_reordering(
 #[test]
 fn decoders_reorder_b_frames_into_presentation_order() {
     let dir = tempfile::tempdir().unwrap();
-    let Some((stream, reference)) = x264_b_frames(dir.path()) else {
+    let Some((stream, reference)) =
+        x264_stream(dir.path(), &["-bf", "3", "-b_strategy", "0", "-g", "12"])
+    else {
         return;
     };
+    assert!(
+        stream.windows(2).any(|w| w[1].1 < w[0].1),
+        "stream has no reordered B-frames"
+    );
     // OpenH264's B-frame prediction is a few rounding steps off the spec
     // (70-85 dB from ffmpeg on some pictures); a misplaced picture would
     // score under 30.
@@ -690,6 +707,33 @@ fn decoders_reorder_b_frames_into_presentation_order() {
     let _gpu = gpu_lock();
     if let Some(mut decoder) = vulkan_decoder() {
         // Hardware decoding is bit-exact.
+        check_reordering(&mut decoder, &stream, &reference, f64::INFINITY);
+    }
+}
+
+/// CABAC pictures of several slices decode on the GPU exactly as ffmpeg
+/// decodes them, the same on every run (the bitstream padding of
+/// `aligned_access_unit` in CABAC streams, next to the CAVLC case of
+/// `vulkan_decodes_multi_slice_streams_exactly`).
+#[test]
+fn vulkan_decodes_multi_slice_cabac_streams_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some((stream, reference)) = x264_stream(dir.path(), &["-bf", "0", "-slices", "4"]) else {
+        return;
+    };
+    assert_eq!(
+        nal_types(&stream[1].0)
+            .into_iter()
+            .filter(|&t| t == 1)
+            .count(),
+        4,
+        "4 slices per picture"
+    );
+    let _gpu = gpu_lock();
+    for _ in 0..5 {
+        let Some(mut decoder) = vulkan_decoder() else {
+            return;
+        };
         check_reordering(&mut decoder, &stream, &reference, f64::INFINITY);
     }
 }

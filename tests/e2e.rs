@@ -9,7 +9,7 @@ mod session;
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use quikscope::raster::Image;
@@ -793,17 +793,8 @@ fn quit_and_sigterm_during_a_recording_save_a_playable_file() {
         };
         // Our own child rather than `start_daemon`'s, so it can be signalled.
         let log = s.root().join("own-daemon.log");
-        let mut daemon = s
-            .command(session::QUIKSCOPE)
-            .arg("daemon")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::fs::File::create(&log).unwrap())
-            .spawn()
-            .unwrap();
+        let mut daemon = own_daemon(&s, &log);
         let log_text = || std::fs::read_to_string(&log).unwrap_or_default();
-        wait_until("daemon ready", Duration::from_secs(20), || {
-            log_text().contains("daemon ready")
-        });
         let version = env!("CARGO_PKG_VERSION");
         assert_eq!(
             stdout(&s.quikscope(&["version"])),
@@ -866,6 +857,109 @@ fn quit_and_sigterm_during_a_recording_save_a_playable_file() {
     }
 }
 
+/// Starts `quikscope daemon` as the test's own child, logging to `log`, so
+/// it can be killed.
+fn own_daemon(s: &Session, log: &Path) -> std::process::Child {
+    let daemon = s
+        .command(session::QUIKSCOPE)
+        .arg("daemon")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(log).unwrap())
+        .spawn()
+        .unwrap();
+    wait_until("daemon ready", Duration::from_secs(20), || {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .contains("daemon ready")
+    });
+    daemon
+}
+
+/// A daemon killed mid-recording leaves a classic MOV's partial file and an
+/// animation's master; the next daemon publishes the first, reopens the
+/// second and leaves no placeholders behind.
+#[test]
+fn a_killed_daemon_s_recordings_are_recovered_at_the_next_start() {
+    use quikscope::media::{Kind, decode};
+    let Some(s) = Session::start() else {
+        return;
+    };
+    let config = s.root().join("config/quikscope/config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("[record]\nvideo_format = \"mov\"\nanimation_format = \"gif\"\n");
+    std::fs::write(&config, text).unwrap();
+    let dir = s.root().join("home/Videos/Screencasts");
+    let names = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .map(|d| {
+                d.map(|e| e.unwrap().file_name().into_string().unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    for (round, kind) in ["video", "animation"].into_iter().enumerate() {
+        let log = s.root().join(format!("killed-{round}.log"));
+        let mut daemon = own_daemon(&s, &log);
+        let out = s.quikscope(&[
+            "record",
+            kind,
+            "-g",
+            "10,10 320x240",
+            "--no-audio",
+            "--no-notify",
+            "--no-clipboard",
+        ]);
+        assert!(
+            out.status.success(),
+            "{}",
+            std::fs::read_to_string(&log).unwrap()
+        );
+        // Long enough for a few one-second fragments to reach the disk.
+        std::thread::sleep(Duration::from_millis(3500));
+        daemon.kill().unwrap();
+        daemon.wait().unwrap();
+        assert!(
+            names().iter().any(|n| n.ends_with(".part")),
+            "a partial file is left: {:?}",
+            names()
+        );
+
+        let log = s.root().join(format!("recovering-{round}.log"));
+        let mut daemon = own_daemon(&s, &log);
+        let log_text = || std::fs::read_to_string(&log).unwrap_or_default();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !log_text().contains("Recovered a recording") {
+            assert!(
+                Instant::now() < deadline,
+                "no recovery; files {:?}; log:\n{}",
+                names(),
+                log_text()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(s.quikscope(&["quit"]).status.success(), "{}", log_text());
+        daemon.wait().unwrap();
+        let left = names();
+        assert!(
+            !left.iter().any(|n| n.ends_with(".part")),
+            "no partial files: {left:?}"
+        );
+        if kind == "video" {
+            assert_eq!(left.len(), 1, "{left:?}");
+            let info = decode::probe(&dir.join(&left[0])).unwrap();
+            assert_eq!(info.kind, Kind::Video);
+            assert!(info.duration >= Duration::from_millis(500), "{info:?}");
+        } else {
+            // The animation was never encoded: no empty GIF placeholder,
+            // its master opens in the annotator instead.
+            assert_eq!(left.len(), 1, "only the recovered video: {left:?}");
+            assert!(log_text().contains("unsaved animation"), "{}", log_text());
+        }
+    }
+}
+
 #[test]
 fn record_status_reports_saving_until_a_long_gif_is_written() {
     let Some(mut s) = Session::start() else {
@@ -901,18 +995,26 @@ fn record_status_reports_saving_until_a_long_gif_is_written() {
         if seen.last() != Some(&status) {
             seen.push(status.clone());
         }
-        if status == "ok record saving" {
+        if status.starts_with("ok record saving") {
             let refused = request(&s, "record video geometry=0,0,64x64 no-audio no-notify");
             assert!(refused.contains("still being saved"), "{refused}");
         }
-        if seen.iter().any(|s| s == "ok record saving") && status == "ok record idle" {
+        let saving = seen.iter().any(|s| s.starts_with("ok record saving"));
+        if saving && status == "ok record idle" {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    // The encode reports how far it got, in order.
+    let percents: Vec<u8> = seen
+        .iter()
+        .filter_map(|s| s.strip_prefix("ok record saving "))
+        .map(|p| p.parse().unwrap())
+        .collect();
+    assert!(!percents.is_empty(), "never reported saving: {seen:?}");
     assert!(
-        seen.iter().any(|s| s == "ok record saving"),
-        "never reported saving: {seen:?}"
+        percents.is_sorted() && percents.iter().all(|p| *p <= 100),
+        "{seen:?}"
     );
     assert_eq!(seen.last().map(String::as_str), Some("ok record idle"));
     let out = s.finish(stop, Duration::from_secs(60));
@@ -920,6 +1022,50 @@ fn record_status_reports_saving_until_a_long_gif_is_written() {
     let path = PathBuf::from(stdout(&out));
     assert_eq!(path.extension().unwrap(), "gif", "{}", path.display());
     assert_eq!(&std::fs::read(&path).unwrap()[..6], b"GIF89a");
+}
+
+/// `record cancel` while a long GIF is being encoded stops the encode: no
+/// GIF (nor its placeholder) is left, the stop request reports the cancel,
+/// and the daemon keeps the lossless recording.
+#[test]
+fn cancelling_a_save_keeps_the_animation_s_lossless_recording() {
+    let Some(mut s) = Session::start() else {
+        return;
+    };
+    s.start_daemon();
+    let out = s.quikscope(&["record", "gif", "screen", "--fps", "30", "--no-notify"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::thread::sleep(Duration::from_millis(2500));
+    let stop = s.spawn_quikscope(&["record", "stop"]);
+    wait_until("the save", Duration::from_secs(30), || {
+        request(&s, "record status").starts_with("ok record saving ")
+    });
+    let reply = request(&s, "record cancel");
+    assert!(reply.starts_with("ok record saving"), "{reply}");
+    wait_until("the cancel", Duration::from_secs(30), || {
+        request(&s, "record status") == "ok record idle"
+    });
+    let out = s.finish(stop, Duration::from_secs(30));
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cancelled"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dir = s.root().join("home/Videos/Screencasts");
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+    assert!(
+        s.daemon_log().contains("lossless recording is kept"),
+        "{}",
+        s.daemon_log()
+    );
 }
 
 #[test]

@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context as _, Result, bail};
@@ -16,11 +17,12 @@ use super::{
 use crate::config::{self, Config};
 use crate::geom::IRect;
 use crate::ipc::{Mode, RecordAction, RecordOptions, RecordState, RecordStatus, Response};
-use crate::media::record::{Recorded, Session, SessionConfig};
+use crate::media::record::{Cancelled, Recorded, Session, SessionConfig};
 use crate::media::{self, EncoderPreference, Kind, OutputFormat};
 use crate::output::OutputFile;
 use crate::platform::{Platform, RecordTarget, RecordingStatus, TrayState};
 use crate::raster::Image;
+use crate::ui::jobs::{self, Job};
 use crate::ui::overlay::Selected;
 use crate::ui::{self, Animation, Shot};
 
@@ -38,7 +40,27 @@ pub(super) enum Slot {
     Idle,
     Starting,
     Active(Box<Active>),
-    Stopping(Kind),
+    Stopping(Saving),
+}
+
+/// A stopped recording being written, or a discarded one torn down.
+#[derive(Clone)]
+pub(super) struct Saving {
+    kind: Kind,
+    /// Fraction written (f32 bits), for status and the tray; `None` while
+    /// a discard tears down.
+    progress: Option<Arc<AtomicU32>>,
+    /// Set by `record cancel` or the tray to stop the save: a video is
+    /// discarded, an animation keeps its lossless master.
+    cancel: Arc<AtomicBool>,
+}
+
+impl Saving {
+    fn percent(&self) -> Option<u8> {
+        self.progress
+            .as_ref()
+            .map(|p| (f32::from_bits(p.load(Ordering::Relaxed)).clamp(0.0, 1.0) * 100.0) as u8)
+    }
 }
 
 pub(super) struct Active {
@@ -55,6 +77,8 @@ pub(super) struct Active {
     finish: Finish,
     /// Physical pixels per logical pixel of the recorded output.
     scale: f32,
+    /// Quitting waits until the recording is saved or discarded.
+    job: Job,
 }
 
 /// What happens when the recording stops, fixed when it starts.
@@ -114,6 +138,8 @@ async fn start(o: RecordOptions, cx: &mut AsyncApp) -> Result<Option<Response>> 
     let Some(rect) = target_rect(&o, &platform, cursor, cx).await? else {
         return Ok(None);
     };
+    // From here on quitting waits for the start to finish or give up.
+    let job = jobs::begin()?;
     let outputs = {
         let platform = platform.clone();
         cx.background_spawn(async move { platform.selection_outputs() })
@@ -155,24 +181,32 @@ async fn start(o: RecordOptions, cx: &mut AsyncApp) -> Result<Option<Response>> 
             let session_config = SessionConfig {
                 output,
                 format,
-                master,
+                master: master.clone(),
                 fps,
                 audio,
                 encoder,
                 fragmented,
             };
-            Ok::<_, anyhow::Error>((Session::start(session_config, source)?, path))
+            let session = Session::start(session_config, source)?;
+            // Names the reserved output, so a recovery can tidy it up.
+            if kind == Kind::Animation
+                && let Err(e) =
+                    std::fs::write(pending_marker(&master), path.to_str().unwrap_or_default())
+            {
+                log::warn!("marking {} as unsaved: {e}", master.display());
+            }
+            Ok::<_, anyhow::Error>((session, path))
         })
         .await?
     };
     if daemon(cx, |d, _| d.quitting) {
-        // Nothing was recorded yet; quitting does not wait for a start.
-        cx.background_spawn(async move { session.cancel() }).await;
+        // Nothing worth keeping was recorded yet.
+        discard(session, &master, cx).await;
         bail!("quikscope is quitting");
     }
     let warnings = session.warnings().join("\n");
     if !warnings.is_empty() {
-        notify_error("Recording without some audio", &warnings, cx);
+        notify_error("Recording started with a warning", &warnings, cx);
     }
     let (width, height) = session.size();
     // Whole outputs get no outline: there is no "outside" left to draw in.
@@ -199,6 +233,7 @@ async fn start(o: RecordOptions, cx: &mut AsyncApp) -> Result<Option<Response>> 
             outline,
             finish,
             scale,
+            job,
         }))
     });
     watch_failure(id, cx);
@@ -331,8 +366,8 @@ fn watch_failure(id: u64, cx: &mut AsyncApp) {
                 Ok(Some(message)) => {
                     log::error!("recording stopped: {message}");
                     notify_error("Recording stopped", &message, cx);
-                    if let Some(active) = take_active(cx)
-                        && let Err(e) = save(active, cx).await
+                    if let Some((active, saving)) = take_active(true, cx)
+                        && let Err(e) = save(active, saving, cx).await
                     {
                         log::error!("saving the interrupted recording: {e:#}");
                         notify_failure("Recording failed", &e, cx);
@@ -346,12 +381,17 @@ fn watch_failure(id: u64, cx: &mut AsyncApp) {
 }
 
 /// Moves the running recording out of the slot, which reads `Stopping`
-/// until [`save`] (or a discard) finishes.
-fn take_active(cx: &mut AsyncApp) -> Option<Box<Active>> {
+/// until [`save`] (with `progress`) or a discard finishes.
+fn take_active(progress: bool, cx: &mut AsyncApp) -> Option<(Box<Active>, Saving)> {
     daemon(cx, |d, _| match std::mem::take(&mut d.recording) {
         Slot::Active(active) => {
-            d.recording = Slot::Stopping(active.kind);
-            Some(active)
+            let saving = Saving {
+                kind: active.kind,
+                progress: progress.then(|| Arc::new(AtomicU32::new(0))),
+                cancel: Arc::new(AtomicBool::new(false)),
+            };
+            d.recording = Slot::Stopping(saving.clone());
+            Some((active, saving))
         }
         other => {
             d.recording = other;
@@ -362,30 +402,42 @@ fn take_active(cx: &mut AsyncApp) -> Option<Box<Active>> {
 
 /// Stops the running recording, saves it and tells the user.
 async fn stop(cx: &mut AsyncApp) -> Result<Option<Response>> {
-    let active = take_active(cx).context("nothing is being recorded")?;
-    save(active, cx).await
+    let (active, saving) = take_active(true, cx).context("nothing is being recorded")?;
+    save(active, saving, cx).await
 }
 
-/// Stops and saves a running recording and waits for a save in progress,
-/// before the daemon quits. A recording still starting has nothing to save:
-/// `start` discards it when it sees the daemon quitting.
-pub(super) async fn finish_for_quit(cx: &mut AsyncApp) {
-    loop {
-        if let Some(active) = take_active(cx) {
-            if let Err(e) = save(active, cx).await {
-                log::error!("saving the recording before quitting: {e:#}");
-                notify_failure("Recording failed", &e, cx);
-            }
-            continue;
-        }
-        if !daemon(cx, |d, _| matches!(d.recording, Slot::Stopping(_))) {
-            return;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(50))
-            .await;
+/// Stops and saves a running recording before the daemon quits. Saves
+/// already under way, and a recording still starting, are jobs the quit
+/// waits for (see [`jobs`]); `start` discards a recording when it sees the
+/// daemon quitting.
+pub(super) async fn stop_for_quit(cx: &mut AsyncApp) {
+    if let Some((active, saving)) = take_active(true, cx)
+        && let Err(e) = save(active, saving, cx).await
+    {
+        log::error!("saving the recording before quitting: {e:#}");
+        notify_failure("Recording failed", &e, cx);
     }
 }
+
+/// Throws a recording away, master included: nothing is left to recover.
+async fn discard(session: Session, master: &Path, cx: &mut AsyncApp) {
+    let marker = pending_marker(master);
+    cx.background_spawn(async move {
+        session.cancel();
+        let _ = std::fs::remove_file(marker);
+    })
+    .await;
+}
+
+/// Beside an animation's master while its final file is not saved; the
+/// next daemon start recovers masters left with one (see [`recover`]).
+fn pending_marker(master: &Path) -> PathBuf {
+    let mut name = master.as_os_str().to_owned();
+    name.push(PENDING);
+    PathBuf::from(name)
+}
+
+const PENDING: &str = ".pending";
 
 /// What a stopped session left behind.
 enum Saved {
@@ -397,9 +449,11 @@ enum Saved {
         info: media::MediaInfo,
         error: anyhow::Error,
     },
+    /// A video whose save was cancelled: nothing kept.
+    Discarded,
 }
 
-async fn save(active: Box<Active>, cx: &mut AsyncApp) -> Result<Option<Response>> {
+async fn save(active: Box<Active>, saving: Saving, cx: &mut AsyncApp) -> Result<Option<Response>> {
     let Active {
         id,
         kind,
@@ -410,21 +464,42 @@ async fn save(active: Box<Active>, cx: &mut AsyncApp) -> Result<Option<Response>
         outline,
         finish,
         scale,
+        job: _job,
     } = *active;
     drop(outline);
     cx.update(update_tray);
     let size = session.size();
     let duration = session.elapsed();
-    let saved = {
-        let master = master.clone();
+    let task = {
+        let (master, saving) = (master.clone(), saving.clone());
         cx.background_spawn(async move {
-            match session.stop() {
+            let report = |fraction: f32| {
+                if let Some(progress) = &saving.progress {
+                    progress.store(fraction.to_bits(), Ordering::Relaxed);
+                }
+            };
+            match session.stop(&report, &saving.cancel) {
                 Ok(recorded) => Ok(Saved::Done(recorded)),
                 Err(error) => salvage(kind, format, path, master, size, duration, error),
             }
         })
-        .await
     };
+    // The tray follows the percentage while the save runs.
+    let ticker = cx.spawn(async move |cx| {
+        let mut shown = saving.percent();
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            let now = saving.percent();
+            if now != shown {
+                shown = now;
+                cx.update(update_tray);
+            }
+        }
+    });
+    let saved = task.await;
+    drop(ticker);
     daemon(cx, |d, _| d.recording = Slot::Idle);
     cx.update(update_tray);
     match saved.context("finishing the recording")? {
@@ -437,10 +512,26 @@ async fn save(active: Box<Active>, cx: &mut AsyncApp) -> Result<Option<Response>
                 recorded.encoder,
                 recorded.path.display()
             );
+            if kind == Kind::Animation {
+                // Saved: a crash from now on has nothing to recover.
+                let marker = pending_marker(&master);
+                cx.background_spawn(async move { std::fs::remove_file(marker) })
+                    .await
+                    .unwrap_or_else(|e| log::warn!("removing the unsaved mark: {e}"));
+            }
             finish_recording(id, kind, scale, recorded, finish, cx).await
         }
+        Saved::Discarded => {
+            log::info!("recording discarded while saving");
+            Ok(None)
+        }
         Saved::MasterOnly { first, info, error } => {
-            log::error!("exporting the animation failed; keeping its master: {error:#}");
+            let cancelled = error.is::<Cancelled>();
+            if cancelled {
+                log::info!("{error:#}");
+            } else {
+                log::error!("exporting the animation failed; keeping its master: {error:#}");
+            }
             let thumbnail = first.thumbnail(384);
             let shot = Shot::new(id, Arc::new(first), scale, None).with_animation(Animation {
                 path: master,
@@ -454,16 +545,22 @@ async fn save(active: Box<Active>, cx: &mut AsyncApp) -> Result<Option<Response>
                     d.config.notification_timeout_ms,
                 )
             });
+            let summary = if cancelled {
+                "Animation export cancelled"
+            } else {
+                "Animation export failed"
+            };
             let body = format!("{error:#} — click to open it and export it from the editor");
             if let Some(n) = notifier {
                 cx.background_spawn(async move {
-                    if let Err(e) =
-                        n.shot_captured(id, &thumbnail, "Animation export failed", &body, timeout)
-                    {
+                    if let Err(e) = n.shot_captured(id, &thumbnail, summary, &body, timeout) {
                         log::warn!("notification failed: {e:#}");
                     }
                 })
                 .detach();
+            }
+            if cancelled {
+                return Ok(None);
             }
             if finish.edit && !daemon(cx, |d, _| d.quitting) {
                 cx.update(|cx| open_editor(id, EditorTool::Default, cx))?;
@@ -489,6 +586,9 @@ fn salvage(
     duration: Duration,
     error: anyhow::Error,
 ) -> Result<Saved> {
+    if kind == Kind::Video && error.is::<Cancelled>() {
+        return Ok(Saved::Discarded);
+    }
     let source = match kind {
         Kind::Video => path.clone(),
         Kind::Animation => master.clone(),
@@ -596,6 +696,106 @@ async fn finish_recording(
     }))
 }
 
+/// At start-up, recovers what a daemon that died (crash, `kill -9`, power
+/// loss) was still writing: recordings partly written are published,
+/// masters of unsaved animations open in the annotator, and leftover
+/// masters of other runs are removed. One notification sums it up.
+pub(super) async fn recover(masters_root: PathBuf, started: SystemTime, cx: &mut AsyncApp) {
+    let (own, dirs, animation_format) = daemon(cx, |d, _| {
+        (
+            d.masters.dir.clone(),
+            vec![d.config.record.save_dir(), d.config.save_dir()],
+            d.config.record.animation_format(),
+        )
+    });
+    let (masters, videos) = cx
+        .background_spawn(async move {
+            let masters = recover_masters(&masters_root, &own);
+            clean_masters(&masters_root, &own);
+            let abandoned: Vec<PathBuf> = masters.iter().filter_map(|(_, o)| o.clone()).collect();
+            (masters, recover_parts(&dirs, started, &abandoned))
+        })
+        .await;
+    let mut last = None;
+    let mut animations = 0;
+    for (master, output) in masters {
+        let read = {
+            let master = master.clone();
+            cx.background_spawn(async move { first_frame(&master) })
+                .await
+        };
+        let (first, info) = match read {
+            Ok(read) => read,
+            Err(e) => {
+                log::warn!("recovered master {} is unreadable: {e:#}", master.display());
+                let _ = std::fs::remove_file(&master);
+                continue;
+            }
+        };
+        let format = output
+            .as_deref()
+            .and_then(OutputFormat::from_path)
+            .unwrap_or(animation_format);
+        let thumbnail = first.thumbnail(384);
+        let id = daemon(cx, |d, _| d.media.allocate());
+        let shot = Shot::new(id, Arc::new(first), 1.0, None).with_animation(Animation {
+            path: master,
+            info,
+            format,
+        });
+        insert_shot(shot, cx);
+        animations += 1;
+        last = Some((id, thumbnail));
+    }
+    for path in &videos {
+        let id = daemon(cx, |d, _| {
+            let id = d.media.allocate();
+            d.media.add_video(id, path.clone());
+            id
+        });
+        let p = path.clone();
+        let thumbnail = cx
+            .background_spawn(async move { media::decode::thumbnail(&p, 384) })
+            .await
+            .unwrap_or_else(|_| Image::filled(1, 1, [0, 0, 0, 0]));
+        last = Some((id, thumbnail));
+    }
+    let Some((id, thumbnail)) = last else {
+        return;
+    };
+    let count = animations + videos.len();
+    let summary = if count == 1 {
+        "Recovered a recording".to_owned()
+    } else {
+        format!("Recovered {count} recordings")
+    };
+    // Videos were cut short when quikscope stopped; animations were never
+    // encoded (or their save was cancelled) and export from the editor.
+    let mut lines: Vec<String> = videos
+        .iter()
+        .map(|p| format!("saved {}", ui::editor::tilde(p)))
+        .collect();
+    if animations > 0 {
+        lines.push(format!("{animations} unsaved animation(s) to export"));
+    }
+    let body = format!("{} — click to open the newest", lines.join("; "));
+    log::info!("{summary}: {body}");
+    let (notifier, timeout) = daemon(cx, |d, _| {
+        (
+            d.platform.notifier.clone(),
+            d.config.notification_timeout_ms,
+        )
+    });
+    if let Some(n) = notifier {
+        cx.background_spawn(async move {
+            if let Err(e) = n.shot_captured(id, &thumbnail, &summary, &body, timeout) {
+                log::warn!("notification failed: {e:#}");
+            }
+        })
+        .detach();
+    }
+}
+
 /// First frame of an animation and its facts.
 pub(super) fn first_frame(path: &Path) -> Result<(Image, media::MediaInfo)> {
     let mut decoder = media::decode::Decoder::open(path)?;
@@ -619,15 +819,34 @@ pub(super) async fn control(action: RecordAction, cx: &mut AsyncApp) -> Result<O
     match action {
         RecordAction::Stop => stop(cx).await,
         RecordAction::Cancel => {
-            let active = take_active(cx).context("nothing is being recorded")?;
+            // During a save, cancelling stops the encode: a video is
+            // discarded, an animation keeps its lossless master (the save
+            // reports which).
+            let saving = daemon(cx, |d, _| match &d.recording {
+                Slot::Stopping(s) if s.progress.is_some() => Some(s.clone()),
+                _ => None,
+            });
+            if let Some(saving) = saving {
+                saving.cancel.store(true, Ordering::Release);
+                log::info!(
+                    "cancelling the save of the {} recording",
+                    saving.kind.as_str()
+                );
+                return Ok(Some(status(cx)));
+            }
+            let (active, _) = take_active(false, cx).context("nothing is being recorded")?;
             let Active {
-                session, outline, ..
+                session,
+                outline,
+                master,
+                job: _job,
+                ..
             } = *active;
             drop(outline);
             cx.update(update_tray);
             // The slot stays `Stopping` until the capture and encoder are
             // gone: a new recording must not race their teardown.
-            cx.background_spawn(async move { session.cancel() }).await;
+            discard(session, &master, cx).await;
             daemon(cx, |d, _| d.recording = Slot::Idle);
             cx.update(update_tray);
             log::info!("recording discarded");
@@ -668,7 +887,7 @@ fn status(cx: &mut AsyncApp) -> Response {
                 elapsed_ms: a.session.elapsed().as_millis() as u64,
                 paused: a.session.is_paused(),
             }),
-            Slot::Stopping(_) => RecordStatus::Saving,
+            Slot::Stopping(saving) => RecordStatus::Saving(saving.percent()),
             Slot::Idle | Slot::Starting => RecordStatus::Idle,
         })
     })
@@ -678,7 +897,10 @@ pub(super) async fn audio_devices(cx: &mut AsyncApp) -> Result<Option<Response>>
     let devices = cx
         .background_spawn(async { media::audio::devices() })
         .await?;
-    daemon(cx, |d, _| d.audio_devices = devices.clone());
+    daemon(cx, |d, _| {
+        d.audio_devices = devices.clone();
+        d.devices_listed = Some(Instant::now());
+    });
     cx.update(update_tray);
     Ok(Some(Response::AudioDevices(devices)))
 }
@@ -699,7 +921,8 @@ impl Masters {
     /// Claims this instance's directory under `root`. Masters an earlier
     /// run of this instance left behind belong to shots that no longer
     /// exist: that directory is moved aside first and removed with every
-    /// other directory no running daemon holds (see [`clean_masters`]).
+    /// other directory no running daemon holds (see [`clean_masters`]),
+    /// after [`recover_masters`] took out those never saved.
     pub(super) fn claim(root: &Path, socket: &Path) -> Masters {
         let dir = root.join(instance_name(socket));
         // `bind` already refused to start beside a live daemon on this
@@ -764,6 +987,181 @@ pub(super) fn clean_masters(root: &Path, own: &Path) {
     }
 }
 
+/// Lossless masters of animations whose final file was never saved (the
+/// daemon died while recording or encoding), moved from directories no
+/// running daemon holds into this instance's `own`, before
+/// [`clean_masters`] removes the rest. Each comes with the output it was
+/// recorded for. A master is recovered once: its mark goes.
+pub(super) fn recover_masters(root: &Path, own: &Path) -> Vec<(PathBuf, Option<PathBuf>)> {
+    let mut recovered = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return recovered;
+    };
+    for dir in entries.flatten().map(|e| e.path()) {
+        if dir == own || !dir.is_dir() || !lock_is_free(&dir.join(LOCK)) {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for marker in files.flatten().map(|e| e.path()) {
+            let Some(master_name) = marker
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(PENDING))
+            else {
+                continue;
+            };
+            let master = dir.join(master_name);
+            let output = std::fs::read_to_string(&marker)
+                .ok()
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from);
+            let _ = std::fs::remove_file(&marker);
+            let moved = own.join(format!("recovered-{master_name}"));
+            match std::fs::rename(&master, &moved) {
+                Ok(()) => recovered.push((moved, output)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("recovering {}: {e}", master.display()),
+            }
+        }
+    }
+    recovered
+}
+
+/// Recordings a dead daemon was still writing in `dirs`, published under
+/// a free name; partial files and empty placeholders that are of no use
+/// are removed. Only files following [`OutputFile`]'s naming, of a process
+/// that no longer runs, and older than `before` (this daemon's start) are
+/// touched. A video's partial file is published when it plays (MP4, MOV
+/// and Matroska are written in fragments that do); other partial files are
+/// left for the user unless they belong to an `abandoned` output, an
+/// animation whose master was recovered instead.
+pub(super) fn recover_parts(
+    dirs: &[PathBuf],
+    before: SystemTime,
+    abandoned: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut recovered = Vec::new();
+    let mut seen = Vec::new();
+    for dir in dirs {
+        let Ok(canonical) = std::fs::canonicalize(dir) else {
+            continue;
+        };
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.push(canonical);
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let part = entry.path();
+            let Some((target, pid)) = part_owner(&part) else {
+                continue;
+            };
+            let old = |m: &std::fs::Metadata| m.is_file() && m.modified().is_ok_and(|t| t < before);
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if !old(&meta) || pid_alive(pid) {
+                continue;
+            }
+            // The empty placeholder its writer reserved, if there is one.
+            let placeholder = std::fs::metadata(&target).is_ok_and(|m| old(&m) && m.len() == 0);
+            let tidy = |part: &Path| {
+                let _ = std::fs::remove_file(part);
+                if placeholder {
+                    let _ = std::fs::remove_file(&target);
+                }
+            };
+            if meta.len() == 0 || abandoned.contains(&target) {
+                tidy(&part);
+                continue;
+            }
+            if !is_recording(&target) || !plays(&part) {
+                log::warn!(
+                    "left {} from an earlier run: not a recording that plays",
+                    part.display()
+                );
+                continue;
+            }
+            if placeholder {
+                let _ = std::fs::remove_file(&target);
+            }
+            let published = OutputFile::reserve(&target).and_then(|output| {
+                std::fs::rename(&part, output.part())
+                    .with_context(|| format!("moving {}", part.display()))?;
+                output.commit()
+            });
+            match published {
+                Ok(path) => {
+                    log::info!("recovered {} as {}", part.display(), path.display());
+                    recovered.push(path);
+                }
+                Err(e) => log::warn!("recovering {}: {e:#}", part.display()),
+            }
+        }
+    }
+    recovered
+}
+
+/// The final path and writer pid of a partial file named by
+/// [`OutputFile`]: `<final name>.<pid>.<n>.part`.
+fn part_owner(part: &Path) -> Option<(PathBuf, u32)> {
+    let rest = part.file_name()?.to_str()?.strip_suffix(".part")?;
+    let (rest, n) = rest.rsplit_once('.')?;
+    n.parse::<u64>().ok()?;
+    let (name, pid) = rest.rsplit_once('.')?;
+    let pid = pid.parse::<u32>().ok()?;
+    (!name.is_empty()).then(|| (part.with_file_name(name), pid))
+}
+
+fn is_recording(path: &Path) -> bool {
+    OutputFormat::from_path(path).is_some_and(|f| f.is_video())
+}
+
+/// Whether a container our demuxer opens holds any media.
+fn plays(path: &Path) -> bool {
+    matches!(
+        media::container::open_demuxer(path),
+        Ok(Some(demuxer)) if !demuxer.duration().is_zero()
+    )
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    // SAFETY: signal 0 only asks whether the process exists.
+    pid == 0
+        || unsafe { libc::kill(pid, 0) } == 0
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, STILL_ACTIVE};
+    use windows::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is closed before returning; `code` outlives the call.
+    unsafe {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(process) => {
+                let mut code = 0;
+                let exited =
+                    GetExitCodeProcess(process, &mut code).is_ok() && code != STILL_ACTIVE.0 as u32;
+                let _ = CloseHandle(process);
+                !exited
+            }
+            // Someone else's process: running.
+            Err(e) => e.code() == ERROR_ACCESS_DENIED.to_hresult(),
+        }
+    }
+}
+
 /// Whether no running daemon holds the lock at `path`. A directory without
 /// a lock file belongs to nobody: daemons create it before any master.
 fn lock_is_free(path: &Path) -> bool {
@@ -786,8 +1184,26 @@ fn instance_name(socket: &Path) -> String {
     format!("{stem}-{:08x}", hasher.finish() as u32)
 }
 
-/// Lists audio devices in the background and refreshes the tray with them.
+/// How long a device listing stays fresh. Tray menus ask again every time
+/// they open, and each listing opens a sound server connection.
+const DEVICES_FRESH: Duration = Duration::from_secs(10);
+
+/// Lists audio devices in the background, unless that happened moments
+/// ago, and refreshes the tray with them.
 pub(super) fn refresh_devices(cx: &mut App) {
+    use gpui::BorrowAppContext as _;
+    let fresh = cx.update_global::<Daemon, _>(|d, _| {
+        let fresh = d
+            .devices_listed
+            .is_some_and(|at| at.elapsed() < DEVICES_FRESH);
+        if !fresh {
+            d.devices_listed = Some(Instant::now());
+        }
+        fresh
+    });
+    if fresh {
+        return;
+    }
     cx.spawn(async move |cx| {
         match cx.background_spawn(async { media::audio::devices() }).await {
             Ok(devices) => daemon(cx, |d, _| d.audio_devices = devices),
@@ -893,13 +1309,15 @@ fn tray_state(d: &Daemon) -> TrayState {
                 at: Instant::now(),
                 paused: a.session.is_paused(),
                 saving: false,
+                progress: None,
             }),
-            Slot::Stopping(kind) => Some(RecordingStatus {
-                kind: *kind,
+            Slot::Stopping(saving) => Some(RecordingStatus {
+                kind: saving.kind,
                 elapsed: Duration::ZERO,
                 at: Instant::now(),
                 paused: true,
                 saving: true,
+                progress: saving.percent(),
             }),
             Slot::Idle | Slot::Starting => None,
         },
@@ -962,6 +1380,132 @@ mod tests {
         assert_eq!(clock(Duration::from_millis(5_900)), "0:05");
         assert_eq!(clock(Duration::from_secs(754)), "12:34");
         assert_eq!(clock(Duration::from_secs(3_725)), "1:02:05");
+    }
+
+    /// A process id nothing runs under any more.
+    fn dead_pid() -> u32 {
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("cmd")
+                .args(["/c", "exit"])
+                .spawn()
+        } else {
+            std::process::Command::new("true").spawn()
+        }
+        .unwrap();
+        child.wait().unwrap();
+        child.id()
+    }
+
+    /// A short Opus-in-Matroska file, as a recording's partial file holds.
+    fn write_mkv(path: &Path) {
+        use media::codec::opus::{Encoder, FRAME};
+        use media::container::{Codec, Container, Packet, Track, TrackKind, create_muxer};
+        let mut opus = Encoder::new(64_000).unwrap();
+        let packets: Vec<_> = (0..10u64)
+            .map(|i| Packet {
+                track: 0,
+                data: opus.encode(&vec![0.0; FRAME * 2]).unwrap(),
+                pts: Duration::from_millis(20 * i),
+                duration: Some(Duration::from_millis(20)),
+                keyframe: true,
+            })
+            .collect();
+        let track = Track {
+            codec: Codec::Opus,
+            kind: TrackKind::Audio {
+                rate: 48_000,
+                channels: 2,
+            },
+            codec_private: opus.head(),
+        };
+        let mut muxer = create_muxer(path, Container::Mkv, &[track]).unwrap();
+        for packet in packets {
+            muxer.write(packet).unwrap();
+        }
+        muxer.finish().unwrap();
+    }
+
+    #[test]
+    fn part_names_give_the_final_path_and_writer() {
+        assert_eq!(
+            part_owner(Path::new("/r/rec_1.mp4.4242.7.part")),
+            Some((PathBuf::from("/r/rec_1.mp4"), 4242))
+        );
+        for other in [
+            "/r/rec.mp4",
+            "/r/rec.mp4.part",
+            "/r/rec.mp4.x.7.part",
+            "/r/.1.2.part",
+        ] {
+            assert_eq!(part_owner(Path::new(other)), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn crashed_writers_leave_playable_recordings_and_no_litter() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let (dead, alive) = (dead_pid(), std::process::id());
+        let file = |name: &str, bytes: &[u8]| std::fs::write(d.join(name), bytes).unwrap();
+        // A classic MP4/MOV/MKV recording: placeholder plus a partial file
+        // that plays.
+        file("rec.mkv", b"");
+        write_mkv(&d.join(format!("rec.mkv.{dead}.0.part")));
+        // A screenshot that never got written.
+        file("shot.png", b"");
+        file(&format!("shot.png.{dead}.1.part"), b"");
+        // Another writer, still running.
+        file(&format!("live.mkv.{alive}.2.part"), b"busy");
+        // Something partial that does not play: the user decides.
+        file(&format!("junk.mp4.{dead}.3.part"), b"not a video");
+        // An animation whose master was recovered instead.
+        file("anim.gif", b"");
+        file(&format!("anim.gif.{dead}.4.part"), b"GIF89a");
+
+        let before = SystemTime::now() + Duration::from_secs(1);
+        let recovered = recover_parts(&[d.to_owned(), d.to_owned()], before, &[d.join("anim.gif")]);
+        assert_eq!(recovered, [d.join("rec.mkv")]);
+        assert!(plays(&d.join("rec.mkv")));
+        let mut left: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        let mut expected = vec![
+            format!("junk.mp4.{dead}.3.part"),
+            format!("live.mkv.{alive}.2.part"),
+            "rec.mkv".to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(left, expected);
+
+        // Files from this run (newer than its start) are never touched.
+        file(&format!("new.mkv.{dead}.5.part"), b"");
+        assert!(recover_parts(&[d.to_owned()], SystemTime::UNIX_EPOCH, &[]).is_empty());
+        assert!(d.join(format!("new.mkv.{dead}.5.part")).exists());
+    }
+
+    #[test]
+    fn unsaved_masters_move_into_the_new_instance_once() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let old = root.join("quikscope-1-00000000.old-1");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("3-100.master"), b"master").unwrap();
+        std::fs::write(old.join("3-100.master.pending"), b"/v/rec.webp").unwrap();
+        std::fs::write(old.join("4-100.master"), b"saved").unwrap();
+        std::fs::write(old.join("5-100.master.pending"), b"").unwrap();
+        let own = Masters::claim(root, Path::new("/run/user/1/quikscope-1.sock"));
+        let recovered = recover_masters(root, &own.dir);
+        let moved = own.dir.join("recovered-3-100.master");
+        assert_eq!(
+            recovered,
+            [(moved.clone(), Some(PathBuf::from("/v/rec.webp")))]
+        );
+        assert_eq!(std::fs::read(&moved).unwrap(), b"master");
+        clean_masters(root, &own.dir);
+        assert!(!old.exists(), "the rest goes");
+        assert!(recover_masters(root, &own.dir).is_empty());
     }
 
     #[test]

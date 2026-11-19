@@ -575,6 +575,72 @@ fn blank() -> Document {
     Document::new(Arc::new(Image::filled(600, 400, [40, 40, 40, 255])), 1.0)
 }
 
+/// With a fixed `filename`, Ctrl+S never replaces a screenshot already
+/// there: the first save takes a free name, repeat saves update that file
+/// and Ctrl+Shift+S makes another.
+pub(super) fn still_save_never_overwrites_an_existing_screenshot() {
+    use quikscope::ui::editor::EditorServices;
+
+    let dir = tempfile::tempdir().unwrap();
+    let existing = dir.path().join("same.png");
+    std::fs::write(&existing, b"earlier screenshot").unwrap();
+    let config = quikscope::config::Config {
+        save_dir: dir.path().to_string_lossy().into_owned(),
+        filename: "same.png".into(),
+        ..Default::default()
+    };
+    let mut ui = Ui::new(blank());
+    ui.cx.update(|cx| {
+        cx.set_global(EditorServices {
+            config: Arc::new(config),
+            clipboard: None,
+            pick_color: None,
+            notifier: None,
+            clips: no_clips(),
+        })
+    });
+    let saves = |ui: &mut Ui, shift: bool| {
+        let before = ui.editor(|e, _| e.saved_path().cloned());
+        ui.ctrl("s", shift);
+        wait_until(ui, "the save", |ui| {
+            ui.editor(|e, _| e.saved_path().cloned()) != before
+                || ui.editor(|e, _| e.toast().is_some_and(|(_, error)| error))
+        });
+        ui.editor(|e, _| e.saved_path().cloned())
+            .expect("saved without an error")
+    };
+    let first = saves(&mut ui, false);
+    assert_eq!(first, dir.path().join("same-1.png"));
+    assert_eq!(std::fs::read(&existing).unwrap(), b"earlier screenshot");
+    assert!(Image::load(&first).is_ok());
+    // A repeat save updates the same file (its revision changed).
+    let (from, to) = (
+        ui.screen(Pt::new(10.0, 10.0)),
+        ui.screen(Pt::new(80.0, 60.0)),
+    );
+    ui.key("r", Some("r"), Modifiers::default());
+    ui.mouse("down", from);
+    ui.mouse("move", to);
+    ui.mouse("up", to);
+    let blank_png = std::fs::read(&first).unwrap();
+    ui.ctrl("s", false);
+    wait_until(&mut ui, "the repeat save", |_| {
+        std::fs::read(&first).unwrap() != blank_png
+    });
+    assert_eq!(
+        ui.editor(|e, _| e.saved_path().cloned()),
+        Some(first.clone())
+    );
+    let second = saves(&mut ui, true);
+    assert_eq!(second, dir.path().join("same-2.png"));
+    let mut names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["same-1.png", "same-2.png", "same.png"]);
+}
+
 fn text_font(doc: &Document) -> quikscope::fonts::FontSpec {
     match &doc.shapes().last().expect("a text shape").kind {
         ShapeKind::Text { font, .. } => font.clone(),

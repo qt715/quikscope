@@ -152,12 +152,8 @@ pub struct JxlEncoder {
 }
 
 impl JxlEncoder {
+    /// The size is within [`super::check_size`] (as `create_encoder` checks).
     pub fn create(path: &Path, width: u32, height: u32) -> Result<Self> {
-        // The encoder's group layout needs at least 2 pixels each way.
-        ensure!(
-            width >= 2 && height >= 2,
-            "JPEG XL animation of {width}x{height} is too small"
-        );
         let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8) as u8);
         Ok(JxlEncoder {

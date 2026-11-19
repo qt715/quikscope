@@ -1,29 +1,40 @@
 //! Sample index over `moov` tables and `moof` runs; `mdat` is never loaded
 //! whole.
+//!
+//! Files may be damaged or crafted, so every count, size and offset read
+//! from them is checked against the file length before it sizes a loop or
+//! an allocation: an index never holds more samples than the file has
+//! bytes, and box scanning only moves forward.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use mp4_atom::{
     Atom, Decode, DecodeAtom, Elst, Header, Moof, Moov, Mvex, Mvhd, ReadFrom, Stbl, StszSamples,
     Trak, Trex,
 };
 
-use super::super::{Codec, Packet, Track, TrackKind, nal, nanos, ticks_to_nanos};
+use super::super::{Codec, Packet, Track, TrackKind, nal, nanos, nominal_fps, ticks_to_nanos};
 use super::NON_SYNC_BIT;
 use crate::media::codec::opus::{ChannelMapping, Head};
 
 trait Source: Read + Seek + Send {}
 impl<T: Read + Seek + Send> Source for T {}
 
+/// A forward gap between samples up to this size is read through rather
+/// than sought over, which would empty the read buffer.
+const READ_THROUGH: u64 = 64 * 1024;
+
 /// Reads H.264, AAC, Opus and AV1 tracks of MP4/MOV files, fragmented or
 /// not, including animated AVIF (`pict` tracks). Other tracks are skipped.
 pub struct Mp4Demuxer {
     reader: Box<dyn Source>,
+    /// Where `reader` is, `u64::MAX` when unknown.
+    pos: u64,
     tracks: Vec<Track>,
     index: Vec<TrackIndex>,
     /// Presentation time (ns) every reported pts is relative to.
@@ -37,16 +48,22 @@ struct TrackIndex {
     /// Indices of sync samples.
     sync: Vec<usize>,
     cursor: usize,
-    timescale: u32,
+    timeline: Timeline,
     video: bool,
-    /// Media time (ticks) presented at `lead` (edit list).
-    media_start: i64,
-    /// Presentation time (ns) of `media_start`: leading empty edits.
-    lead: i128,
     /// `avcC` length size and parameter sets for H.264.
     h264: Option<(usize, Vec<u8>)>,
     /// Decode time of the next fragment's first sample without `tfdt`.
     next_dts: u64,
+}
+
+/// Maps a track's decode times to presentation times.
+#[derive(Clone, Copy)]
+struct Timeline {
+    timescale: u32,
+    /// Media time (ticks) presented at `lead` (edit list).
+    media_start: i64,
+    /// Presentation time (ns) of `media_start`: leading empty edits.
+    lead: i128,
 }
 
 #[derive(Clone, Copy)]
@@ -78,7 +95,14 @@ impl Mp4Demuxer {
                 break;
             };
             let body_pos = reader.stream_position()?;
-            let end = header.size.map_or(len, |size| body_pos + size as u64);
+            // A box always ends after its header, so the scan only moves
+            // forward; a size that overflows is damage, not a box.
+            let end = match header.size {
+                Some(size) => body_pos
+                    .checked_add(size as u64)
+                    .with_context(|| format!("MP4 {} box size overflows", header.kind))?,
+                None => len,
+            };
             match header.kind {
                 Moov::KIND | Moof::KIND if end > len => {
                     // A crash cut this box: everything before it is usable.
@@ -104,11 +128,13 @@ impl Mp4Demuxer {
         }
         let (mvhd, mvex, traks) = moov.context("No moov box")?;
 
+        // Every real sample occupies at least one byte of the file.
+        let mut budget = len;
         let mut tracks = Vec::new();
         let mut index = Vec::new();
         let mut by_id = HashMap::new();
         for trak in &traks {
-            match read_trak(trak, &mvhd) {
+            match read_trak(trak, &mvhd, &mut budget) {
                 Ok(Some((track, track_index))) => {
                     by_id.insert(trak.tkhd.track_id, tracks.len());
                     tracks.push(track);
@@ -123,13 +149,32 @@ impl Mp4Demuxer {
             .map(|mvex| mvex.trex.iter().map(|t| (t.track_id, t)).collect())
             .unwrap_or_default();
         for (moof_pos, moof) in &moofs {
-            add_fragment(*moof_pos, moof, &by_id, &trex, &mut index);
+            if let Err(e) =
+                add_fragment(*moof_pos, moof, &by_id, &trex, &mut index, len, &mut budget)
+            {
+                log::warn!("Ignoring the rest of the MP4 fragments: {e:#}");
+                break;
+            }
         }
         for track in &mut index {
             // Samples a crash cut short.
-            track
-                .samples
-                .retain(|s| s.offset + u64::from(s.size) <= len);
+            track.samples.retain(|s| {
+                s.size > 0
+                    && s.offset
+                        .checked_add(u64::from(s.size))
+                        .is_some_and(|end| end <= len)
+            });
+            if !track.video {
+                // Encoder priming (AAC) that the edit list hides: a packet
+                // mostly before the track's start would play early. Video
+                // keeps such samples, later pictures may reference them.
+                let timeline = track.timeline;
+                track.samples.retain(|s| {
+                    let start = timeline.presentation(s);
+                    let length = ticks_to_nanos(i128::from(s.duration), timeline.timescale);
+                    2 * start + length > 2 * timeline.lead
+                });
+            }
             track.sync = (0..track.samples.len())
                 .filter(|&i| track.samples[i].sync)
                 .collect();
@@ -137,43 +182,65 @@ impl Mp4Demuxer {
         // Fragments can add frames to tracks whose moov tables were empty.
         for (track, track_index) in tracks.iter_mut().zip(&index) {
             if let TrackKind::Video { fps, .. } = &mut track.kind {
-                let ticks: u64 = track_index
-                    .samples
-                    .iter()
-                    .map(|s| u64::from(s.duration))
-                    .sum();
-                if ticks > 0 {
-                    *fps = track_index.samples.len() as f64 * f64::from(track_index.timescale)
-                        / ticks as f64;
-                }
+                *fps = nominal_fps(
+                    track_index.samples.iter().map(|s| u64::from(s.duration)),
+                    f64::from(track_index.timeline.timescale),
+                );
             }
         }
 
+        // An edit list's start is the track's start, even for samples it
+        // shows only partly.
         let origin = index
             .iter()
-            .flat_map(|t| t.samples.iter().map(move |s| t.presentation(s)))
+            .flat_map(|t| {
+                t.samples
+                    .iter()
+                    .map(move |s| t.timeline.presentation(s).max(t.timeline.lead))
+            })
             .min()
             .unwrap_or(0);
         let end = index
             .iter()
             .flat_map(|t| {
                 t.samples.iter().map(move |s| {
-                    t.presentation(s) + ticks_to_nanos(i128::from(s.duration), t.timescale)
+                    t.timeline.presentation(s)
+                        + ticks_to_nanos(i128::from(s.duration), t.timeline.timescale)
                 })
             })
             .max()
             .unwrap_or(origin);
         Ok(Mp4Demuxer {
             reader: Box::new(reader),
+            pos: u64::MAX,
             tracks,
             index,
             origin,
             duration: nanos(end - origin),
         })
     }
+
+    /// Moves the reader to `offset`, reading through short forward gaps.
+    /// The position stays unknown if that fails.
+    fn reach(&mut self, offset: u64) -> io::Result<()> {
+        match offset.checked_sub(std::mem::replace(&mut self.pos, u64::MAX)) {
+            Some(0) => {}
+            Some(gap) if gap <= READ_THROUGH => {
+                let skipped = io::copy(&mut (&mut self.reader).take(gap), &mut io::sink())?;
+                if skipped < gap {
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
+            }
+            _ => {
+                self.reader.seek(SeekFrom::Start(offset))?;
+            }
+        }
+        self.pos = offset;
+        Ok(())
+    }
 }
 
-impl TrackIndex {
+impl Timeline {
     /// Presentation time in ns, before subtracting the file origin.
     fn presentation(&self, sample: &SampleRef) -> i128 {
         let media = i128::from(sample.dts) + i128::from(sample.cts) - i128::from(self.media_start);
@@ -200,19 +267,22 @@ impl super::super::Demuxer for Mp4Demuxer {
         let index = &mut self.index[track];
         let sample = index.samples[index.cursor];
         index.cursor += 1;
-        self.reader.seek(SeekFrom::Start(sample.offset))?;
+        self.reach(sample.offset)?;
         let mut data = vec![0; sample.size as usize];
+        self.pos = u64::MAX;
         self.reader.read_exact(&mut data)?;
+        self.pos = sample.offset + u64::from(sample.size);
+        let index = &self.index[track];
         if let Some((length_size, params)) = &index.h264 {
             data = nal::sample_to_annexb(&data, *length_size, sample.sync, params);
         }
         Ok(Some(Packet {
             track,
             data,
-            pts: nanos(index.presentation(&sample) - self.origin),
+            pts: nanos(index.timeline.presentation(&sample) - self.origin),
             duration: Some(nanos(ticks_to_nanos(
                 i128::from(sample.duration),
-                index.timescale,
+                index.timeline.timescale,
             ))),
             keyframe: sample.sync,
         }))
@@ -221,24 +291,39 @@ impl super::super::Demuxer for Mp4Demuxer {
     fn seek(&mut self, to: Duration) -> Result<()> {
         let to = self.origin + to.as_nanos() as i128;
         for index in &mut self.index {
+            let timeline = index.timeline;
             // A target computed from the original times may sit a rounding
             // error before the stored one.
-            let target = to + ticks_to_nanos(1, index.timescale) / 2;
+            let target = to + ticks_to_nanos(1, timeline.timescale) / 2;
             index.cursor = if index.video {
                 // Sync samples present in decode order with increasing times.
                 let found = index
                     .sync
-                    .partition_point(|&i| index.presentation(&index.samples[i]) <= target);
+                    .partition_point(|&i| timeline.presentation(&index.samples[i]) <= target);
                 index
                     .sync
                     .get(found.saturating_sub(1))
                     .copied()
                     .unwrap_or(0)
             } else {
-                index
+                let next = index
                     .samples
-                    .partition_point(|s| index.presentation(s) <= target)
-                    .saturating_sub(1)
+                    .partition_point(|s| timeline.presentation(s) <= target);
+                // The packet playing at `to`, if any: one that ended before
+                // it (the track ended, or pauses) would only play stale.
+                match next.checked_sub(1) {
+                    Some(last)
+                        if timeline.presentation(&index.samples[last])
+                            + ticks_to_nanos(
+                                i128::from(index.samples[last].duration),
+                                timeline.timescale,
+                            )
+                            > to =>
+                    {
+                        last
+                    }
+                    _ => next,
+                }
             };
         }
         Ok(())
@@ -290,7 +375,8 @@ fn parse_moov(body: &[u8]) -> Result<(Mvhd, Option<Mvex>, Vec<Trak>)> {
 }
 
 /// The track and its sample index, or `None` for codecs we do not read.
-fn read_trak(trak: &Trak, mvhd: &Mvhd) -> Result<Option<(Track, TrackIndex)>> {
+/// Takes the samples it indexes from `budget`.
+fn read_trak(trak: &Trak, mvhd: &Mvhd, budget: &mut u64) -> Result<Option<(Track, TrackIndex)>> {
     let mdia = &trak.mdia;
     let video = match mdia.hdlr.handler.as_ref() {
         b"vide" | b"pict" => true,
@@ -387,8 +473,10 @@ fn read_trak(trak: &Trak, mvhd: &Mvhd) -> Result<Option<(Track, TrackIndex)>> {
     // Opus pre-skip stays in the packet times (the decoder trims it), so
     // only edits beyond it move the track.
     let media_start = (media_time - pre_skip).max(0);
-    let samples = table_samples(stbl, video)?;
-    let next_dts = samples.last().map_or(0, |s| s.dts + u64::from(s.duration));
+    let samples = table_samples(stbl, video, budget)?;
+    let next_dts = samples
+        .last()
+        .map_or(0, |s| s.dts.saturating_add(u64::from(s.duration)));
     let track = Track {
         codec,
         kind,
@@ -398,10 +486,12 @@ fn read_trak(trak: &Trak, mvhd: &Mvhd) -> Result<Option<(Track, TrackIndex)>> {
         samples,
         sync: Vec::new(),
         cursor: 0,
-        timescale,
+        timeline: Timeline {
+            timescale,
+            media_start,
+            lead: ticks_to_nanos(i128::from(lead_movie), mvhd.timescale),
+        },
         video,
-        media_start,
-        lead: ticks_to_nanos(i128::from(lead_movie), mvhd.timescale),
         h264,
         next_dts,
     };
@@ -426,25 +516,31 @@ fn atom_body(atom: &impl Atom) -> Result<Vec<u8>> {
 /// Leading empty edits (movie timescale) and the media time the first real
 /// edit starts at. Later edits are rare outside editing tools and ignored.
 fn edit(elst: Option<&Elst>) -> (u64, i64) {
-    let mut lead = 0;
+    let mut lead = 0u64;
     for entry in elst.map_or(&[][..], |e| &e.entries) {
         match entry.media_time {
-            None => lead += entry.segment_duration,
+            None => lead = lead.saturating_add(entry.segment_duration),
             Some(time) => return (lead, i64::try_from(time).unwrap_or(0)),
         }
     }
     (lead, 0)
 }
 
-/// Expands classic sample tables.
-fn table_samples(stbl: &Stbl, video: bool) -> Result<Vec<SampleRef>> {
+/// Expands classic sample tables, taking their samples from `budget`.
+fn table_samples(stbl: &Stbl, video: bool, budget: &mut u64) -> Result<Vec<SampleRef>> {
     let (count, fixed, sizes) = match &stbl.stsz.samples {
-        StszSamples::Identical { count, size } => (*count as usize, *size, &[][..]),
-        StszSamples::Different { sizes } => (sizes.len(), 0, &sizes[..]),
+        StszSamples::Identical { count, size } => (u64::from(*count), *size, &[][..]),
+        StszSamples::Different { sizes } => (sizes.len() as u64, 0, &sizes[..]),
     };
     if count == 0 {
         return Ok(Vec::new());
     }
+    ensure!(
+        count <= *budget,
+        "{count} samples cannot fit in what is left of the file"
+    );
+    *budget -= count;
+    let count = count as usize;
     let chunks: Vec<u64> = match (&stbl.stco, &stbl.co64) {
         (Some(stco), _) => stco.entries.iter().map(|&o| u64::from(o)).collect(),
         (None, Some(co64)) => co64.entries.clone(),
@@ -466,15 +562,22 @@ fn table_samples(stbl: &Stbl, video: bool) -> Result<Vec<SampleRef>> {
         .filter(|_| video)
         .map(|stss| stss.entries.iter().copied().collect());
 
-    let mut samples = Vec::with_capacity(count);
+    let mut samples = Vec::new();
     let mut dts = 0u64;
     let stsc = &stbl.stsc.entries;
+    // `stsc` runs are in chunk order: one pass with a cursor.
+    let mut run = 0;
     'chunks: for (chunk, &chunk_offset) in chunks.iter().enumerate() {
-        let number = chunk as u32 + 1;
+        let number = chunk as u64 + 1;
+        while stsc
+            .get(run + 1)
+            .is_some_and(|e| u64::from(e.first_chunk) <= number)
+        {
+            run += 1;
+        }
         let per_chunk = stsc
-            .iter()
-            .take_while(|e| e.first_chunk <= number)
-            .last()
+            .get(run)
+            .filter(|e| u64::from(e.first_chunk) <= number)
             .map_or(0, |e| e.samples_per_chunk);
         let mut offset = chunk_offset;
         for _ in 0..per_chunk {
@@ -492,21 +595,24 @@ fn table_samples(stbl: &Stbl, video: bool) -> Result<Vec<SampleRef>> {
                 duration,
                 sync: sync.as_ref().is_none_or(|s| s.contains(&(i as u32 + 1))),
             });
-            offset += u64::from(size);
-            dts += u64::from(duration);
+            offset = offset.saturating_add(u64::from(size));
+            dts = dts.saturating_add(u64::from(duration));
         }
     }
     Ok(samples)
 }
 
-/// Appends a fragment's samples to the tracks it describes.
+/// Appends a fragment's samples to the tracks it describes, taking them
+/// from `budget`. Data past the end of the file (`len`) ends a run.
 fn add_fragment(
     moof_pos: u64,
     moof: &Moof,
     by_id: &HashMap<u32, usize>,
     trex: &HashMap<u32, &Trex>,
     index: &mut [TrackIndex],
-) {
+    len: u64,
+    budget: &mut u64,
+) -> Result<()> {
     // Without explicit bases, a traf's data follows the previous one's.
     let mut previous_end = moof_pos;
     for traf in &moof.traf {
@@ -533,6 +639,11 @@ fn add_fragment(
                 data = base.saturating_add_signed(i64::from(offset));
             }
             for entry in trun.samples.iter() {
+                if data >= len {
+                    break;
+                }
+                ensure!(*budget > 0, "more samples than the file has bytes");
+                *budget -= 1;
                 let duration = entry
                     .duration
                     .or(tfhd.default_sample_duration)
@@ -556,11 +667,12 @@ fn add_fragment(
                     duration,
                     sync: !track.video || flags & NON_SYNC_BIT == 0,
                 });
-                data += u64::from(size);
-                dts += u64::from(duration);
+                data = data.saturating_add(u64::from(size));
+                dts = dts.saturating_add(u64::from(duration));
             }
         }
         previous_end = data;
         track.next_dts = dts;
     }
+    Ok(())
 }

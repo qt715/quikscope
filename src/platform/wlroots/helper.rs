@@ -41,6 +41,22 @@ pub const VERB: &str = "__record-helper";
 /// How long the helper may take to deliver its first frame.
 const HANDSHAKE: Duration = Duration::from_secs(5);
 
+/// Makes `fd` available as `target` across exec. dup2 gives the copy no
+/// CLOEXEC (every descriptor of ours has it), but when `fd` already is
+/// `target` it does nothing, so the flag is cleared instead. Only
+/// async-signal-safe calls: this runs between fork and exec.
+fn inherit_as(fd: RawFd, target: RawFd) -> std::io::Result<()> {
+    let result = if fd == target {
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) }
+    } else {
+        unsafe { libc::dup2(fd, target) }
+    };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 const MSG_HEADER: u32 = 1;
 const MSG_FRAME: u32 = 2;
 const MSG_ERROR: u32 = 3;
@@ -128,13 +144,17 @@ fn instant_of(ns: u64) -> Instant {
         .unwrap_or(now)
 }
 
+/// Control-message buffers are `[u64; N]`: they are read and written
+/// through `*mut cmsghdr`, which needs its alignment.
+const _: () = assert!(std::mem::align_of::<u64>() >= std::mem::align_of::<libc::cmsghdr>());
+
 fn send_msg(socket: &UnixStream, msg: Msg, fd: Option<RawFd>) -> std::io::Result<()> {
     let bytes = msg.bytes();
     let mut iov = libc::iovec {
         iov_base: bytes.as_ptr() as *mut libc::c_void,
         iov_len: bytes.len(),
     };
-    let mut control = [0u8; 64];
+    let mut control = [0u64; 8];
     let mut header: libc::msghdr = unsafe { std::mem::zeroed() };
     header.msg_iov = &mut iov;
     header.msg_iovlen = 1;
@@ -167,12 +187,12 @@ fn recv_msg(socket: &UnixStream) -> std::io::Result<Option<(Msg, Option<OwnedFd>
         iov_base: bytes.as_mut_ptr().cast(),
         iov_len: bytes.len(),
     };
-    let mut control = [0u8; 64];
+    let mut control = [0u64; 8];
     let mut header: libc::msghdr = unsafe { std::mem::zeroed() };
     header.msg_iov = &mut iov;
     header.msg_iovlen = 1;
     header.msg_control = control.as_mut_ptr().cast();
-    header.msg_controllen = control.len() as _;
+    header.msg_controllen = std::mem::size_of_val(&control) as _;
     let received =
         unsafe { libc::recvmsg(socket.as_raw_fd(), &mut header, libc::MSG_CMSG_CLOEXEC) };
     if received < 0 {
@@ -347,15 +367,9 @@ pub(super) fn spawn(
         .stdin(Stdio::null())
         .stdout(Stdio::null());
     let raw = theirs.as_raw_fd();
-    // SAFETY: dup2 is async-signal-safe; the new fd 3 does not inherit
-    // CLOEXEC, every other descriptor of ours does.
+    // SAFETY: inherit_as only makes async-signal-safe calls.
     unsafe {
-        command.pre_exec(move || {
-            if libc::dup2(raw, HELPER_FD) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
+        command.pre_exec(move || inherit_as(raw, HELPER_FD));
     }
     let helper = Helper(
         command
@@ -738,6 +752,29 @@ fn copy_rows(src: &[u8], stride: usize, dst: &mut [u8], row: usize, inverted: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_fd_survives_exec_even_when_already_in_place() {
+        use std::os::fd::{AsRawFd as _, OwnedFd};
+        let flags = |fd: &OwnedFd| unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+        let inode = |fd: &OwnedFd| {
+            let stat = rustix::fs::fstat(fd).unwrap();
+            (stat.st_dev, stat.st_ino)
+        };
+        let source =
+            rustix::fs::memfd_create("quikscope-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        let (other, _) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        assert_ne!(flags(&source) & libc::FD_CLOEXEC, 0);
+        // Already the target number (dup2 would be a no-op).
+        inherit_as(source.as_raw_fd(), source.as_raw_fd()).unwrap();
+        assert_eq!(flags(&source) & libc::FD_CLOEXEC, 0);
+        // Another number: replaced by an inheritable copy of the source.
+        assert_ne!(inode(&other), inode(&source));
+        inherit_as(source.as_raw_fd(), other.as_raw_fd()).unwrap();
+        assert_eq!(inode(&other), inode(&source));
+        assert_eq!(flags(&other) & libc::FD_CLOEXEC, 0);
+        assert!(inherit_as(-1, other.as_raw_fd()).is_err());
+    }
 
     #[test]
     fn messages_round_trip() {

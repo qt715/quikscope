@@ -28,12 +28,13 @@ capture <mode> [flag]... [output=NAME] [geometry=X,Y,WxH]
 open-last
 pick                # pick a pixel's color anywhere on the desktop
 open <path>          # rest of the line, spaces allowed
-record <video|animation> [mode] [flag]... [fps=N] [format=F] [audio=ID,ID|no-audio]
+record <video|animation|anim|gif> [mode] [flag]... [fps=N] [format=F] [audio=ID,ID|no-audio]
        [output=NAME] [geometry=X,Y,WxH]
 record <stop|pause|resume|toggle-pause|cancel|status>
 audio-devices        # recordable audio devices
 settings            # open or focus the settings window; replies `ok pong`
 notifications <on|off|toggle|status>   # alias: notify
+version             # the daemon's version
 ping
 quit
 ```
@@ -51,12 +52,14 @@ affect interactive region selection only, not fixed geometry or other modes.
 `text` extracts the capture's text instead of copying the image (see
 [text extraction](text-extraction.md)).
 
-`open` probes the file: videos (MP4, MKV, MOV, WebM…) open in the video
+`open` probes the file: videos (H.264 in MP4, MOV or MKV) open in the video
 editor, animated GIF/WebP/AVIF/JPEG XL/APNG in the annotator's animation
 mode, still images in the annotator.
 
 `record video|animation` starts a recording, or, while one is running (of
-either kind), stops and saves it, so one key binding toggles. Its mode
+either kind), stops and saves it, so one key binding toggles. `anim` is
+short for `animation`; `gif` is an animation recorded as GIF whatever
+`record.animation_format` says. Its mode
 defaults to `region` (selection over the live desktop); `output`/`screen`
 record a whole output, `window` the active window's rectangle at start.
 A recording covers one output: a selection spanning outputs is clipped to
@@ -64,6 +67,11 @@ the output holding most of it. Flags: `edit`, `notify`, `clipboard`,
 `cursor` (each with `no-`), `fps=1…240`, `format=` (`mp4`/`mkv`/`mov` for
 video, `gif`/`webp`/`avif`/`jxl` for animation), `audio=` comma-separated
 device ids or `no-audio`. Animations never record audio.
+
+`record cancel` discards the running recording. While a stopped recording
+is still being saved it cancels the save instead: a video is discarded, an
+animation keeps its lossless recording, which opens in the annotator from
+the notification and is offered again after the daemon restarts.
 
 Requests are rejected with an `err` response when malformed: unknown
 commands, modes or flags, extra arguments, or invalid geometry.
@@ -74,6 +82,7 @@ commands, modes or flags, extra arguments, or invalid geometry.
 ok <shot-id> <width>x<height>          # capture/open succeeded
 ok <shot-id> <width>x<height> <path>   # … and `save` wrote <path>
 ok pong                                # ping, quit, settings
+ok version <version>                  # version: the daemon's version, e.g. 0.3.0
 ok text <shot-id> <text>               # capture … text: the text read (empty: none)
 ok notifications <on|off>             # notifications: the setting now in effect
 ok color <#rrggbb>                    # pick: the color clicked
@@ -81,8 +90,9 @@ ok recording <kind> <width>x<height>  # record: started (frame size in pixels)
 ok recorded <id> <width>x<height> <duration-ms> <path>   # record/record stop: saved
 ok record idle                        # record status/cancel: nothing recording
 ok record <kind> <elapsed-ms> <running|paused>           # record status/pause/resume
+ok record saving [percent]            # record status/cancel: still being saved
 ok audio <json>                       # audio-devices: [{"id","name","output"}]
-cancelled                              # the user cancelled the selection
+cancelled                              # selection cancelled, or the save was cancelled
 err <message>                          # single line
 ```
 
@@ -90,7 +100,10 @@ A `record` request that starts answers once recording has begun (after the
 selection); one that stops answers after the file is finalized, which for a
 long GIF can take a while: clients should not apply a read timeout to either.
 `<id>` is what a notification click opens (`ok recorded` ids share the shot
-numbering). `<path>` is the rest of the line.
+numbering). `<path>` is the rest of the line. `ok record saving` carries
+the percentage written (0–100) while a stopped recording is encoded, and
+no number while a discarded one is torn down; a new recording cannot start
+until it reads `idle`.
 
 `capture region` without `geometry=` and `pick` answer only after the user
 finishes selecting; clients should not apply a read timeout to them. A second
@@ -109,7 +122,13 @@ escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
 
 - `quikscope` commands other than `daemon` and `quit` start a detached daemon
   (`setsid`) when nothing listens on the socket, logging to
-  `$XDG_CACHE_HOME/quikscope/daemon.log`, and wait up to 5 s for it.
+  `$XDG_CACHE_HOME/quikscope/daemon.log`, and wait up to 5 s for it. The log
+  is appended to; above 1 MiB it moves to `daemon.log.1` first.
 - A daemon refuses to start while another one answers on the socket; a stale
   socket file left by a crash is replaced.
-- `quit` replies, then exits the daemon and removes the socket.
+- `quit` stops and saves a running recording, waits for every file still
+  being written (recordings being saved, exports and saves started from an
+  editor, even one already closed) and refuses new ones meanwhile, then
+  replies, exits the daemon and removes the socket.
+- At start-up the daemon recovers what a daemon that died left behind (see
+  [crash recovery](configuration.md#recordings)).

@@ -9,6 +9,7 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail, ensure};
@@ -18,6 +19,25 @@ use super::codec::{self, DecodedPicture, VideoDecoder, resample::Resampler};
 use super::container::{self, Codec, Demuxer, Track, TrackKind};
 use super::{AudioSpec, EncoderPreference, Kind, MediaInfo, convert};
 use crate::raster::Image;
+
+/// Set when the user chose software coding; see [`set_decoder_preference`].
+static SOFTWARE_DECODING: AtomicBool = AtomicBool::new(false);
+
+/// Which H.264 decoders every [`Decoder`] opened from now on may use
+/// (thumbnails, playback, exports). Follows the encoder setting, so
+/// choosing "Software" to avoid a broken GPU driver keeps it out of decoding
+/// too. Defaults to [`EncoderPreference::Auto`].
+pub fn set_decoder_preference(preference: EncoderPreference) {
+    SOFTWARE_DECODING.store(preference == EncoderPreference::Software, Ordering::Relaxed);
+}
+
+fn decoder_preference() -> EncoderPreference {
+    if SOFTWARE_DECODING.load(Ordering::Relaxed) {
+        EncoderPreference::Software
+    } else {
+        EncoderPreference::Auto
+    }
+}
 
 /// What a file turned out to be.
 enum Opened {
@@ -47,7 +67,12 @@ fn open(path: &Path) -> Result<(Opened, MediaInfo)> {
     };
     if anim::master::is_master(path) {
         let master = MasterReader::open(path)?;
-        let info = animation_info(master.info());
+        let mut info = animation_info(master.info());
+        // Recorded frames are only the changed ones: the capture rate, not
+        // their average, is what an export needs.
+        if let Some(interval) = master.nominal_interval() {
+            info.fps = 1.0 / interval.as_secs_f64();
+        }
         return Ok((Opened::Master(master), info));
     }
     match anim::open_decoder(path)? {
@@ -178,7 +203,11 @@ impl VideoStream {
 
 enum Source {
     Video(VideoStream),
-    Animation(Box<dyn AnimDecoder>),
+    Animation {
+        decoder: Box<dyn AnimDecoder>,
+        /// End of the latest frame taken from `decoder`.
+        decoded: Duration,
+    },
     Master(MasterReader),
 }
 
@@ -199,14 +228,17 @@ impl Decoder {
             Opened::Video { demuxer, track } => Source::Video(VideoStream {
                 demuxer,
                 track,
-                decoder: codec::h264_decoder(EncoderPreference::Auto)?,
+                decoder: codec::h264_decoder(decoder_preference())?,
                 eof: false,
                 end: Duration::ZERO,
                 interval: Duration::from_secs_f64(
                     1.0 / if info.fps > 0.0 { info.fps } else { 30.0 },
                 ),
             }),
-            Opened::Animation(decoder) => Source::Animation(decoder),
+            Opened::Animation(decoder) => Source::Animation {
+                decoder,
+                decoded: Duration::ZERO,
+            },
             Opened::Master(master) => Source::Master(master),
         };
         Ok(Self {
@@ -229,9 +261,9 @@ impl Decoder {
     /// returns the frame showing at `to` (the first frame before the file
     /// starts, the last one past its end), then the frames after it.
     pub fn seek(&mut self, to: Duration) -> Result<()> {
-        self.pending.clear();
         match &mut self.source {
             Source::Video(video) => {
+                self.pending.clear();
                 video.demuxer.seek(to)?;
                 // Pictures still in the decoder belong to the old position.
                 video.decoder.flush()?;
@@ -252,23 +284,42 @@ impl Decoder {
                 }
                 self.pending.extend(previous.map(video_pending));
             }
-            Source::Animation(decoder) => {
-                decoder.rewind()?;
+            Source::Animation { decoder, decoded } => {
+                // Frames may build on earlier ones, so an animation decodes
+                // forward only: a target among the frames decoded ahead is
+                // used as is, one further on is decoded towards, and only an
+                // earlier one (or one past the end, which shows the last
+                // frame) starts over from the first frame.
+                let showing = self
+                    .pending
+                    .iter()
+                    .position(|p| p.pts + p.duration.unwrap_or_default() > to);
+                match showing {
+                    Some(i) if self.pending[i].pts <= to => {
+                        self.pending.drain(..i);
+                        return Ok(());
+                    }
+                    None if to >= *decoded && to < self.info.duration => self.pending.clear(),
+                    _ => {
+                        self.pending.clear();
+                        decoder.rewind()?;
+                        *decoded = Duration::ZERO;
+                    }
+                }
                 let mut last = None;
                 while let Some(frame) = decoder.next_frame()? {
-                    if frame.pts + frame.duration > to {
-                        last = Some(frame);
+                    *decoded = frame.pts + frame.duration;
+                    last = Some(frame);
+                    if *decoded > to {
                         break;
                     }
-                    last = Some(frame);
                 }
-                self.pending.extend(last.map(|frame| Pending {
-                    picture: Picture::Bgra(frame.image),
-                    pts: frame.pts,
-                    duration: Some(frame.duration),
-                }));
+                self.pending.extend(last.map(anim_pending));
             }
-            Source::Master(master) => master.seek(to)?,
+            Source::Master(master) => {
+                self.pending.clear();
+                master.seek(to)?;
+            }
         }
         Ok(())
     }
@@ -281,8 +332,11 @@ impl Decoder {
                     Some(pictures) => self.pending.extend(pictures.into_iter().map(video_pending)),
                     None => break,
                 },
-                Source::Animation(decoder) => match decoder.next_frame()? {
-                    Some(frame) => self.pending.push_back(anim_pending(frame)),
+                Source::Animation { decoder, decoded } => match decoder.next_frame()? {
+                    Some(frame) => {
+                        *decoded = frame.pts + frame.duration;
+                        self.pending.push_back(anim_pending(frame));
+                    }
                     None => break,
                 },
                 Source::Master(master) => match master.next_frame()? {

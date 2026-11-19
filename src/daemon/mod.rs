@@ -41,10 +41,13 @@ use crate::ui::{self, Assets, Shot};
 
 mod record;
 
-/// Shots kept in memory (newest last), and recorded videos a notification
-/// click can still open. Older shots remain reachable through the on-disk
-/// cache only for the most recent capture.
+/// Shots kept in memory (newest last). Older shots remain reachable through
+/// the on-disk cache only for the most recent capture.
 const KEEP_SHOTS: usize = 8;
+
+/// Recorded or opened videos a notification click can still open. Only
+/// their paths are kept (the file reopens from disk), so many fit.
+const KEEP_VIDEOS: usize = 1024;
 
 enum Msg {
     /// From the IPC socket; the response goes back to the client.
@@ -74,6 +77,8 @@ struct Daemon {
     recording: record::Slot,
     /// Recordable audio devices, refreshed in the background.
     audio_devices: Vec<crate::media::AudioDevice>,
+    /// When `audio_devices` was last asked for.
+    devices_listed: Option<Instant>,
     /// The tray icon, if any (on Linux it follows `record.tray`).
     tray: Option<Arc<dyn Tray>>,
     /// Where desktop events go, for a tray started after start-up.
@@ -91,7 +96,7 @@ struct Media {
     last_id: u64,
     editors: HashMap<u64, WindowHandle<Editor>>,
     video_editors: HashMap<u64, WindowHandle<VideoEditor>>,
-    /// The newest recorded or opened videos.
+    /// Paths of the newest recorded or opened videos.
     videos: BTreeMap<u64, PathBuf>,
 }
 
@@ -104,7 +109,7 @@ impl Media {
     fn add_video(&mut self, id: u64, path: PathBuf) {
         self.videos.insert(id, path);
         // Oldest first, but a video whose editor is open stays reachable.
-        let mut excess = self.videos.len().saturating_sub(KEEP_SHOTS);
+        let mut excess = self.videos.len().saturating_sub(KEEP_VIDEOS);
         self.videos.retain(|id, _| {
             let forget = excess > 0 && !self.video_editors.contains_key(id);
             excess -= usize::from(forget);
@@ -156,6 +161,8 @@ pub fn run(socket: PathBuf) -> Result<()> {
     #[cfg(windows)]
     platform::windows::initialize()?;
     let started = Instant::now();
+    // Files older than this were written by an earlier run.
+    let started_at = std::time::SystemTime::now();
     let welcome = matches!(
         std::fs::metadata(config::config_path()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
@@ -164,6 +171,7 @@ pub fn run(socket: PathBuf) -> Result<()> {
         log::error!("configuration could not be loaded; using defaults: {error:#}");
         Config::default()
     }));
+    set_decoder_preference(&config);
     // Index system fonts off the main thread before the font menu needs them.
     crate::fonts::warm();
     // The primary OCR model loads in the background and stays loaded, so
@@ -208,7 +216,6 @@ pub fn run(socket: PathBuf) -> Result<()> {
             })),
         });
         let prewarm = platform.prewarm_options();
-        let own_masters = masters.dir.clone();
         cx.set_global(Daemon {
             notify: config.notify,
             config,
@@ -222,6 +229,7 @@ pub fn run(socket: PathBuf) -> Result<()> {
             selecting: false,
             recording: record::Slot::Idle,
             audio_devices: Vec::new(),
+            devices_listed: None,
             tray,
             #[cfg(target_os = "linux")]
             events,
@@ -229,7 +237,7 @@ pub fn run(socket: PathBuf) -> Result<()> {
             quitting: false,
         });
         record::refresh_devices(cx);
-        cx.background_spawn(async move { record::clean_masters(&masters_root, &own_masters) })
+        cx.spawn(async move |cx| record::recover(masters_root, started_at, cx).await)
             .detach();
         if std::env::var_os("QUIKSCOPE_NO_PREWARM").is_some_and(|v| v == "1") {
             log::info!("GPU prewarm skipped: QUIKSCOPE_NO_PREWARM=1");
@@ -532,16 +540,18 @@ fn failure_title(req: &Request) -> &'static str {
 }
 
 /// The one way the daemon ends: IPC `quit`, a tray's Quit, SIGTERM/SIGINT.
-/// A running recording is stopped and saved and a save in progress awaited
-/// first, then the `open-last` cache is flushed so a restart sees the newest
-/// capture; only then does `reply` (an IPC `quit`) get its answer. A second
-/// request while that runs is answered at once and leaves the quitting to
-/// the first.
+/// A running recording is stopped and saved, and every file still being
+/// written (recording saves, exports, editor saves, a recording starting)
+/// is awaited, while new ones are refused; then the `open-last` cache is
+/// flushed so a restart sees the newest capture. Only then does `reply`
+/// (an IPC `quit`) get its answer. A second request while that runs is
+/// answered at once and leaves the quitting to the first.
 async fn quit(reply: Option<oneshot::Sender<Response>>, cx: &mut AsyncApp) {
     let first = !daemon(cx, |d, _| std::mem::replace(&mut d.quitting, true));
     if first {
         log::info!("quitting");
-        record::finish_for_quit(cx).await;
+        record::stop_for_quit(cx).await;
+        ui::jobs::finish_all().await;
         let cache = daemon(cx, |d, _| d.cache.clone());
         cx.background_spawn(async move { cache.flush() }).await;
     }
@@ -1480,6 +1490,9 @@ fn apply_config(config: Arc<Config>, cx: &mut App) {
     if old.record.tray != config.record.tray {
         record::set_tray(cx);
     }
+    if old.record.encoder != config.record.encoder {
+        set_decoder_preference(&config);
+    }
     if old.record != config.record {
         // Devices may have come or gone since they were last listed.
         record::refresh_devices(cx);
@@ -1495,6 +1508,14 @@ fn apply_config(config: Arc<Config>, cx: &mut App) {
             });
         }
     });
+}
+
+/// Decoding follows the encoder setting: "software" keeps a broken GPU
+/// driver out of thumbnails, playback and exports too.
+fn set_decoder_preference(config: &Config) {
+    crate::media::decode::set_decoder_preference(
+        crate::media::EncoderPreference::parse(&config.record.encoder).unwrap_or_default(),
+    );
 }
 
 fn open_settings(welcome: bool, cx: &mut App) -> Result<()> {

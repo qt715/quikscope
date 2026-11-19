@@ -81,6 +81,8 @@ pub fn start<T: 'static>(
     finished: impl FnOnce(&mut T, &Finished, &mut Context<T>) + 'static,
     cx: &mut Context<T>,
 ) -> anyhow::Result<Export> {
+    // Quitting waits for the file, and for its clipboard copy below.
+    let job = super::jobs::begin()?;
     let progress = Arc::new(AtomicU32::new(0));
     let cancel = Arc::new(AtomicBool::new(false));
     // Progress repaints and the result arrive over one channel, so the
@@ -132,6 +134,7 @@ pub fn start<T: 'static>(
             Err(_) if done.cancelled => log::info!("export cancelled"),
             Err(e) => log::error!("export failed: {e:#}"),
         }
+        drop(job);
         if this.update(cx, |e, cx| finished(e, &done, cx)).is_ok() || done.cancelled {
             return;
         }

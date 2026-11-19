@@ -44,8 +44,9 @@ pub struct Element {
 }
 
 impl Element {
+    /// `None` for an unknown size, or one past the end of any file.
     pub fn end(&self) -> Option<u64> {
-        self.size.map(|s| self.data + s)
+        self.size.and_then(|s| self.data.checked_add(s))
     }
 }
 

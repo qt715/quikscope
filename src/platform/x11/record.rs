@@ -19,6 +19,9 @@ struct Control {
     paused: AtomicBool,
     /// Number of resumes; frames carry the value they were captured under.
     epoch: AtomicU64,
+    /// Why the capture thread stopped; kept here because the frame queue
+    /// may be full when it fails.
+    error: std::sync::Mutex<Option<anyhow::Error>>,
 }
 
 /// An MIT-SHM segment the X server copies the region into.
@@ -52,7 +55,7 @@ impl Drop for Lease {
 }
 
 struct Source {
-    frames: mpsc::Receiver<Result<(u64, Frame)>>,
+    frames: mpsc::Receiver<(u64, Frame)>,
     control: Arc<Control>,
     thread: Option<std::thread::JoinHandle<()>>,
     size: (u32, u32),
@@ -78,10 +81,13 @@ impl VideoSource for Source {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             {
                 // Captured before the last resume.
-                Ok(Ok((epoch, _))) if epoch != self.epoch => {}
-                Ok(frame) => return frame.map(|(_, frame)| Some(frame)),
+                Ok((epoch, _)) if epoch != self.epoch => {}
+                Ok((_, frame)) => return Ok(Some(frame)),
                 Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
-                Err(_) => bail!("X11 recording thread stopped"),
+                Err(_) => match self.control.error.lock().unwrap().take() {
+                    Some(error) => return Err(error),
+                    None => bail!("X11 recording thread stopped"),
+                },
             }
         }
     }
@@ -207,16 +213,21 @@ impl ScreenRecorder for Recorder {
                             captured,
                         ))
                     });
-                    if let Some(result) = result {
-                        let failed = result.is_err();
-                        if let Err(mpsc::TrySendError::Disconnected(_)) =
-                            tx.try_send(result.map(|frame| (epoch, frame)))
-                        {
+                    match result {
+                        Some(Ok(frame)) => {
+                            // A full queue means the encoder is behind: drop
+                            // this frame.
+                            if let Err(mpsc::TrySendError::Disconnected(_)) =
+                                tx.try_send((epoch, frame))
+                            {
+                                break;
+                            }
+                        }
+                        Some(Err(error)) => {
+                            *shared.error.lock().unwrap() = Some(error);
                             break;
                         }
-                        if failed {
-                            break;
-                        }
+                        None => {}
                     }
                     next = (next + period).max(Instant::now());
                     std::thread::sleep(next.saturating_duration_since(Instant::now()));
@@ -290,4 +301,40 @@ impl ScreenRecorder for Recorder {
 struct Outline {
     _conn: RustConnection,
     _windows: Vec<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The capture thread fails while the encoder is behind (queue full):
+    /// the queued frames still arrive, then the thread's own error.
+    #[test]
+    fn capture_error_survives_a_full_queue() {
+        let (tx, frames) = mpsc::sync_channel(1);
+        let frame = Frame::from_pixels(
+            2,
+            2,
+            8,
+            media::PixelFormat::Bgrx,
+            Pixels::Owned(vec![0; 16]),
+            Instant::now(),
+        );
+        tx.try_send((0, frame)).unwrap();
+        let control = Arc::new(Control::default());
+        *control.error.lock().unwrap() = Some(anyhow::anyhow!("BadMatch from GetImage"));
+        drop(tx);
+        let mut source = Source {
+            frames,
+            control,
+            thread: None,
+            size: (2, 2),
+            epoch: 0,
+        };
+        assert!(source.next_frame(Duration::from_secs(1)).unwrap().is_some());
+        let Err(error) = source.next_frame(Duration::from_secs(1)) else {
+            panic!("the thread's error was lost");
+        };
+        assert_eq!(error.to_string(), "BadMatch from GetImage");
+    }
 }

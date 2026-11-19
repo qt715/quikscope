@@ -9,6 +9,7 @@ mod export_job;
 pub mod eyedropper;
 pub mod field;
 pub mod font_menu;
+pub mod jobs;
 pub mod motion;
 pub mod overlay;
 mod playback;

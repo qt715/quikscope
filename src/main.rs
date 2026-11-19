@@ -64,11 +64,20 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(windows)]
     if args.first().map(String::as_str) != Some("daemon") {
-        // Attach to the caller, but never allocate a console for the daemon.
+        use windows::Win32::System::Console::{
+            ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE,
+        };
+        // A GUI-subsystem program has no console of its own. Attach to the
+        // caller's, but only when output is not redirected already
+        // (`quikscope version > file`, a pipe): attaching would point the
+        // standard handles at the console instead. Never allocate a
+        // console for the daemon.
+        // SAFETY: plain console API calls without pointers.
         unsafe {
-            let _ = windows::Win32::System::Console::AttachConsole(
-                windows::Win32::System::Console::ATTACH_PARENT_PROCESS,
-            );
+            let redirected = GetStdHandle(STD_OUTPUT_HANDLE).is_ok_and(|h| !h.is_invalid());
+            if !redirected {
+                let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+            }
         }
     }
     let first = args.first().map(String::as_str);
@@ -269,8 +278,11 @@ fn report(result: anyhow::Result<Response>) -> anyhow::Result<ExitCode> {
             println!("idle");
             Ok(ExitCode::SUCCESS)
         }
-        Response::RecordStatus(RecordStatus::Saving) => {
-            println!("saving");
+        Response::RecordStatus(RecordStatus::Saving(percent)) => {
+            match percent {
+                Some(percent) => println!("saving {percent}%"),
+                None => println!("saving"),
+            }
             Ok(ExitCode::SUCCESS)
         }
         Response::RecordStatus(RecordStatus::Recording(s)) => {

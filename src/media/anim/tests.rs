@@ -403,7 +403,7 @@ fn master_round_trip_and_seek() {
     let input = master_frames(12);
     let mut writer = MasterWriter::create(&path, 40, 30).unwrap();
     for (image, pts) in &input {
-        writer.push(image, *pts).unwrap();
+        writer.push(image.clone(), *pts).unwrap();
     }
     writer.finish(MS(4900)).unwrap();
     assert!(is_master(&path));
@@ -434,7 +434,7 @@ fn cut_off_master_opens_up_to_its_last_complete_frame() {
     let input = master_frames(8);
     let mut writer = MasterWriter::create(&path, 40, 30).unwrap();
     for (image, pts) in &input {
-        writer.push(image, *pts).unwrap();
+        writer.push(image.clone(), *pts).unwrap();
     }
     writer.finish(MS(3200)).unwrap();
     // Drop the index and half of the last frame's record.
@@ -447,6 +447,107 @@ fn cut_off_master_opens_up_to_its_last_complete_frame() {
     for ((image, _), frame) in input.iter().zip(&frames) {
         assert_eq!(frame.image, *image);
     }
+}
+
+/// An index whose end lies before its last frame (or whose offsets point
+/// outside the records) is ignored: the reader scans the records instead of
+/// computing negative durations.
+#[test]
+fn damaged_master_index_falls_back_to_the_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("damaged.qsm");
+    let input = master_frames(5);
+    let mut writer = MasterWriter::create(&path, 40, 30).unwrap();
+    for (image, pts) in &input {
+        writer.push(image.clone(), *pts).unwrap();
+    }
+    writer.finish(MS(2000)).unwrap();
+    let good = std::fs::read(&path).unwrap();
+    let index =
+        u64::from_le_bytes(good[good.len() - 16..good.len() - 8].try_into().unwrap()) as usize;
+    // The end field, then the first entry's offset.
+    for (at, value) in [(index + 8, 0u64), (index + 16 + 8, u64::MAX - 4)] {
+        let mut data = good.clone();
+        data[at..at + 8].copy_from_slice(&value.to_le_bytes());
+        std::fs::write(&path, &data).unwrap();
+        let (info, frames) = decode(&path);
+        assert_eq!(info.frames, 5);
+        // The scan estimates the end from the last interval.
+        assert_eq!(info.duration, MS(2000));
+        for ((image, pts), frame) in input.iter().zip(&frames) {
+            assert_eq!((&frame.image, frame.pts), (image, *pts));
+        }
+        let mut reader = MasterReader::open(&path).unwrap();
+        reader.seek(Duration::MAX).unwrap();
+        assert_eq!(reader.next_frame().unwrap().unwrap().image, input[4].0);
+    }
+}
+
+/// A recording killed mid-way (no finish, no drop) leaves a master that
+/// opens with every frame up to its latest keyframe: the writer flushes
+/// the header and each keyframe record to disk as it goes.
+#[test]
+fn killed_master_writer_keeps_frames_up_to_its_last_keyframe() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("killed.qsm");
+    // Keyframes every 2 s of 400 ms frames: frames 0, 5 and 10.
+    let input = master_frames(12);
+    let mut writer = MasterWriter::create(&path, 40, 30).unwrap();
+    for (image, pts) in &input {
+        writer.push(image.clone(), *pts).unwrap();
+    }
+    // At most 5 frames are still being compressed, so frames up to at
+    // least 6 reached the buffer, keyframe 5 among them, and 10 did not.
+    std::mem::forget(writer);
+    let (info, frames) = decode(&path);
+    assert_eq!(info.frames, 6);
+    for ((image, pts), frame) in input.iter().zip(&frames) {
+        assert_eq!((&frame.image, frame.pts), (image, *pts));
+    }
+}
+
+/// On a static screen no new frames push earlier ones out of the
+/// compression pipeline; the idle recorder's `write_ready` still gets them
+/// onto the disk within a second.
+#[test]
+fn idle_master_writer_puts_its_frames_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("idle.qsm");
+    let input = master_frames(3);
+    let mut writer = MasterWriter::create(&path, 40, 30).unwrap();
+    for (image, pts) in &input {
+        writer.push(image.clone(), *pts).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !MasterReader::open(&path).is_ok_and(|r| r.info().frames == 3) {
+        assert!(
+            Instant::now() < deadline,
+            "the frames never reached the disk"
+        );
+        writer.write_ready().unwrap();
+        std::thread::sleep(MS(20));
+    }
+    std::mem::forget(writer);
+    let (_, frames) = decode(&path);
+    for ((image, pts), frame) in input.iter().zip(&frames) {
+        assert_eq!((&frame.image, frame.pts), (image, *pts));
+    }
+}
+
+#[test]
+fn animation_size_limits_need_no_encoder() {
+    use OutputFormat::*;
+    for (format, ok, too_big) in [
+        (Gif, (1, 1), (65536, 10)),
+        (Webp, (16383, 1), (16384, 10)),
+        (Avif, (16, 65535), (15, 100)),
+        (Jxl, (2, 2), (1, 100)),
+    ] {
+        super::check_size(format, ok.0, ok.1).unwrap();
+        let error = super::check_size(format, too_big.0, too_big.1).unwrap_err();
+        assert!(error.to_string().contains(format.label()), "{error}");
+    }
+    assert!(super::check_size(Mp4, 100, 100).is_err());
 }
 
 /// Encoding speed per format and master throughput on desktop-like frames.
@@ -507,7 +608,8 @@ fn master_speed(dir: &Path, name: &str, frames: &[&Image]) {
     let start = Instant::now();
     let mut writer = MasterWriter::create(&path, w, h).unwrap();
     for (i, frame) in frames.iter().enumerate() {
-        writer.push(frame, MS(i as u64 * 33)).unwrap();
+        // The recorder hands over its one copy of each capture the same way.
+        writer.push((*frame).clone(), MS(i as u64 * 33)).unwrap();
     }
     writer.finish(MS(u64::from(n) * 33)).unwrap();
     let took = start.elapsed();

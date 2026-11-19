@@ -25,11 +25,17 @@ const MOVIE_TIMESCALE: u32 = 90_000;
 /// Fragment length when no video keyframes set the pace.
 const AUDIO_FRAGMENT: Duration = Duration::from_secs(1);
 /// Longest fragment, for long keyframe intervals: bounds what a crash loses.
+/// Also how long the init segment waits for every track to start.
 const MAX_FRAGMENT: Duration = Duration::from_secs(4);
+/// Media time between `sync_data` calls: written fragments survive a power
+/// loss, not only a crash, at the cost of one flush to disk this often.
+const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Writes H.264 and Opus tracks as fragmented MP4, or MP4/MOV finished
 /// classic. Nothing reaches the file before the first video keyframe (its
-/// SPS/PPS make the `avcC`); packets before it are buffered.
+/// SPS/PPS make the `avcC`) and, for up to [`MAX_FRAGMENT`], before every
+/// track has started (the init segment's edit lists hold their starts);
+/// packets until then are buffered.
 pub struct Mp4Muxer {
     path: PathBuf,
     out: BufWriter<File>,
@@ -43,6 +49,8 @@ pub struct Mp4Muxer {
     mehd_value: u64,
     /// Present when the file is rewritten classic on finish.
     classic: Option<Classic>,
+    /// pts up to which written fragments were last synced to disk.
+    synced: Duration,
 }
 
 /// What the `ftyp` and `moov` boxes are built from.
@@ -63,6 +71,9 @@ struct MuxTrack {
     last_pts: Option<Duration>,
     /// Decode time (ticks from origin) of the first written sample.
     start: Option<u64>,
+    /// Whether the init segment's edit list holds `start`: then the
+    /// fragments' decode times count from it.
+    start_edited: bool,
     /// Decode time of the next sample to write.
     dts: u64,
     written: u64,
@@ -115,6 +126,7 @@ impl Mp4Muxer {
                     pending: VecDeque::new(),
                     last_pts: None,
                     start: None,
+                    start_edited: false,
                     dts: 0,
                     written: 0,
                 })
@@ -134,6 +146,7 @@ impl Mp4Muxer {
             origin: None,
             sequence: 0,
             mehd_value: 0,
+            synced: Duration::ZERO,
         })
     }
 
@@ -153,10 +166,32 @@ impl Mp4Muxer {
                 ensure!(!last, "No H.264 keyframe was written");
                 return Ok(());
             }
-            self.origin = tracks
+            let first = tracks
                 .iter()
                 .filter_map(|t| t.pending.front().map(|s| s.pts))
                 .min();
+            let newest = tracks.iter().filter_map(|t| t.last_pts).max();
+            let waited = newest.zip(first).map(|(n, f)| n.saturating_sub(f));
+            // A track's start goes in the edit list, where every player
+            // places it; one that starts only after the init segment is
+            // written has to rely on its `tfdt` instead, which FFmpeg adds
+            // to the track's duration.
+            if !last
+                && tracks.iter().any(|t| t.pending.is_empty())
+                && waited.is_some_and(|w| w < MAX_FRAGMENT)
+            {
+                return Ok(());
+            }
+            self.origin = first;
+            let origin = first.unwrap_or_default();
+            for track in tracks.iter_mut() {
+                if let Some(sample) = track.pending.front() {
+                    let start = to_ticks(sample.pts.saturating_sub(origin), track.timescale);
+                    track.start = Some(start);
+                    track.dts = start;
+                    track.start_edited = true;
+                }
+            }
             self.write_init()?;
         }
         let origin = self.origin.unwrap_or_default();
@@ -178,7 +213,11 @@ impl Mp4Muxer {
                 track.start = Some(start);
                 track.dts = start;
             }
-            let base = track.dts;
+            let base = if track.start_edited {
+                track.dts - track.start.unwrap_or(0)
+            } else {
+                track.dts
+            };
             let mut entries = Vec::with_capacity(samples.len());
             let mut durations = Vec::with_capacity(samples.len());
             for (i, sample) in samples.iter().enumerate() {
@@ -280,6 +319,17 @@ impl Mp4Muxer {
         }
         self.pos = payload_pos + payload;
         self.out.flush()?;
+        let newest = runs
+            .iter()
+            .filter_map(|r| r.samples.last().map(|s| s.pts))
+            .max()
+            .unwrap_or_default();
+        if newest.saturating_sub(self.synced) >= SYNC_INTERVAL {
+            self.synced = newest;
+            if let Err(e) = self.out.get_ref().sync_data() {
+                log::warn!("Syncing {} to disk failed: {e}", self.path.display());
+            }
+        }
         Ok(())
     }
 
@@ -342,18 +392,33 @@ impl Layout {
         }
     }
 
-    /// Fragmented files carry late starts in `tfdt`; only the Opus pre-skip
-    /// needs an edit (a zero duration spans the whole fragmented media).
+    /// The edit list of a fragmented track: an empty edit for a late start
+    /// known when the init segment was written, and the Opus pre-skip. A
+    /// zero duration spans the whole fragmented media.
     fn fragmented_edits(&self, index: usize) -> Option<Edts> {
-        let skip = self.tracks[index].dops.as_ref()?.pre_skip;
-        Some(Edts {
-            elst: Some(Elst {
-                entries: vec![ElstEntry {
-                    segment_duration: 0,
-                    media_time: Some(u64::from(skip)),
-                    media_rate: 1.into(),
-                }],
-            }),
+        let track = &self.tracks[index];
+        let skip = track.dops.as_ref().map(|d| u64::from(d.pre_skip));
+        let start = match track.start {
+            Some(start) if track.start_edited => movie_time(start, track.timescale),
+            _ => 0,
+        };
+        let mut entries = Vec::new();
+        if start > 0 {
+            entries.push(ElstEntry {
+                segment_duration: start,
+                media_time: None,
+                media_rate: 1.into(),
+            });
+        }
+        if start > 0 || skip.is_some() {
+            entries.push(ElstEntry {
+                segment_duration: 0,
+                media_time: Some(skip.unwrap_or(0)),
+                media_rate: 1.into(),
+            });
+        }
+        (!entries.is_empty()).then_some(Edts {
+            elst: Some(Elst { entries }),
         })
     }
 

@@ -1697,14 +1697,31 @@ impl Editor {
             let d = self.doc.read(cx);
             (d.snapshot(), d.revision())
         };
-        let path = match &self.saved {
-            Some((p, _)) if !new_file => p.clone(),
-            _ => services.config.new_save_path(SystemTime::now()),
+        // A repeat save updates the file saved before; a first or new-file
+        // save reserves a free name, so it never replaces a screenshot that
+        // already has it (a fixed `filename`, two saves in one second).
+        let previous = self
+            .saved
+            .as_ref()
+            .filter(|_| !new_file)
+            .map(|(p, _)| p.clone());
+        let candidate = services.config.new_save_path(SystemTime::now());
+        let running = match super::jobs::begin() {
+            Ok(running) => running,
+            Err(err) => {
+                self.show_toast(format!("Save failed: {err:#}"), true, cx);
+                return;
+            }
         };
         let close = services.config.editor.close_on_save;
         let task = cx.background_spawn(async move {
+            let _running = running;
             let image = crate::export::render(&job);
-            image.save_png(&path, Compression::Balanced).map(|_| path)
+            let file = match previous {
+                Some(path) => OutputFile::replace(&path)?,
+                None => OutputFile::reserve(&candidate)?,
+            };
+            image.save_png_to(file, Compression::Balanced)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

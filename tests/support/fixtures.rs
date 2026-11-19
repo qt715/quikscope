@@ -252,3 +252,41 @@ pub fn ffprobe(path: &Path, streams: &[&str]) {
     );
     assert_eq!(found, streams, "ffprobe {}", path.display());
 }
+
+/// Presentation times of the first video stream's packets as `ffprobe`
+/// reads them, in file order; `None` when ffprobe is not installed. Lets
+/// tests check timing (variable frame rate, offsets) against another
+/// demuxer, not only quikscope's own.
+pub fn ffprobe_video_times(path: &Path) -> Option<Vec<Duration>> {
+    let out = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    assert!(
+        out.status.success(),
+        "ffprobe {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let times = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| {
+            let seconds: f64 = line
+                .trim_end_matches(',')
+                .parse()
+                .unwrap_or_else(|_| panic!("ffprobe {}: packet time {line:?}", path.display()));
+            Duration::from_secs_f64(seconds)
+        })
+        .collect();
+    Some(times)
+}

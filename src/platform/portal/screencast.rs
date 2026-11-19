@@ -23,6 +23,7 @@ type Streams = Vec<(u32, HashMap<String, OwnedValue>)>;
 
 pub struct ScreenCast {
     connection: Connection,
+    /// Restore tokens by output name (see [`ScreenCast::start`]).
     token_path: PathBuf,
     // A restore token is single-use; concurrent opens must not spend the same one.
     opening: std::sync::Mutex<()>,
@@ -34,16 +35,52 @@ impl ScreenCast {
             .filter(|p| std::path::Path::new(p).is_absolute())
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state")))
-            .context("no state directory for ScreenCast restore token")?;
+            .context("no state directory for ScreenCast restore tokens")?;
         Ok(Self {
             connection: Connection::session().context("connecting to ScreenCast portal bus")?,
-            token_path: state.join("quikscope/screencast-token"),
+            token_path: state.join("quikscope/screencast-tokens.json"),
             opening: std::sync::Mutex::new(()),
         })
     }
 
+    /// Starts a session sharing `target`'s output. GNOME and KDE restore a
+    /// token's sources without a dialog, so tokens are kept per output: one
+    /// token for every output would pin all recordings to the first monitor
+    /// ever chosen. A restored session that shares another monitor (the
+    /// layout changed, or the token predates a different choice) is closed
+    /// and the token dropped, so a second attempt shows the dialog.
     fn start(&self, target: &RecordTarget, cursor: bool) -> Result<(Session, u32, OwnedFd)> {
         let _lock = self.opening.lock().unwrap();
+        let mut tokens = load_tokens(&self.token_path)?;
+        let restore = tokens.get(&target.output).cloned();
+        let started = match self.attempt(target, cursor, restore.as_deref()) {
+            Err(error) if restore.is_some() && error.is::<WrongOutput>() => {
+                log::info!(
+                    "ScreenCast permission restored for {} shares another monitor; asking again",
+                    target.output
+                );
+                tokens.remove(&target.output);
+                save_tokens(&self.token_path, &tokens)?;
+                self.attempt(target, cursor, None)?
+            }
+            result => result?,
+        };
+        if let Some(token) = started.token {
+            tokens.insert(target.output.clone(), token);
+            save_tokens(&self.token_path, &tokens)?;
+        }
+        Ok((started.session, started.node, started.fd))
+    }
+
+    /// One session: CreateSession, SelectSources (restoring `restore`),
+    /// Start, and the stream of `target`'s output. On failure the session is
+    /// closed before returning.
+    fn attempt(
+        &self,
+        target: &RecordTarget,
+        cursor: bool,
+        restore: Option<&str>,
+    ) -> Result<Started> {
         let proxy = Proxy::new(&self.connection, DEST, PATH, INTERFACE)?;
         let session_token = token();
         let options =
@@ -57,18 +94,13 @@ impl ScreenCast {
             connection: self.connection.clone(),
             path,
         };
-        let restore = match std::fs::read_to_string(&self.token_path) {
-            Ok(s) => Some(s),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e).context("reading ScreenCast restore token"),
-        };
         let mut options = HashMap::from([
             ("types", Value::from(1u32)),
             ("multiple", Value::from(true)),
             ("cursor_mode", Value::from(if cursor { 2u32 } else { 1u32 })),
             ("persist_mode", Value::from(2u32)),
         ]);
-        if let Some(restore) = restore.as_deref() {
+        if let Some(restore) = restore {
             options.insert("restore_token", Value::from(restore));
         }
         request(
@@ -83,22 +115,52 @@ impl ScreenCast {
             "Start",
             &(&session.path, "", HashMap::<&str, Value<'_>>::new()),
         )?;
-        if let Some(value) = started.remove("restore_token") {
-            let restore: String = value.try_into()?;
-            save_token(&self.token_path, &restore)?;
-        }
+        let token = started
+            .remove("restore_token")
+            .map(String::try_from)
+            .transpose()?;
         let streams: Streams = started
             .remove("streams")
             .context("ScreenCast Start omitted streams")?
             .try_into()?;
+        // Checked before the new token is kept: it would restore the same
+        // wrong selection.
         let node = choose_stream(&streams, target.output_rect)?;
         let fd: zbus::zvariant::OwnedFd = proxy.call(
             "OpenPipeWireRemote",
             &(&session.path, HashMap::<&str, Value<'_>>::new()),
         )?;
-        Ok((session, node, fd.into()))
+        Ok(Started {
+            session,
+            node,
+            fd: fd.into(),
+            token,
+        })
     }
 }
+
+/// A started ScreenCast session and the stream of the requested output.
+struct Started {
+    session: Session,
+    node: u32,
+    fd: OwnedFd,
+    /// The token restoring this session's sources, if the portal issued one.
+    token: Option<String>,
+}
+
+/// The portal shared streams, but none of the requested output.
+#[derive(Debug)]
+struct WrongOutput;
+
+impl std::fmt::Display for WrongOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "portal did not share the selected output; select that monitor in the permission dialog",
+        )
+    }
+}
+
+impl std::error::Error for WrongOutput {}
 
 fn token() -> String {
     format!(
@@ -157,7 +219,20 @@ fn request<B: serde::Serialize + zbus::zvariant::DynamicType>(
     bail!("ScreenCast portal disconnected during {method}")
 }
 
-fn save_token(path: &std::path::Path, token: &str) -> Result<()> {
+/// Restore tokens by output name; none when the file is missing. A damaged
+/// file costs a permission dialog, not the recording.
+fn load_tokens(path: &std::path::Path) -> Result<HashMap<String, String>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            log::warn!("ignoring damaged {}: {error}", path.display());
+            HashMap::new()
+        })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) => Err(e).context("reading ScreenCast restore tokens"),
+    }
+}
+
+fn save_tokens(path: &std::path::Path, tokens: &HashMap<String, String>) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let parent = path.parent().context("invalid ScreenCast token path")?;
     std::fs::create_dir_all(parent)?;
@@ -169,14 +244,14 @@ fn save_token(path: &std::path::Path, token: &str) -> Result<()> {
             .create_new(true)
             .mode(0o600)
             .open(&temporary)?;
-        file.write_all(token.as_bytes())?;
+        file.write_all(&serde_json::to_vec(tokens)?)?;
         file.sync_all()?;
         std::fs::rename(&temporary, path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temporary);
     }
-    result.context("persisting ScreenCast restore token")
+    result.context("persisting ScreenCast restore tokens")
 }
 
 fn choose_stream(streams: &Streams, output: IRect) -> Result<u32> {
@@ -191,14 +266,16 @@ fn choose_stream(streams: &Streams, output: IRect) -> Result<u32> {
             return Ok(*node);
         }
     }
-    // A single stream without geometry is common on GNOME. Multiple unknown
-    // streams cannot safely be mapped to a user-selected global rectangle.
+    // A single stream without geometry is common on GNOME: it is what the
+    // user picked in the dialog for this output, or what a token of this
+    // output restores (tokens are per output). Multiple unknown streams
+    // cannot safely be mapped to a user-selected global rectangle.
     if let [(node, properties)] = streams.as_slice()
         && (!properties.contains_key("position") || !properties.contains_key("size"))
     {
         return Ok(*node);
     }
-    bail!("portal did not share the selected output; select that monitor in the permission dialog")
+    Err(WrongOutput.into())
 }
 
 struct Session {
@@ -285,11 +362,32 @@ struct Control {
 /// session's thread.
 struct Captured {
     epoch: u64,
-    pixels: Vec<u8>,
+    pixels: Pooled,
     width: u32,
     height: u32,
     format: PixelFormat,
     at: Instant,
+}
+
+/// Frame pixels lent to the pipeline; dropping them hands the buffer back
+/// to the PipeWire thread, so a recording does not allocate (and fault in)
+/// a frame-sized buffer per frame.
+struct Pooled {
+    pixels: Vec<u8>,
+    pool: mpsc::Sender<Vec<u8>>,
+}
+
+impl AsRef<[u8]> for Pooled {
+    fn as_ref(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
+impl Drop for Pooled {
+    fn drop(&mut self) {
+        // After the recording ended the buffer is simply freed.
+        let _ = self.pool.send(std::mem::take(&mut self.pixels));
+    }
 }
 
 struct Source {
@@ -319,7 +417,7 @@ impl VideoSource for Source {
                         c.height,
                         c.width as usize * 4,
                         c.format,
-                        Pixels::Owned(c.pixels),
+                        Pixels::Shared(Box::new(c.pixels)),
                         c.at,
                     )));
                 }
@@ -363,26 +461,28 @@ fn crop(target: &RecordTarget, width: u32, height: u32) -> Result<(usize, usize,
     Ok((x, y, (right - x) as u32, (bottom - y) as u32))
 }
 
-/// The `w`×`h` pixels at (`x`, `y`) of rows `stride` bytes apart, tightly
-/// packed; `None` when `bytes` ends before the last of them.
+/// Packs the `w`×`h` pixels at (`x`, `y`) of rows `stride` bytes apart
+/// tightly into `pixels`; `false` when `bytes` ends before the last of them.
 fn crop_rows(
     bytes: &[u8],
     stride: usize,
     (x, y, w, h): (usize, usize, u32, u32),
-) -> Option<Vec<u8>> {
+    pixels: &mut Vec<u8>,
+) -> bool {
     let row = w as usize * 4;
     if h == 0 || stride < x * 4 + row {
-        return None;
+        return false;
     }
     let end = (y + h as usize - 1) * stride + x * 4 + row;
     if bytes.len() < end {
-        return None;
+        return false;
     }
-    let mut pixels = Vec::with_capacity(row * h as usize);
+    pixels.clear();
+    pixels.reserve(row * h as usize);
     for line in bytes[y * stride..end].chunks(stride) {
         pixels.extend_from_slice(&line[x * 4..x * 4 + row]);
     }
-    Some(pixels)
+    true
 }
 
 /// Picks frames from a stream that runs at the compositor's rate so they
@@ -458,6 +558,8 @@ fn consume(
     let state_error = error.clone();
     let callback_error = error.clone();
     let ready = ready.clone();
+    // Buffers of frames the pipeline dropped, reused for the next ones.
+    let (returns, pool) = mpsc::channel::<Vec<u8>>();
     let frames = frames.clone();
     let format_target = target.clone();
     let process_control = control.clone();
@@ -559,14 +661,18 @@ fn consume(
             if !data.throttle.accept(now) {
                 return;
             }
-            let Some(pixels) = bytes
+            let mut pixels = Pooled {
+                pixels: pool.try_recv().unwrap_or_default(),
+                pool: returns.clone(),
+            };
+            if !bytes
                 .get(offset..)
                 .and_then(|b| b.get(..len))
-                .and_then(|b| crop_rows(b, stride, region))
-            else {
+                .is_some_and(|b| crop_rows(b, stride, region, &mut pixels.pixels))
+            {
                 log::debug!("portal video: skipped a short buffer ({len} bytes, stride {stride})");
                 return;
-            };
+            }
             let (width, height) = (region.2, region.3);
             // A full queue means the encoder is behind: drop this frame.
             let _ = frames.try_send(Ok(Captured {
@@ -642,6 +748,29 @@ mod tests {
         calls: Arc<Mutex<Vec<String>>>,
         restored: Arc<Mutex<Vec<Option<String>>>>,
         remote: Option<(u32, PathBuf)>,
+        /// Monitors whose streams carry geometry; none: a single stream
+        /// without geometry, as GNOME may send.
+        monitors: Vec<(String, IRect)>,
+        /// The monitor the user picks in the permission dialog.
+        pick: Arc<Mutex<String>>,
+        /// The source SelectSources chose for the next Start.
+        selected: Mutex<String>,
+    }
+
+    impl Fake {
+        fn new(
+            calls: &Arc<Mutex<Vec<String>>>,
+            restored: &Arc<Mutex<Vec<Option<String>>>>,
+        ) -> Self {
+            Fake {
+                calls: calls.clone(),
+                restored: restored.clone(),
+                remote: None,
+                monitors: Vec::new(),
+                pick: Arc::new(Mutex::new("monitor".into())),
+                selected: Mutex::new(String::new()),
+            }
+        }
     }
 
     async fn respond(
@@ -708,11 +837,23 @@ mod tests {
                 2
             );
             self.calls.lock().unwrap().push("select".into());
-            self.restored.lock().unwrap().push(
-                options
-                    .get("restore_token")
-                    .map(|v| <&str>::try_from(v).unwrap().to_owned()),
-            );
+            let token = options
+                .get("restore_token")
+                .map(|v| <&str>::try_from(v).unwrap().to_owned());
+            // Like GNOME and KDE: a valid token restores its sources
+            // silently; anything else shows the dialog.
+            let restored = token
+                .as_deref()
+                .and_then(|t| t.strip_prefix("permission-"))
+                .map(str::to_owned);
+            *self.selected.lock().unwrap() = match restored {
+                Some(source) => source,
+                None => {
+                    self.calls.lock().unwrap().push("dialog".into());
+                    self.pick.lock().unwrap().clone()
+                }
+            };
+            self.restored.lock().unwrap().push(token);
             respond(connection, header, HashMap::new()).await
         }
         async fn start(
@@ -725,7 +866,19 @@ mod tests {
         ) -> OwnedObjectPath {
             self.calls.lock().unwrap().push("start".into());
             let node = self.remote.as_ref().map_or(42, |r| r.0);
-            let streams = vec![(node, HashMap::<String, OwnedValue>::new())];
+            let selected = self.selected.lock().unwrap().clone();
+            let mut properties = HashMap::<String, OwnedValue>::new();
+            if let Some((_, rect)) = self.monitors.iter().find(|(name, _)| *name == selected) {
+                properties.insert(
+                    "position".into(),
+                    Value::from((rect.x, rect.y)).try_into().unwrap(),
+                );
+                properties.insert(
+                    "size".into(),
+                    Value::from((rect.w, rect.h)).try_into().unwrap(),
+                );
+            }
+            let streams = vec![(node, properties)];
             respond(
                 connection,
                 header,
@@ -733,7 +886,9 @@ mod tests {
                     ("streams".into(), Value::from(streams).try_into().unwrap()),
                     (
                         "restore_token".into(),
-                        Value::from("restored-permission").try_into().unwrap(),
+                        Value::from(format!("permission-{selected}"))
+                            .try_into()
+                            .unwrap(),
                     ),
                 ]),
             )
@@ -771,9 +926,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dbus_flow_restores_token_and_closes_session() {
-        let directory = tempfile::tempdir().unwrap();
+    /// A private bus serving `fake`, and a recorder keeping its tokens in
+    /// `directory`.
+    fn serve(
+        fake: Fake,
+        directory: &std::path::Path,
+    ) -> (Bus, zbus::blocking::Connection, ScreenCast) {
         let mut child = std::process::Command::new("dbus-daemon")
             .args(["--session", "--nofork", "--print-address=1"])
             .stdout(std::process::Stdio::piped())
@@ -783,25 +941,17 @@ mod tests {
         std::io::BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut address)
             .unwrap();
-        let _bus = Bus(child);
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let restored = Arc::new(Mutex::new(Vec::new()));
-        let _service = zbus::blocking::connection::Builder::address(address.trim())
+        let bus = Bus(child);
+        let calls = fake.calls.clone();
+        let service = zbus::blocking::connection::Builder::address(address.trim())
             .unwrap()
             .name(DEST)
             .unwrap()
-            .serve_at(
-                PATH,
-                Fake {
-                    calls: calls.clone(),
-                    restored: restored.clone(),
-                    remote: None,
-                },
-            )
+            .serve_at(PATH, fake)
             .unwrap()
             .serve_at(
                 "/org/freedesktop/portal/desktop/session/quikscope/test",
-                FakeSession(calls.clone()),
+                FakeSession(calls),
             )
             .unwrap()
             .build()
@@ -811,9 +961,18 @@ mod tests {
                 .unwrap()
                 .build()
                 .unwrap(),
-            token_path: directory.path().join("state/screencast-token"),
+            token_path: directory.join("state/screencast-tokens.json"),
             opening: Mutex::new(()),
         };
+        (bus, service, recorder)
+    }
+
+    #[test]
+    fn dbus_flow_restores_token_and_closes_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let restored = Arc::new(Mutex::new(Vec::new()));
+        let (_bus, _service, recorder) = serve(Fake::new(&calls, &restored), directory.path());
         let target = RecordTarget {
             output: "monitor".into(),
             output_rect: IRect::new(0, 0, 800, 600),
@@ -827,17 +986,17 @@ mod tests {
         assert_eq!(
             *calls.lock().unwrap(),
             [
-                "create", "select", "start", "remote", "close", "create", "select", "start",
-                "remote", "close"
+                "create", "select", "dialog", "start", "remote", "close", "create", "select",
+                "start", "remote", "close"
             ]
         );
         assert_eq!(
             *restored.lock().unwrap(),
-            [None, Some("restored-permission".into())]
+            [None, Some("permission-monitor".into())]
         );
         assert_eq!(
-            std::fs::read_to_string(&recorder.token_path).unwrap(),
-            "restored-permission"
+            load_tokens(&recorder.token_path).unwrap(),
+            HashMap::from([("monitor".into(), "permission-monitor".into())])
         );
         use std::os::unix::fs::PermissionsExt as _;
         assert_eq!(
@@ -848,6 +1007,97 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+
+    /// GNOME/KDE restore a token's monitor without asking: recording another
+    /// monitor must neither reuse it nor fail without ever showing a dialog.
+    #[test]
+    fn restore_tokens_are_per_output_and_a_wrong_restore_asks_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let restored = Arc::new(Mutex::new(Vec::new()));
+        let left = IRect::new(0, 0, 800, 600);
+        let right = IRect::new(800, 0, 1024, 768);
+        let pick = Arc::new(Mutex::new("left".to_owned()));
+        let fake = Fake {
+            monitors: vec![("left".into(), left), ("right".into(), right)],
+            pick: pick.clone(),
+            ..Fake::new(&calls, &restored)
+        };
+        let (_bus, _service, recorder) = serve(fake, directory.path());
+        let target = |output: &str, rect: IRect| RecordTarget {
+            output: output.into(),
+            output_rect: rect,
+            region: IRect::new(rect.x + 10, rect.y + 10, 100, 100),
+        };
+        let record = |target: &RecordTarget| {
+            calls.lock().unwrap().clear();
+            restored.lock().unwrap().clear();
+            recorder
+                .start(target, true)
+                .map(|(session, ..)| drop(session))
+        };
+        let calls = || calls.lock().unwrap().clone();
+        let tokens = || load_tokens(&recorder.token_path).unwrap();
+
+        record(&target("left", left)).unwrap();
+        assert!(calls().contains(&"dialog".into()));
+        // Another output has no token yet: the dialog appears.
+        *pick.lock().unwrap() = "right".into();
+        record(&target("right", right)).unwrap();
+        assert!(calls().contains(&"dialog".into()));
+        assert_eq!(*restored.lock().unwrap(), [None]);
+        assert_eq!(
+            tokens(),
+            HashMap::from([
+                ("left".into(), "permission-left".into()),
+                ("right".into(), "permission-right".into()),
+            ])
+        );
+        // Each output restores its own monitor silently.
+        record(&target("left", left)).unwrap();
+        assert!(!calls().contains(&"dialog".into()));
+        assert_eq!(*restored.lock().unwrap(), [Some("permission-left".into())]);
+
+        // A token restoring another monitor (the layout changed): the
+        // restored session closes and the dialog is shown.
+        let mut stale = tokens();
+        stale.insert("right".into(), "permission-left".into());
+        save_tokens(&recorder.token_path, &stale).unwrap();
+        record(&target("right", right)).unwrap();
+        assert_eq!(
+            calls(),
+            [
+                "create", "select", "start", "close", "create", "select", "dialog", "start",
+                "remote", "close"
+            ]
+        );
+        assert_eq!(tokens()["right"], "permission-right");
+
+        // The user picks the wrong monitor in the dialog as well: the
+        // recording fails and no token is left to restore that choice.
+        save_tokens(&recorder.token_path, &stale).unwrap();
+        *pick.lock().unwrap() = "left".into();
+        let error = record(&target("right", right)).unwrap_err();
+        assert!(error.is::<WrongOutput>(), "{error:#}");
+        assert!(!tokens().contains_key("right"));
+        assert_eq!(tokens()["left"], "permission-left");
+        // Without a token, nothing is retried.
+        assert!(
+            record(&target("right", right))
+                .unwrap_err()
+                .is::<WrongOutput>()
+        );
+        assert_eq!(calls().iter().filter(|c| *c == "create").count(), 1);
+    }
+
+    #[test]
+    fn damaged_token_file_only_costs_a_dialog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tokens.json");
+        assert!(load_tokens(&path).unwrap().is_empty());
+        std::fs::write(&path, "screencast-token-from-a-build").unwrap();
+        assert!(load_tokens(&path).unwrap().is_empty());
     }
 
     #[test]
@@ -888,14 +1138,43 @@ mod tests {
     fn crops_rows_tightly() {
         // 3x3 pixels, rows padded to 16 bytes; take the 2x2 block at (1, 1).
         let bytes: Vec<u8> = (0..48).collect();
-        let pixels = crop_rows(&bytes, 16, (1, 1, 2, 2)).unwrap();
+        // A reused buffer of a larger earlier frame keeps none of its bytes.
+        let mut pixels = vec![0xaa; 64];
+        assert!(crop_rows(&bytes, 16, (1, 1, 2, 2), &mut pixels));
+        assert_eq!(pixels.len(), 16);
         assert_eq!(pixels[..8], bytes[20..28]);
         assert_eq!(pixels[8..], bytes[36..44]);
         // The last row only needs to reach the crop, not the full stride.
-        assert!(crop_rows(&bytes[..44], 16, (1, 1, 2, 2)).is_some());
-        assert!(crop_rows(&bytes[..43], 16, (1, 1, 2, 2)).is_none());
-        assert!(crop_rows(&bytes, 8, (1, 1, 2, 2)).is_none());
-        assert!(crop_rows(&bytes, 16, (0, 0, 2, 0)).is_none());
+        assert!(crop_rows(&bytes[..44], 16, (1, 1, 2, 2), &mut pixels));
+        assert!(!crop_rows(&bytes[..43], 16, (1, 1, 2, 2), &mut pixels));
+        assert!(!crop_rows(&bytes, 8, (1, 1, 2, 2), &mut pixels));
+        assert!(!crop_rows(&bytes, 16, (0, 0, 2, 0), &mut pixels));
+    }
+
+    #[test]
+    fn dropped_frames_return_their_buffer() {
+        let (returns, pool) = mpsc::channel();
+        let pixels = Pooled {
+            pixels: (0..16).collect(),
+            pool: returns.clone(),
+        };
+        let frame = Frame::from_pixels(
+            2,
+            2,
+            8,
+            PixelFormat::Bgrx,
+            Pixels::Shared(Box::new(pixels)),
+            Instant::now(),
+        );
+        assert!(pool.try_recv().is_err());
+        drop(frame);
+        assert_eq!(pool.try_recv().unwrap(), (0..16).collect::<Vec<u8>>());
+        // Once the recording ended, a late frame is simply freed.
+        drop(pool);
+        drop(Pooled {
+            pixels: vec![0; 4],
+            pool: returns,
+        });
     }
 
     #[test]
@@ -940,6 +1219,8 @@ mod tests {
                 .args(args)
                 .env("PIPEWIRE_RUNTIME_DIR", runtime.path())
                 .env("XDG_RUNTIME_DIR", runtime.path())
+                // WirePlumber stores default devices under the state dir.
+                .env("XDG_STATE_HOME", runtime.path().join("state"))
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             if let Some(address) = address {
@@ -1013,9 +1294,8 @@ mod tests {
             .serve_at(
                 PATH,
                 Fake {
-                    calls: calls.clone(),
-                    restored: Arc::new(Mutex::new(Vec::new())),
                     remote: Some((node, socket)),
+                    ..Fake::new(&calls, &Arc::new(Mutex::new(Vec::new())))
                 },
             )
             .unwrap()
@@ -1031,7 +1311,7 @@ mod tests {
                 .unwrap()
                 .build()
                 .unwrap(),
-            token_path: runtime.path().join("state/screencast-token"),
+            token_path: runtime.path().join("state/screencast-tokens.json"),
             opening: Mutex::new(()),
         };
         let target = RecordTarget {
@@ -1078,9 +1358,9 @@ mod tests {
         for _ in 0..4 {
             let c = next();
             assert_eq!((c.width, c.height, c.format), (200, 100, PixelFormat::Bgrx));
-            assert_eq!(c.pixels.len(), 200 * 100 * 4);
+            assert_eq!(c.pixels.pixels.len(), 200 * 100 * 4);
             // videotestsrc foreground-color 0xff123456 in BGRx byte order.
-            assert_eq!(&c.pixels[..3], &[0x56, 0x34, 0x12]);
+            assert_eq!(&c.pixels.pixels[..3], &[0x56, 0x34, 0x12]);
             assert_eq!(c.epoch, 0);
             last = c.at;
         }

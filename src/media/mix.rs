@@ -12,12 +12,15 @@
 //! already delivered is dropped, because a source never overlaps itself and
 //! nothing is summed twice. Either way the source is back in sync.
 //!
-//! [`Mixer::take`] hands out what every source has delivered. A source that
-//! lags more than [`GRACE`] behind (or has not started) stops holding the
-//! mix back: its missing stretch plays as silence, and samples it delivers
-//! later for already-returned times are dropped (it keeps its timing). Mixed
-//! samples are soft-clipped above 0.9 so loud sources sum without wrapping
-//! or harsh clipping.
+//! [`Mixer::take`] hands out what every source has delivered. Each source
+//! holds the mix back by the delivery lag it has shown (how far behind the
+//! requested time its samples arrive: device and Bluetooth latency, a busy
+//! thread) plus [`GRACE`] for jitter, at most [`MAX_HOLD`]. A source that
+//! lags more than that (or has not started) stops holding the mix back: its
+//! missing stretch plays as silence, and samples it delivers later for
+//! already-returned times are dropped, with a warning (it keeps its timing).
+//! Mixed samples are soft-clipped above 0.9 so loud sources sum without
+//! wrapping or harsh clipping.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -36,8 +39,16 @@ const OUTPUT: AudioSpec = AudioSpec {
 /// How far a source's timestamps may stray from its sample count before it
 /// is re-anchored: far above capture jitter, below an audible lip-sync error.
 pub const MAX_DRIFT: Duration = Duration::from_millis(40);
-/// How long [`Mixer::take`] waits for a lagging source.
+/// How long [`Mixer::take`] waits for a source beyond its usual delivery
+/// lag (and for one that has not delivered yet).
 pub const GRACE: Duration = Duration::from_millis(200);
+/// Longest a lagging source holds the mix back; the muxers buffer a whole
+/// fragment anyway.
+pub const MAX_HOLD: Duration = Duration::from_secs(2);
+/// A source's lag estimate follows a shorter observed lag by this fraction
+/// of the difference per [`Mixer::take`] (a longer one at once), so a
+/// single prompt chunk does not undo it.
+const LAG_DECAY: u64 = 16;
 /// Input this far ahead of the output is dropped instead of buffered.
 pub const MAX_AHEAD: Duration = Duration::from_secs(10);
 
@@ -53,15 +64,20 @@ impl Mixer {
     pub fn new(specs: &[AudioSpec]) -> Result<Self> {
         let sources = specs
             .iter()
-            .map(|&spec| {
+            .enumerate()
+            .map(|(index, &spec)| {
                 Ok(Source {
+                    index,
                     spec,
                     resampler: Resampler::new(spec, OUTPUT)?,
                     segment: None,
                     buffer: VecDeque::new(),
                     start: 0,
                     end: None,
+                    delivered: false,
+                    lag: 0,
                     dropping: false,
+                    warned_late: false,
                 })
             })
             .collect::<Result<_>>()?;
@@ -134,19 +150,28 @@ impl Mixer {
     }
 
     /// Returns the mix from [`position`](Self::position) up to (excluding)
-    /// `until`, or less while a source that is at most [`GRACE`] behind
+    /// `until` (normally the current session time), or less while a source
+    /// within its usual lag plus [`GRACE`] (at most [`MAX_HOLD`]) behind
     /// `until` has not delivered that far yet. Interleaved stereo at
     /// [`RATE`]; never covers time at or after `until`.
     pub fn take(&mut self, until: Duration) -> Vec<f32> {
         let target = frames_before(until);
-        let patience = target.saturating_sub(frames_before(GRACE));
-        let ready = self
-            .sources
-            .iter()
-            .map(|s| s.end.unwrap_or(0).max(patience))
-            .min()
-            .unwrap_or(target)
-            .min(target);
+        let (grace, max_hold) = (frames_before(GRACE), frames_before(MAX_HOLD));
+        let mut ready = target;
+        for source in &mut self.sources {
+            // Measured only right after a delivery: a source that stopped
+            // delivering would otherwise look ever more lagging.
+            if std::mem::take(&mut source.delivered) {
+                let observed = target.saturating_sub(source.end.unwrap_or(target));
+                source.lag = if observed >= source.lag {
+                    observed
+                } else {
+                    source.lag - (source.lag - observed) / LAG_DECAY
+                };
+            }
+            let patience = target.saturating_sub((source.lag + grace).min(max_hold));
+            ready = ready.min(source.end.unwrap_or(0).max(patience));
+        }
         self.mix_to(ready)
     }
 
@@ -196,6 +221,8 @@ impl Mixer {
 }
 
 struct Source {
+    /// Position in the specs, for logs.
+    index: usize,
     spec: AudioSpec,
     resampler: Resampler,
     segment: Option<Segment>,
@@ -205,8 +232,14 @@ struct Source {
     /// Output frame this source has delivered up to; `None` before its
     /// first chunk.
     end: Option<u64>,
+    /// Delivered since the last [`Mixer::take`].
+    delivered: bool,
+    /// Estimated delivery lag (output frames).
+    lag: u64,
     /// Input is being dropped for running too far ahead (logged once).
     dropping: bool,
+    /// Samples arriving after the mix passed them were logged.
+    warned_late: bool,
 }
 
 /// A stretch of a source's input with contiguous samples.
@@ -254,6 +287,15 @@ impl Source {
         let frames = (samples.len() / 2) as u64;
         let end = at + frames;
         self.end = Some(self.end.map_or(end, |e| e.max(end)));
+        self.delivered = true;
+        if at < cursor && frames > 0 && !self.warned_late {
+            self.warned_late = true;
+            log::warn!(
+                "Audio source {} delivered samples {} ms after the mix passed them; dropping them",
+                self.index,
+                frame_time(cursor - at).as_millis()
+            );
+        }
         let mut from = at.max(cursor);
         let buffered = self.start + (self.buffer.len() / 2) as u64;
         if self.buffer.is_empty() {
@@ -467,6 +509,37 @@ mod tests {
             total = mixer.position();
             assert!(total <= ms(until));
         }
+    }
+
+    /// A source whose samples always arrive half a second after their
+    /// capture time (Bluetooth microphones, a busy capture thread) holds the
+    /// mix back instead of being dropped. Only what it delivered before its
+    /// lag was known is lost.
+    #[test]
+    fn steadily_lagging_source_is_waited_for() {
+        let mut mixer = Mixer::new(&[STEREO_48K, STEREO_48K]).unwrap();
+        let mut mix = Vec::new();
+        for step in 1..=300 {
+            let now = ms(step * 10);
+            mixer.add(0, &[0.0; 960], now - ms(10));
+            if now >= ms(510) {
+                mixer.add(1, &[0.5; 960], now - ms(510));
+            }
+            mix.extend(mixer.take(now));
+            if now >= ms(1000) {
+                // Held back by the lag (plus GRACE), not by GRACE alone.
+                assert!(mixer.position() <= now - ms(500), "at {now:?}");
+                assert!(mixer.position() >= now - ms(500) - GRACE, "at {now:?}");
+            }
+        }
+        assert!(mixer.sources[1].warned_late);
+        mix.extend(mixer.finish(ms(3000)));
+        assert_eq!(mix.len(), 144_000 * 2);
+        // Before its first chunk arrived, the mix went 200 ms ahead.
+        assert!(mix[..14_400 * 2].iter().all(|&s| s == 0.0));
+        // From then on, everything it delivered (up to 2.5 s) is there.
+        assert!(mix[15_000 * 2..120_000 * 2].iter().all(|&s| s == 0.5));
+        assert!(mix[120_000 * 2..].iter().all(|&s| s == 0.0));
     }
 
     #[test]

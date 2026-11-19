@@ -9,13 +9,13 @@
 //! availability fallback) against forced GDI.
 use super::{
     desktop::{Monitor, PhysicalDpi, monitors},
-    duplication::{Duplication, Update},
+    duplication::Duplication,
 };
 use crate::{
     capture::{OutputFrame, Snapshot},
     geom::IRect,
     media::{Frame, PixelFormat, Pixels},
-    platform::windows_pixels::{self as pixels, Rotation},
+    platform::windows_pixels::{self as pixels, QpcClock, Rotation},
     raster::Image,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -31,7 +31,10 @@ use windows::{
     Win32::{
         Foundation::HANDLE,
         Graphics::Gdi::*,
-        System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize},
+        System::{
+            Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize},
+            Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
+        },
         UI::WindowsAndMessaging::{
             CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, HICON,
             ICONINFO,
@@ -104,8 +107,16 @@ impl WindowsCapture {
                     return;
                 }
                 let _dpi = PhysicalDpi::enter();
+                let clock = match qpc_clock() {
+                    Ok(clock) => clock,
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                        return;
+                    }
+                };
                 let mut worker = Worker {
                     backend,
+                    clock,
                     outputs: HashMap::new(),
                     streams: HashMap::new(),
                     next_stream: 0,
@@ -156,8 +167,28 @@ impl crate::platform::Capture for WindowsCapture {
     }
 }
 
+/// Pairs the performance counter with `Instant` (see [`QpcClock`]).
+fn qpc_clock() -> Result<QpcClock> {
+    let (mut frequency, mut before, mut after) = (0, 0, 0);
+    unsafe {
+        QueryPerformanceFrequency(&mut frequency)?;
+        QueryPerformanceCounter(&mut before)?;
+    }
+    let instant = Instant::now();
+    unsafe {
+        QueryPerformanceCounter(&mut after)?;
+    }
+    Ok(QpcClock {
+        instant,
+        ticks: before + (after - before) / 2,
+        frequency,
+    })
+}
+
 struct Worker {
     backend: CaptureBackend,
+    /// Maps DXGI's present times onto `Instant`.
+    clock: QpcClock,
     outputs: HashMap<String, Output>,
     streams: HashMap<u64, Stream>,
     next_stream: u64,
@@ -172,6 +203,9 @@ struct Output {
     /// so each stream sees every change even when another reader acquired it.
     desktop_updates: u64,
     pointer_updates: u64,
+    /// QPC times of the newest desktop image and pointer move (0: none).
+    desktop_at: i64,
+    pointer_at: i64,
 }
 impl Output {
     fn new(monitor: Monitor) -> Self {
@@ -183,6 +217,8 @@ impl Output {
             used: Instant::now(),
             desktop_updates: 0,
             pointer_updates: 0,
+            desktop_at: 0,
+            pointer_at: 0,
         }
     }
     /// The output's duplication, made on demand unless a recent attempt
@@ -210,9 +246,15 @@ impl Output {
             return;
         };
         match dxgi.acquire(wait) {
-            Ok(Update { desktop, pointer }) => {
-                self.desktop_updates += u64::from(desktop);
-                self.pointer_updates += u64::from(pointer);
+            Ok(update) => {
+                self.desktop_updates += u64::from(update.desktop);
+                self.pointer_updates += u64::from(update.pointer);
+                if update.desktop {
+                    self.desktop_at = update.desktop_at;
+                }
+                if update.pointer_at != 0 {
+                    self.pointer_at = update.pointer_at;
+                }
             }
             Err(error) => {
                 // Includes ACCESS_LOST (mode change, secure desktop) and
@@ -234,6 +276,8 @@ struct Stream {
     cursor: bool,
     /// Update counts of the last delivered frame.
     seen: Option<(u64, u64)>,
+    /// Capture time of the last delivered frame.
+    last: Option<Instant>,
     pool: Pool,
 }
 
@@ -375,6 +419,7 @@ impl Worker {
                 region: IRect::new(region.x - m.x, region.y - m.y, region.w, region.h),
                 cursor,
                 seen: None,
+                last: None,
                 pool: Pool::default(),
             },
         );
@@ -429,6 +474,13 @@ impl Worker {
             return Ok(None);
         }
         stream.seen = Some(updates);
+        // The newest change the frame shows; a forced frame is stamped now.
+        let changed = (!fresh).then(|| {
+            let pointer = if stream.cursor { output.pointer_at } else { 0 };
+            self.clock.at(output.desktop_at.max(pointer))
+        });
+        let captured = pixels::frame_time(changed, stream.last, Instant::now());
+        stream.last = Some(captured);
         Ok(Some(Frame::from_pixels(
             region.w as u32,
             region.h as u32,
@@ -438,7 +490,7 @@ impl Worker {
                 pixels,
                 pool: stream.pool.clone(),
             })),
-            Instant::now(),
+            captured,
         )))
     }
 }

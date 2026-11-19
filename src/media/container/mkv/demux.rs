@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use matroska_demuxer::{Frame, MatroskaFile, TrackEntry, TrackType};
 use mp4_atom::{Atom, Avcc};
 
-use super::super::{Codec, Packet, Track, TrackKind, nal, nanos};
+use super::super::{Codec, Packet, Track, TrackKind, nal, nanos, nominal_fps};
 use super::ebml::{self, Element};
 use super::{AAC_PREFIX, AV1, AVC, OPUS};
 
@@ -23,6 +23,8 @@ const DURATION_LOOKAHEAD: usize = 256;
 const MAX_INTERLEAVE: u64 = 4_000_000_000;
 /// First guess of how far before a seek target to start reading.
 const SEEK_PREROLL: u64 = 500_000_000;
+/// Clusters at the start whose video block times give the frame rate.
+const RATE_CLUSTERS: usize = 8;
 
 type Reader = MatroskaFile<CueFix<BufReader<File>>>;
 
@@ -50,6 +52,9 @@ pub struct MkvDemuxer {
     /// Per track, the sequence number of its queued packet still lacking a
     /// duration.
     open: Vec<Option<u64>>,
+    /// Per track, encoder priming (ns) still to drop: CodecDelay, while
+    /// reading from the start of the file.
+    priming: Vec<u64>,
     eof: bool,
 }
 
@@ -59,6 +64,13 @@ struct TrackInfo {
     /// `avcC` length size and parameter sets for H.264.
     h264: Option<(usize, Vec<u8>)>,
     default_duration: Option<u64>,
+    /// CodecDelay (ns) of AAC tracks, whose decoder does not trim priming
+    /// itself: subtracted from block times, and the packets it mostly
+    /// covers are dropped. Opus keeps it (see the module docs of
+    /// [`super::super`]).
+    codec_delay: u64,
+    /// Length (ns) of one AAC frame, for priming without block durations.
+    aac_frame: Option<u64>,
 }
 
 struct Raw {
@@ -84,6 +96,9 @@ struct Scan {
     first_cluster_time: Option<u64>,
     /// Earliest block time in the first cluster (ticks).
     first_block: Option<u64>,
+    /// (track number, time in ticks) of the blocks of the first few
+    /// clusters.
+    early_blocks: Vec<(u64, u64)>,
     file_len: u64,
 }
 
@@ -112,16 +127,36 @@ impl MkvDemuxer {
             }
         }
 
-        let origin = scan.first_block.unwrap_or(0) * scale;
+        // Nominal rates from the block times: files we write carry no
+        // DefaultDuration for (variable-rate) video.
+        for (&number, &index) in &by_number {
+            if let TrackKind::Video { fps, .. } = &mut tracks[index].kind {
+                let mut times: Vec<u64> = scan
+                    .early_blocks
+                    .iter()
+                    .filter(|&&(track, _)| track == number)
+                    .map(|&(_, time)| time)
+                    .collect();
+                // Presentation times, which B-frames put out of order.
+                times.sort_unstable();
+                let rate = nominal_fps(times.windows(2).map(|w| w[1] - w[0]), 1e9 / scale as f64);
+                if rate > 0.0 {
+                    *fps = rate;
+                }
+            }
+        }
+        let origin = scan.first_block.unwrap_or(0).saturating_mul(scale);
         let end = match file.info().duration() {
             Some(ticks) => (ticks * scale as f64) as u64,
             None => last_block_end(path, &scan, &by_number, &info, scale).unwrap_or(origin),
         };
+        let priming = info.iter().map(|i| i.codec_delay).collect();
         Ok(MkvDemuxer {
             path: path.to_owned(),
             file,
             scan,
             open: vec![None; tracks.len()],
+            priming,
             tracks,
             info,
             by_number,
@@ -152,6 +187,17 @@ impl MkvDemuxer {
                 continue;
             };
             let info = &self.info[track];
+            let block_duration = self.frame.duration.map(|d| d.saturating_mul(self.scale));
+            let priming = &mut self.priming[track];
+            if *priming > 0 {
+                let length = block_duration.or(info.default_duration).or(info.aac_frame);
+                let hidden = length.map_or(0, |length| (*priming).min(length));
+                *priming = length.map_or(0, |length| priming.saturating_sub(length));
+                // Mostly priming: playing it would put sound early.
+                if length.is_some_and(|length| hidden > length - hidden) {
+                    continue;
+                }
+            }
             let data = std::mem::take(&mut self.frame.data);
             let keyframe = self.frame.is_keyframe.unwrap_or_else(|| match info.codec {
                 Codec::H264 => info
@@ -163,11 +209,16 @@ impl MkvDemuxer {
             });
             return Ok(Some(Raw {
                 track,
-                time: self.frame.timestamp * self.scale,
+                // Matroska: CodecDelay is subtracted from every block time.
+                time: self
+                    .frame
+                    .timestamp
+                    .saturating_mul(self.scale)
+                    .saturating_sub(info.codec_delay),
                 data,
                 keyframe,
                 duration: None,
-                block_duration: self.frame.duration.map(|d| d * self.scale),
+                block_duration,
             }));
         }
     }
@@ -199,6 +250,12 @@ impl MkvDemuxer {
                     .then(|| opus::packet::get_nb_samples(&raw.data, 48_000).ok())
                     .flatten()
                     .map(|samples| samples as u64 * 1_000_000_000 / 48_000)
+            })
+            .or(info.aac_frame)
+            .or_else(|| match self.tracks[raw.track].kind {
+                // The last picture of a file without DefaultDuration.
+                TrackKind::Video { fps, .. } if fps > 0.0 => Some((1e9 / fps).round() as u64),
+                _ => None,
             });
         let data = match &info.h264 {
             Some((length_size, params)) => {
@@ -232,7 +289,21 @@ impl MkvDemuxer {
                 .scan
                 .first_cluster_time
                 .is_some_and(|first| ticks > first);
-        match cue.or(linear.then_some(ticks)).filter(|_| time > 0) {
+        let position = cue.or(linear.then_some(ticks)).filter(|_| time > 0);
+        // Priming only precedes a track's first packets.
+        let from_first_cluster = position.is_none_or(|ticks| {
+            self.scan
+                .first_cluster_time
+                .is_none_or(|first| ticks <= first)
+        });
+        for (priming, info) in self.priming.iter_mut().zip(&self.info) {
+            *priming = if from_first_cluster {
+                info.codec_delay
+            } else {
+                0
+            };
+        }
+        match position {
             Some(ticks) => {
                 self.file.seek(ticks)?;
                 Ok(false)
@@ -278,13 +349,19 @@ impl MkvDemuxer {
             } else {
                 kept.retain(|p| p.track != track);
             }
-            let beyond = raw.time > target + MAX_INTERLEAVE;
+            let beyond = raw.time > target.saturating_add(MAX_INTERLEAVE);
             kept.push(raw);
             if beyond || done.iter().all(|&d| d) {
                 break;
             }
         }
-        let complete = !too_late && seen.iter().all(|&s| s);
+        // An audio track without packets near the target (one that ended
+        // early, or a gap) has nothing to resume from: reading further back
+        // for it would only re-read the file, on every seek. Video still
+        // needs its last keyframe, however far back.
+        let complete = !too_late
+            && seen.iter().any(|&s| s)
+            && (0..count).all(|t| seen[t] || !self.info[t].video);
         Ok((complete || from_start).then(|| kept.into()))
     }
 }
@@ -324,7 +401,10 @@ impl super::super::Demuxer for MkvDemuxer {
     fn seek(&mut self, to: Duration) -> Result<()> {
         // Block times are whole ticks; a target computed from the original
         // times may sit a rounding error before the stored one.
-        let target = self.origin + to.as_nanos() as u64 + self.scale / 2;
+        let target = self
+            .origin
+            .saturating_add(u64::try_from(to.as_nanos()).unwrap_or(u64::MAX))
+            .saturating_add(self.scale / 2);
         let mut preroll = SEEK_PREROLL;
         loop {
             let from_start = self.position(target.saturating_sub(preroll))?;
@@ -389,6 +469,12 @@ fn read_track(entry: &TrackEntry) -> Result<Option<(Track, TrackInfo)>> {
     } else {
         None
     };
+    let aac_frame = match kind {
+        TrackKind::Audio { rate, .. } if codec == Codec::Aac && rate > 0 => {
+            Some(1024 * 1_000_000_000 / u64::from(rate))
+        }
+        _ => None,
+    };
     let track = Track {
         codec,
         kind,
@@ -399,6 +485,13 @@ fn read_track(entry: &TrackEntry) -> Result<Option<(Track, TrackInfo)>> {
         codec,
         h264,
         default_duration,
+        // The Opus decoder trims its pre-skip, which CodecDelay repeats;
+        // video packets are references for later pictures, never dropped.
+        codec_delay: match codec {
+            Codec::Opus | Codec::H264 | Codec::Av1 => 0,
+            Codec::Aac => entry.codec_delay().unwrap_or(0),
+        },
+        aac_frame,
     };
     Ok(Some((track, info)))
 }
@@ -423,7 +516,7 @@ fn scan<R: Read + Seek>(r: &mut R) -> Result<Scan> {
                     if let (Some(id), Some(position)) = (id, position)
                         && ebml::read_binary(r, id, 4)? == ebml::CUES.to_be_bytes()
                     {
-                        cues_at = Some(segment.data + ebml::read_uint(r, position)?);
+                        cues_at = segment.data.checked_add(ebml::read_uint(r, position)?);
                     }
                 }
             }
@@ -477,14 +570,49 @@ fn scan<R: Read + Seek>(r: &mut R) -> Result<Scan> {
         }
         None => (None, None),
     };
+    let early_blocks =
+        first_cluster.map_or_else(Vec::new, |cluster| early_blocks(r, cluster.start, file_len));
     Ok(Scan {
         cues,
         patches,
         first_cluster,
         first_cluster_time,
         first_block,
+        early_blocks,
         file_len,
     })
+}
+
+/// (track number, time in ticks) of the blocks in the first
+/// [`RATE_CLUSTERS`] clusters from `pos`.
+fn early_blocks<R: Read + Seek>(r: &mut R, mut pos: u64, file_len: u64) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    let mut clusters = 0;
+    while clusters < RATE_CLUSTERS && pos < file_len {
+        let Ok(el) = ebml::element_at(r, pos) else {
+            break;
+        };
+        let end = if el.id == ebml::CLUSTER {
+            clusters += 1;
+            let (time, blocks, end) = ebml::cluster_blocks(r, &el, file_len);
+            if let Some(time) = time {
+                out.extend(
+                    blocks
+                        .iter()
+                        .map(|b| (b.track, time.saturating_add_signed(i64::from(b.relative)))),
+                );
+            }
+            el.end().unwrap_or(end)
+        } else {
+            let Some(end) = el.end() else { break };
+            end
+        };
+        if end <= pos {
+            break;
+        }
+        pos = end;
+    }
+    out
 }
 
 /// End (ns) of the last block, for files without a duration: walks the
@@ -522,13 +650,15 @@ fn last_block_end(
     blocks
         .iter()
         .map(|b| {
-            let start = time.saturating_add_signed(i64::from(b.relative)) * scale;
-            let duration = b.duration.map(|d| d * scale).or_else(|| {
+            let start = time
+                .saturating_add_signed(i64::from(b.relative))
+                .saturating_mul(scale);
+            let duration = b.duration.map(|d| d.saturating_mul(scale)).or_else(|| {
                 by_number
                     .get(&b.track)
                     .and_then(|&t| info[t].default_duration)
             });
-            start + duration.unwrap_or(0)
+            start.saturating_add(duration.unwrap_or(0))
         })
         .max()
 }

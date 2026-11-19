@@ -64,11 +64,12 @@ save_dir = "~/Videos/Screencasts"
 filename = "recording_%Y%m%d_%H%M%S"
 # "mp4", "mkv" or "mov": H.264 video with Opus audio.
 video_format = "mp4"
-# MP4 layout. Fragmented (the default) keeps everything recorded so far
-# playable if quikscope or the machine dies mid-recording; false writes
-# fragments while recording and rewrites them as a classic MP4 with its index
-# at the front when the recording ends (some older players need that). MOV
-# always ends classic; MKV is always playable up to its last cluster.
+# MP4 layout. Fragmented (the default) is written under its final name as
+# it records, about one fragment a second, so a crash or kill leaves a file
+# that plays up to its last fragment; false writes fragments to a partial
+# file while recording and rewrites them as a classic MP4 with its index at
+# the front when the recording ends (some older players need that). MOV
+# always ends classic; MKV is written in place like fragmented MP4.
 mp4_fragmented = true
 # "gif", "webp", "avif" or "jxl".
 animation_format = "gif"
@@ -91,7 +92,7 @@ notify = true
 open_editor = false
 # "auto" encodes H.264 on the GPU through Vulkan Video (NVIDIA, AMD, Intel)
 # when that works, else with OpenH264 in software; "software" always uses
-# OpenH264.
+# OpenH264. Decoding (playback, thumbnails, exports) follows the same choice.
 encoder = "auto"
 # Linux: status-notifier tray icon with recording controls. Changing it in
 # Settings shows or removes the icon at once.
@@ -154,6 +155,44 @@ including inline comments and unrelated sections. Unknown keys still fail
 strict validation. If loading fails, the daemon logs the error and uses
 defaults; settings shows the parse error and refuses to overwrite the file
 until it is repaired.
+
+## Recordings
+
+Every file quikscope writes (screenshots, recordings, exports) gets a name
+of its own before writing starts: when the configured name is taken, `-1`,
+`-2`, … is added, so nothing is overwritten, also when two saves happen in
+the same second. Until it is complete a file is written next to that name
+as `<name>.<pid>.<n>.part`, except fragmented MP4 and MKV recordings, which
+are playable at every fragment and so are written under their final name.
+
+A capture larger than any H.264 encoder on the machine accepts (very wide
+or multi-output areas) is recorded scaled down, and a notification says so.
+
+Stopping a recording saves it before anything else: `quikscope quit`, the
+tray's Quit, SIGTERM (`systemctl --user stop quikscope`; the unit allows ten
+minutes for a long animation to encode) and logout wait for it, and for
+exports or saves still running from an editor. `record status` and the tray
+show how far the save is (`saving 42%`); `record cancel` or the tray's
+**Cancel saving** stop it, discarding a video and keeping an animation's
+lossless recording to export later.
+
+### Crash recovery
+
+When the daemon starts, it looks for what a daemon that died (crash, `kill
+-9`, power loss) left in the screenshot and recording folders. Only files
+named like the partial files above, of a process that no longer runs and
+older than the daemon's start, are considered:
+
+- a partial MP4, MOV or MKV recording that plays is published under a free
+  name;
+- an empty partial file and the empty placeholder reserved with it are
+  removed;
+- an animation's lossless recording that never became a GIF/WebP/AVIF/JPEG
+  XL (the daemon died while recording or encoding it, or its save was
+  cancelled) opens in the annotator, from which it can be exported;
+- anything else is left alone.
+
+One notification lists what was recovered; clicking it opens the newest.
 
 ## Environment
 

@@ -3,7 +3,11 @@ This directory is a modified copy of zune-jpegxl 0.5.2
 https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpegxl,
 commit a019244c4a8a4eb713e85fa77f9e18f841d6271b), by Caleb Etemesi,
 licensed under MIT OR Apache-2.0 OR Zlib (LICENSE-MIT, LICENSE-APACHE,
-LICENSE-ZLIB). quikscope uses it under the same terms.
+LICENSE-ZLIB). quikscope uses it, and distributes this modified copy,
+under the Zlib licence option (LICENSE-ZLIB); the MIT and Apache-2.0
+texts are kept as they came with the original. As the Zlib licence
+requires, this copy is marked as altered (the changes are listed below)
+and its licence notices are kept unchanged.
 
 It is compiled as a private module of quikscope (src/media/anim/jxl.rs
 includes src/lib.rs with #[path]) rather than as its own crate, so that

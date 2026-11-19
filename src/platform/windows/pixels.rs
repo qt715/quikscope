@@ -1,10 +1,13 @@
-//! Pixel math of Windows desktop capture, free of Win32 types so its tests
-//! run on every host: DXGI output rotation, mapping desktop regions into the
-//! duplication texture, and composing DXGI pointer shapes.
+//! Pixel math and frame timing of Windows desktop capture, free of Win32
+//! types so its tests run on every host: DXGI output rotation, mapping
+//! desktop regions into the duplication texture, composing DXGI pointer
+//! shapes, and placing frames on the `Instant` timeline.
 //!
 //! Desktop Duplication hands out textures in the display's scan-out
 //! orientation; `Rotation` (DXGI_MODE_ROTATION) says how that texture is
 //! turned to give the desktop the user sees.
+
+use std::time::{Duration, Instant};
 
 use crate::{geom::IRect, raster::Image};
 
@@ -169,9 +172,95 @@ pub fn draw_pointer(
     }
 }
 
+/// Maps QueryPerformanceCounter readings onto `Instant`. Rust's `Instant`
+/// reads the same counter on Windows, so one pairing taken between two
+/// counter reads holds for the whole process.
+#[derive(Clone, Copy, Debug)]
+pub struct QpcClock {
+    pub instant: Instant,
+    /// The counter at `instant`.
+    pub ticks: i64,
+    /// Counter ticks per second.
+    pub frequency: i64,
+}
+
+impl QpcClock {
+    pub fn at(&self, ticks: i64) -> Instant {
+        let delta = i128::from(ticks) - i128::from(self.ticks);
+        let nanos = delta.unsigned_abs() * 1_000_000_000 / self.frequency.max(1) as u128;
+        let offset = Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX));
+        if delta >= 0 {
+            self.instant.checked_add(offset).unwrap_or(self.instant)
+        } else {
+            self.instant.checked_sub(offset).unwrap_or(self.instant)
+        }
+    }
+}
+
+/// When a recorded frame was captured: when the newest change it shows
+/// reached the screen (`changed`), not after the readback that followed,
+/// so video lines up with QPC-stamped audio. Never before the stream's
+/// previous frame nor after `now`. A forced frame (`changed` is `None`:
+/// the first one, or the first after a resume) is stamped `now`, since its
+/// pixels may predate the recording or the pause.
+pub fn frame_time(changed: Option<Instant>, previous: Option<Instant>, now: Instant) -> Instant {
+    match changed {
+        Some(at) => previous.map_or(at, |previous| at.max(previous)).min(now),
+        None => now,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qpc_ticks_map_onto_instants() {
+        let instant = Instant::now() + Duration::from_secs(10);
+        let clock = QpcClock {
+            instant,
+            ticks: 50_000_000,
+            frequency: 10_000_000,
+        };
+        assert_eq!(clock.at(50_000_000), instant);
+        assert_eq!(
+            clock.at(50_000_000 + 25_000),
+            instant + Duration::from_micros(2500)
+        );
+        assert_eq!(
+            clock.at(50_000_000 - 10_000_000),
+            instant - Duration::from_secs(1)
+        );
+        // A 24 MHz counter (common on current CPUs).
+        let clock = QpcClock {
+            frequency: 24_000_000,
+            ..clock
+        };
+        assert_eq!(
+            clock.at(50_000_000 + 24),
+            instant + Duration::from_micros(1)
+        );
+    }
+
+    #[test]
+    fn frames_are_stamped_when_their_change_appeared() {
+        let now = Instant::now() + Duration::from_secs(10);
+        let ms = Duration::from_millis;
+        // Presented 12 ms before the (slow) readback finished.
+        assert_eq!(
+            frame_time(Some(now - ms(12)), Some(now - ms(40)), now),
+            now - ms(12)
+        );
+        // Never before the previous frame or after now.
+        assert_eq!(
+            frame_time(Some(now - ms(50)), Some(now - ms(40)), now),
+            now - ms(40)
+        );
+        assert_eq!(frame_time(Some(now + ms(1)), None, now), now);
+        // A forced frame may show an image from before the recording or a
+        // pause: it belongs to now.
+        assert_eq!(frame_time(None, Some(now - ms(5000)), now), now);
+    }
 
     const ROTATIONS: [Rotation; 4] = [
         Rotation::Identity,

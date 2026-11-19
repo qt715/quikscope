@@ -9,7 +9,7 @@
 //! pick                                         ->  ok color #0067ed
 //! record video region                          ->  ok recording video 1280x720
 //! record video                                 ->  ok recorded 4 1280x720 5120 /path/rec.mp4
-//! record status                                ->  ok record video 5120 running | ok record saving | ok record idle
+//! record status                                ->  ok record video 5120 running | ok record saving 42 | ok record idle
 //! version                                      ->  ok version 0.3.0
 //! ping                                         ->  ok pong
 //! ```
@@ -220,9 +220,10 @@ pub enum RecordStatus {
     /// Nothing recorded or being saved (also while a recording is starting).
     Idle,
     Recording(RecordState),
-    /// A stopped or discarded recording is still being written or torn
-    /// down; a new recording cannot start yet.
-    Saving,
+    /// A stopped recording is still being written (with the percentage
+    /// done), or a discarded one torn down (without); a new recording
+    /// cannot start yet.
+    Saving(Option<u8>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -557,8 +558,16 @@ impl Response {
         if let Some(rest) = line.strip_prefix("ok record ") {
             match rest {
                 "idle" => return Ok(Response::RecordStatus(RecordStatus::Idle)),
-                "saving" => return Ok(Response::RecordStatus(RecordStatus::Saving)),
+                "saving" => return Ok(Response::RecordStatus(RecordStatus::Saving(None))),
                 _ => {}
+            }
+            if let Some(percent) = rest.strip_prefix("saving ") {
+                let percent = percent
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|p| *p <= 100)
+                    .ok_or_else(|| format!("malformed record status {line:?}"))?;
+                return Ok(Response::RecordStatus(RecordStatus::Saving(Some(percent))));
             }
             let malformed = || format!("malformed record status {line:?}");
             let mut parts = rest.split(' ');
@@ -714,7 +723,10 @@ impl fmt::Display for Response {
                 path.display()
             ),
             Response::RecordStatus(RecordStatus::Idle) => write!(f, "ok record idle"),
-            Response::RecordStatus(RecordStatus::Saving) => write!(f, "ok record saving"),
+            Response::RecordStatus(RecordStatus::Saving(None)) => write!(f, "ok record saving"),
+            Response::RecordStatus(RecordStatus::Saving(Some(percent))) => {
+                write!(f, "ok record saving {percent}")
+            }
             Response::RecordStatus(RecordStatus::Recording(s)) => write!(
                 f,
                 "ok record {} {} {}",
@@ -797,7 +809,7 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir).ok();
     }
-    let log_file = std::fs::File::create(&log).ok();
+    let log_file = open_daemon_log(&log);
     let mut cmd = std::process::Command::new(exe);
     // Detaching on Windows changes CWD; retain the client's socket location.
     cmd.arg("daemon")
@@ -819,6 +831,8 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     }
     #[cfg(windows)]
     configure_windows_daemon(&mut cmd);
+    #[cfg(windows)]
+    keep_std_handles_from_daemon();
     cmd.spawn().context("starting the daemon")?;
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -831,6 +845,24 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     bail!("the daemon did not start within 5s; see {}", log.display())
 }
 
+/// Above this size an auto-start moves the old daemon log to `daemon.log.1`
+/// (replacing the one before); below it the new daemon appends, so the log
+/// of a daemon that just failed survives the next start.
+const LOG_ROTATE_BYTES: u64 = 1 << 20;
+
+fn open_daemon_log(log: &Path) -> Option<std::fs::File> {
+    if std::fs::metadata(log).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+        let mut old = log.as_os_str().to_owned();
+        old.push(".1");
+        let _ = std::fs::rename(log, old);
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .ok()
+}
+
 #[cfg(windows)]
 fn configure_windows_daemon(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt as _;
@@ -838,6 +870,31 @@ fn configure_windows_daemon(cmd: &mut std::process::Command) {
     cmd.current_dir(crate::config::cache_dir());
     // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no inherited console.
     cmd.creation_flags(0x0000_0008 | 0x0000_0200);
+}
+
+/// `CreateProcess` passes every inheritable handle to the child, not only
+/// the three it is given. A client run as `quikscope … | Out-String` holds
+/// the inheritable write end of PowerShell's pipe as its stdout; a daemon
+/// inheriting it keeps the pipe open, so PowerShell waits until the daemon
+/// quits. This client exits soon, so its own handles need not be
+/// inheritable.
+#[cfg(windows)]
+fn keep_std_handles_from_daemon() {
+    use windows::Win32::Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation};
+    use windows::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: plain handle queries; a missing or invalid standard
+        // handle only makes `SetHandleInformation` fail, which is ignored.
+        unsafe {
+            if let Ok(handle) = GetStdHandle(id)
+                && !handle.is_invalid()
+            {
+                let _ = SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -972,7 +1029,9 @@ mod tests {
             Response::Error("no outputs".into()),
             Response::Version("0.3.0".into()),
             Response::RecordStatus(RecordStatus::Idle),
-            Response::RecordStatus(RecordStatus::Saving),
+            Response::RecordStatus(RecordStatus::Saving(None)),
+            Response::RecordStatus(RecordStatus::Saving(Some(0))),
+            Response::RecordStatus(RecordStatus::Saving(Some(42))),
             Response::RecordStatus(RecordStatus::Recording(RecordState {
                 kind: Kind::Animation,
                 elapsed_ms: 5120,
@@ -1011,7 +1070,11 @@ mod tests {
         // Scripts parse these; an older client reading `saving` fails loudly
         // instead of misreporting idle.
         assert_eq!(
-            Response::RecordStatus(RecordStatus::Saving).to_string(),
+            Response::RecordStatus(RecordStatus::Saving(Some(42))).to_string(),
+            "ok record saving 42"
+        );
+        assert_eq!(
+            Response::RecordStatus(RecordStatus::Saving(None)).to_string(),
             "ok record saving"
         );
         assert_eq!(

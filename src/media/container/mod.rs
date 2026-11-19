@@ -67,16 +67,18 @@ pub struct Packet {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Container {
     /// `fragmented`: init segment, then a `moof`/`mdat` fragment per video
-    /// keyframe (about once a second), flushed to disk as written, so a crash
-    /// loses at most the last fragment. Otherwise the file is written as
-    /// fragments and rewritten into a classic MP4 with `moov` first on
-    /// [`Muxer::finish`].
+    /// keyframe (about once a second), handed to the OS as written and
+    /// synced to disk every few seconds, so a crash loses at most the last
+    /// fragment and a power loss the last seconds. Otherwise the file is
+    /// written as fragments and rewritten into a classic MP4 with `moov`
+    /// first on [`Muxer::finish`].
     Mp4 { fragmented: bool },
     /// QuickTime brand; always finished as a classic file like
     /// `Mp4 { fragmented: false }`.
     Mov,
-    /// Clusters per keyframe with unknown-size segment while writing; cues
-    /// and sizes are written on [`Muxer::finish`]. A crashed file still plays.
+    /// Clusters per keyframe with unknown-size segment while writing (synced
+    /// to disk like fragments); cues and sizes are written on
+    /// [`Muxer::finish`]. A crashed file still plays.
     Mkv,
 }
 
@@ -108,8 +110,9 @@ pub trait Demuxer: Send {
     /// Next packet of any track, in file order.
     fn next_packet(&mut self) -> Result<Option<Packet>>;
     /// Repositions so that, per video track, the next packet is the last
-    /// keyframe at or before `to`, and per audio track the last packet
-    /// starting at or before `to`. Callers decode forward to `to`.
+    /// keyframe at or before `to`, and per audio track the packet playing at
+    /// `to` (or the next one: a track that has ended before `to` resumes
+    /// with nothing). Callers decode forward to `to`.
     fn seek(&mut self, to: Duration) -> Result<()>;
 }
 
@@ -174,4 +177,23 @@ fn nanos(ns: i128) -> Duration {
         u64::try_from(ns / 1_000_000_000).unwrap_or(u64::MAX),
         (ns % 1_000_000_000) as u32,
     )
+}
+
+/// Nominal frame rate from frame intervals in units of
+/// `1 / units_per_second`: the mean of the intervals below 1.5 times the
+/// shortest. Recordings skip pictures while the screen is static, so the
+/// overall average understates the rate they were made at, while whole-tick
+/// rounding (33 and 34 ms at 30 fps) still averages out. 0 without any
+/// interval.
+fn nominal_fps(intervals: impl Iterator<Item = u64> + Clone, units_per_second: f64) -> f64 {
+    let Some(shortest) = intervals.clone().filter(|&i| i > 0).min() else {
+        return 0.0;
+    };
+    let limit = u128::from(shortest) * 3;
+    let (sum, count) = intervals
+        .filter(|&i| i > 0 && u128::from(i) * 2 < limit)
+        .fold((0u128, 0u64), |(sum, count), i| {
+            (sum + u128::from(i), count + 1)
+        });
+    units_per_second * count as f64 / sum as f64
 }

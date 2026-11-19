@@ -16,7 +16,14 @@
 //!   count ([`super::mix`]) into 20 ms Opus packets timed by sample count. An
 //!   audio source that fails ends its own track only.
 //! - Odd capture sizes are cropped to even (H.264 needs 4:2:0), never
-//!   scaled. Animations record their exact size into a lossless master.
+//!   scaled; only a capture larger than every H.264 encoder takes is scaled
+//!   down (and [`Session::warnings`] says so). Animations record their
+//!   exact size into a lossless master.
+//! - Fragmented MP4 and Matroska are written straight into the reserved
+//!   final file: both are playable at every flushed fragment, so a crash or
+//!   power loss leaves a playable recording under its real name. Classic
+//!   MP4 and MOV are written fragmented into a partial file and rewritten
+//!   at the end.
 //! - An encoder or muxer failure stops the recording ([`Session::failure`])
 //!   and [`Session::stop`] keeps what was written: fragmented MP4 and
 //!   Matroska are playable up to the last fragment. When the rewrite of a
@@ -24,6 +31,7 @@
 //!   same name.
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -37,16 +45,20 @@ use super::codec::Yuv420;
 use super::container::{self, Codec, Muxer};
 use super::export::{self, AUDIO_TRACK, H264Track, OpusTrack, VIDEO_TRACK};
 use super::mix::Mixer;
-use super::{AudioSource, EncoderPreference, Frame, OutputFormat, VideoSource, convert};
+use super::{
+    AudioSource, EncoderPreference, Frame, OutputFormat, PixelFormat, VideoSource, convert,
+};
+use crate::output::OutputFile;
 use crate::raster::Image;
 
 /// What to record into.
 #[derive(Debug)]
 pub struct SessionConfig {
-    /// The reserved final file. Videos stream into its partial file;
-    /// animations are first recorded losslessly to `master` and encoded into
-    /// it when the session stops.
-    pub output: crate::output::OutputFile,
+    /// The final file. A [reserved](OutputFile::reserve) fragmented MP4 or
+    /// Matroska file is written in place; other videos stream into its
+    /// partial file; animations are first recorded losslessly to `master`
+    /// and encoded into it when the session stops.
+    pub output: OutputFile,
     pub format: OutputFormat,
     /// Lossless intermediate for animations, kept after the session so the
     /// annotator can re-export without generation loss. Ignored for videos.
@@ -80,8 +92,37 @@ pub struct Recorded {
     pub encoder: String,
 }
 
+/// Why [`Session::stop`] saved nothing: its `cancel` flag was set while it
+/// was saving. Returned as the error, so callers find it with
+/// `error.downcast_ref::<Cancelled>()`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cancelled {
+    /// For an animation, its lossless master, complete and kept (it opens
+    /// in the annotator, which can export it later); `None` for a video,
+    /// which is discarded.
+    pub master: Option<PathBuf>,
+}
+
+impl fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.master {
+            Some(master) => write!(
+                f,
+                "Saving was cancelled; the lossless recording is kept at {}",
+                master.display()
+            ),
+            None => f.write_str("Recording discarded"),
+        }
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
 /// Longest side of [`Recorded::thumbnail`].
 const THUMBNAIL: u32 = 384;
+/// How often [`Session::stop`] checks its cancel flag while the encoder
+/// thread finishes.
+const ABORT_POLL: Duration = Duration::from_millis(10);
 /// How long capture threads block before checking for stop and pause.
 const POLL: Duration = Duration::from_millis(40);
 /// How long the encoder thread waits for work before checking the clock
@@ -224,6 +265,10 @@ impl Inbox {
 
 struct Control {
     stop: AtomicBool,
+    /// Set when the recording is being thrown away: the encoder thread
+    /// drops its file unfinished instead of finishing (and, for classic
+    /// MP4/MOV, rewriting) what will be deleted anyway.
+    abort: AtomicBool,
     paused: AtomicBool,
     clock: Mutex<Clock>,
     failure: Mutex<Option<String>>,
@@ -268,7 +313,7 @@ pub struct Session {
     master: PathBuf,
     encoder_preference: EncoderPreference,
     fragmented: bool,
-    output: Option<crate::output::OutputFile>,
+    output: Option<OutputFile>,
     size: (u32, u32),
     /// The first frame, for when the recording cannot be read back.
     thumbnail: Image,
@@ -294,13 +339,14 @@ impl Session {
             }
         }
         let mut session = Self::start_with_audio(config, source, audio)?;
+        warnings.append(&mut session.warnings);
         session.warnings = warnings;
         Ok(session)
     }
 
     /// Allows embedded capture sources to supply additional audio tracks.
     pub fn start_with_audio(
-        config: SessionConfig,
+        mut config: SessionConfig,
         mut source: Box<dyn VideoSource>,
         mut audio: Vec<Box<dyn AudioSource>>,
     ) -> Result<Self> {
@@ -322,9 +368,29 @@ impl Session {
             );
         };
         let thumbnail = first.to_image().thumbnail(THUMBNAIL);
+        let mut warnings = Vec::new();
         let (sink, size) = if config.format.is_video() {
-            let size = (first.width() & !1, first.height() & !1);
+            let in_place = matches!(
+                export::container_for(config.format, config.fragmented)?,
+                container::Container::Mp4 { fragmented: true } | container::Container::Mkv
+            );
+            if in_place && config.output.is_reserved() {
+                config.output.write_in_place()?;
+            }
             let sink = VideoSink::create(&config, (first.width(), first.height()), &audio)?;
+            let size = sink.encoded;
+            if sink.scaled {
+                let warning = format!(
+                    "Recording scaled down to {}x{}: no H.264 encoder here takes the full {}x{} capture at {} fps",
+                    size.0,
+                    size.1,
+                    first.width(),
+                    first.height(),
+                    config.fps
+                );
+                log::warn!("{warning}");
+                warnings.push(warning);
+            }
             (Sink::Video(sink), size)
         } else {
             ensure!(
@@ -332,7 +398,7 @@ impl Session {
                 "Animation master and output must differ"
             );
             let size = (first.width(), first.height());
-            check_animation_encoder(config.format, &config.master, size)?;
+            anim::check_size(config.format, size.0, size.1)?;
             let writer = MasterWriter::create(&config.master, size.0, size.1)?;
             (
                 Sink::Master(MasterSink {
@@ -346,6 +412,7 @@ impl Session {
         let specs: Vec<_> = audio.iter().map(|source| source.spec()).collect();
         let control = Arc::new(Control {
             stop: AtomicBool::new(false),
+            abort: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             clock: Mutex::new(Clock {
                 start: first.captured,
@@ -381,7 +448,7 @@ impl Session {
             control,
             pulls: Vec::new(),
             encoder: Some(encoder),
-            warnings: Vec::new(),
+            warnings,
         };
         // A failed spawn drops `session`, which stops what already runs.
         let control = session.control.clone();
@@ -402,7 +469,8 @@ impl Session {
         Ok(session)
     }
 
-    /// Problems that did not stop the recording (skipped audio devices).
+    /// Problems that did not stop the recording: skipped audio devices, a
+    /// capture scaled down to a size H.264 encoders take.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
@@ -452,8 +520,10 @@ impl Session {
         self.control.failure.lock().unwrap().clone()
     }
 
-    /// Stops every thread; `None` if that already happened.
-    fn finish_workers(&mut self) -> Option<Outcome> {
+    /// Stops every thread; `None` if that already happened. With `abort`,
+    /// the flag is watched until the encoder thread ends: once set, the
+    /// thread drops its file instead of finishing it.
+    fn finish_workers(&mut self, abort: Option<&AtomicBool>) -> Option<Outcome> {
         let encoder = self.encoder.take()?;
         self.control
             .clock
@@ -469,6 +539,14 @@ impl Session {
             }
         }
         self.control.inbox.close();
+        if let Some(abort) = abort {
+            while !encoder.is_finished() {
+                if abort.load(Ordering::Acquire) {
+                    self.control.abort.store(true, Ordering::Release);
+                }
+                thread::sleep(ABORT_POLL);
+            }
+        }
         Some(encoder.join().unwrap_or_else(|_| Outcome {
             encoder: "unknown".into(),
             error: Some(anyhow::anyhow!("The encoder thread panicked")),
@@ -480,10 +558,35 @@ impl Session {
     /// For animations, an error here means the final file could not be
     /// encoded; the master at [`SessionConfig::master`] is kept and opens
     /// in the annotator.
-    pub fn stop(mut self) -> Result<Recorded> {
-        let outcome = self.finish_workers().context("Recording already stopped")?;
+    ///
+    /// `progress` receives 0.0–1.0 while saving: an animation's final
+    /// encode, which can take minutes, reports as it goes; a video reports
+    /// only its start and end. Setting `cancel` while saving stops with a
+    /// [`Cancelled`] error: an animation keeps its complete master (and no
+    /// final file), a video is discarded (once a classic MP4/MOV rewrite has
+    /// begun, it completes before the file is deleted).
+    pub fn stop(
+        mut self,
+        progress: &(dyn Fn(f32) + Sync),
+        cancel: &AtomicBool,
+    ) -> Result<Recorded> {
+        progress(0.0);
+        let video = self.format.is_video();
+        // An animation's master is finished even when cancelled: it is what
+        // a cancel keeps.
+        let outcome = self
+            .finish_workers(video.then_some(cancel))
+            .context("Recording already stopped")?;
         let output = self.output.take().context("Recording already stopped")?;
-        let (path, encoder) = if self.format.is_video() {
+        let cancelled = || cancel.load(Ordering::Acquire);
+        let kept_master = || Cancelled {
+            master: (!video).then(|| self.master.clone()),
+        };
+        if cancelled() {
+            // Dropping the output deletes the unfinished file.
+            return Err(kept_master().into());
+        }
+        let (path, encoder) = if video {
             if let Some(error) = outcome.error {
                 ensure!(
                     playable(output.part()),
@@ -491,13 +594,15 @@ impl Session {
                 );
                 log::error!("recording: {error:#}; keeping what was written");
             }
-            (output.commit()?, outcome.encoder)
+            let path = output.commit()?;
+            progress(1.0);
+            (path, outcome.encoder)
         } else {
             if let Some(error) = outcome.error {
                 // The master reads up to its last complete frame.
                 log::error!("recording the animation master: {error:#}");
             }
-            let path = export::export(
+            let exported = export::export(
                 &self.master,
                 output,
                 &export::ExportOptions {
@@ -511,16 +616,22 @@ impl Session {
                     encoder: self.encoder_preference,
                 },
                 None,
-                &|_| {},
-                &AtomicBool::new(false),
-            )
-            .with_context(|| format!("encoding the {}", self.format.label()))?;
+                progress,
+                cancel,
+            );
+            let path = match exported {
+                Ok(path) => path,
+                Err(_) if cancelled() => return Err(kept_master().into()),
+                Err(error) => {
+                    return Err(error.context(format!("encoding the {}", self.format.label())));
+                }
+            };
             (
                 path,
                 format!("{}, {}", outcome.encoder, self.format.label()),
             )
         };
-        let master = if self.format.is_video() {
+        let master = if video {
             path.clone()
         } else {
             self.master.clone()
@@ -541,13 +652,15 @@ impl Session {
         })
     }
 
-    /// Stops and discards the recording (master included).
+    /// Stops and discards the recording (master included), without
+    /// finishing files that are deleted anyway.
     pub fn cancel(mut self) {
         self.discard();
     }
 
     fn discard(&mut self) {
-        if self.finish_workers().is_some() && !self.format.is_video() {
+        self.control.abort.store(true, Ordering::Release);
+        if self.finish_workers(None).is_some() && !self.format.is_video() {
             let _ = std::fs::remove_file(&self.master);
         }
     }
@@ -558,19 +671,6 @@ impl Drop for Session {
         // Neither stopped nor cancelled (an error while starting): discard.
         self.discard();
     }
-}
-
-/// Fails before recording when the final animation format cannot be
-/// written at this size, instead of after the whole recording.
-fn check_animation_encoder(
-    format: OutputFormat,
-    master: &Path,
-    (width, height): (u32, u32),
-) -> Result<()> {
-    let probe = master.with_extension("probe");
-    let result = anim::create_encoder(format, &probe, width, height).map(drop);
-    let _ = std::fs::remove_file(&probe);
-    result.with_context(|| format!("{} cannot be written at {width}x{height}", format.label()))
 }
 
 /// Whether `path` holds at least one readable H.264 packet.
@@ -651,6 +751,9 @@ fn encode(mut sink: Sink, control: &Control) -> Outcome {
     let encoder = sink.name();
     let result = (|| -> Result<()> {
         loop {
+            if control.abort.load(Ordering::Acquire) {
+                return Ok(());
+            }
             let batch = control.inbox.take(IDLE);
             for (source, samples, at) in batch.audio {
                 sink.add_audio(source, &samples, at);
@@ -665,6 +768,16 @@ fn encode(mut sink: Sink, control: &Control) -> Outcome {
             }
         }
     })();
+    // Frames still queued hold capture buffers.
+    let clear_queue = || control.inbox.queues.lock().unwrap().video.clear();
+    if control.abort.load(Ordering::Acquire) {
+        // Thrown away: the session deletes the file, unfinished.
+        clear_queue();
+        return Outcome {
+            encoder,
+            error: None,
+        };
+    }
     let dropped = control.inbox.dropped();
     if dropped > 0 {
         log::warn!("{dropped} frames were dropped because the encoder fell behind");
@@ -674,8 +787,7 @@ fn encode(mut sink: Sink, control: &Control) -> Outcome {
         Ok(()) => sink.finish(end).err(),
         Err(error) => {
             control.fail(&error);
-            // Frames still queued hold capture buffers.
-            control.inbox.queues.lock().unwrap().video.clear();
+            clear_queue();
             if let Err(e) = sink.salvage(control.elapsed()) {
                 log::warn!("finishing what was recorded: {e:#}");
             }
@@ -726,11 +838,12 @@ impl Sink {
     }
 
     /// Writes the audio mixed up to `now`; with `repeat`, repeats a static
-    /// picture that is due.
+    /// picture that is due. A master writes out the frames compressed so
+    /// far, so a static screen's frames reach the disk too.
     fn tick(&mut self, now: Duration, repeat: bool) -> Result<()> {
         match self {
             Sink::Video(video) => video.tick(now, repeat),
-            Sink::Master(_) => Ok(()),
+            Sink::Master(master) => master.writer.write_ready(),
         }
     }
 
@@ -758,8 +871,12 @@ impl Sink {
 struct VideoSink {
     mux: Box<dyn Muxer>,
     video: H264Track,
-    /// Captured frame size (the encoded size is cropped to even).
+    /// Captured frame size.
     source_size: (u32, u32),
+    /// Encoded size: the capture cropped to even, or scaled down when no
+    /// encoder takes that.
+    encoded: (u32, u32),
+    scaled: bool,
     /// The latest picture, repeated on a static screen.
     last: Option<Yuv420>,
     audio: Option<(Mixer, OpusTrack)>,
@@ -771,14 +888,21 @@ impl VideoSink {
         source_size: (u32, u32),
         audio: &[Box<dyn AudioSource>],
     ) -> Result<Self> {
-        let (width, height) = (source_size.0 & !1, source_size.1 & !1);
+        let even = (source_size.0 & !1, source_size.1 & !1);
         ensure!(
-            width > 0 && height > 0,
+            even.0 > 0 && even.1 > 0,
             "A {}x{} capture is too small to record",
             source_size.0,
             source_size.1
         );
-        let video = H264Track::new(VIDEO_TRACK, width, height, config.fps, config.encoder)?;
+        let encoded = export::encodable_size(even, config.fps, config.encoder);
+        let video = H264Track::new(
+            VIDEO_TRACK,
+            encoded.0,
+            encoded.1,
+            config.fps,
+            config.encoder,
+        )?;
         let audio = if audio.is_empty() {
             None
         } else {
@@ -799,23 +923,40 @@ impl VideoSink {
             mux,
             video,
             source_size,
+            encoded,
+            scaled: encoded != even,
             last: None,
             audio,
         })
     }
 
     fn frame(&mut self, frame: Frame, at: Duration) -> Result<()> {
-        let (width, height) = (self.source_size.0 & !1, self.source_size.1 & !1);
-        let picture = convert::to_yuv420(
-            frame.pixels(),
-            frame.stride(),
-            frame.format(),
-            width,
-            height,
-            self.video.layout(),
-        );
-        // Hands a shared capture buffer back to its pool.
-        drop(frame);
+        let (width, height) = self.encoded;
+        let picture = if self.scaled {
+            let image = convert::resize(&frame.to_image(), width, height);
+            drop(frame);
+            convert::to_yuv420(
+                &image.data,
+                image.stride(),
+                PixelFormat::Bgra,
+                width,
+                height,
+                self.video.layout(),
+            )
+        } else {
+            // Odd sizes are cropped by converting the top-left even part.
+            let picture = convert::to_yuv420(
+                frame.pixels(),
+                frame.stride(),
+                frame.format(),
+                width,
+                height,
+                self.video.layout(),
+            );
+            // Hands a shared capture buffer back to its pool.
+            drop(frame);
+            picture
+        };
         self.video.push(&picture, at, false, &mut *self.mux)?;
         self.last = Some(picture);
         Ok(())
@@ -842,10 +983,13 @@ impl VideoSink {
         Ok(())
     }
 
+    /// Finishes the file even when draining the encoder or flushing audio
+    /// fails, so it keeps everything written; reports the first error.
     fn finish(mut self, end: Duration) -> Result<()> {
-        self.video.finish(end, &mut *self.mux)?;
-        self.finish_audio(end)?;
-        self.mux.finish()
+        let video = self.video.finish(end, &mut *self.mux);
+        let audio = self.finish_audio(end);
+        let mux = self.mux.finish();
+        video.and(audio).and(mux)
     }
 }
 
@@ -863,7 +1007,7 @@ impl MasterSink {
             Some(last) if at <= last => last + Duration::from_millis(1),
             _ => at,
         };
-        self.writer.push(&image, pts)?;
+        self.writer.push(image, pts)?;
         self.last_pts = Some(pts);
         Ok(())
     }

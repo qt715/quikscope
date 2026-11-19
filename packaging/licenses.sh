@@ -32,6 +32,11 @@ NATIVE = [
     ('Zstandard (BSD-3-Clause)', 'zstd-sys', 'zstd/LICENSE', str),
     ('Vulkan Memory Allocator (MIT)', 'vk-mem', 'vendor/VulkanMemoryAllocator/include/vk_mem_alloc.h', vma),
 ]
+# Rust code compiled into quikscope's own crate, which cargo-about cannot see.
+VENDORED = [
+    ('zune-jpegxl 0.5.2, modified (Zlib)', 'vendor/zune-jpegxl/LICENSE-ZLIB'),
+    ('zune-jpegxl modifications notice', 'vendor/zune-jpegxl/NOTICE'),
+]
 ASSETS = [
     ('Inter fonts — SIL Open Font License', 'assets/fonts/INTER-LICENSE.txt'),
     ('Lucide icons — ISC and Feather MIT', 'assets/icons/LICENSE'),
@@ -55,6 +60,9 @@ with p.open('a') as out:
         for text, sources in texts.items():
             out.write('<h2>' + html.escape(title) + '</h2><p>Built from the source in '
                       + html.escape(', '.join(sources)) + '.</p><pre>' + html.escape(text) + '</pre>\n')
+    out.write('<h1>Vendored Rust code</h1>\n')
+    for title, path in VENDORED:
+        out.write('<h2>' + html.escape(title) + '</h2><pre>' + html.escape(Path(path).read_text()) + '</pre>\n')
     out.write('<h1>Bundled assets</h1>\n')
     for title, path in ASSETS:
         out.write('<h2>' + html.escape(title) + '</h2><pre>' + html.escape(Path(path).read_text()) + '</pre>\n')

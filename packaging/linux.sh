@@ -30,7 +30,7 @@ done
 # Debian's scanner resolves DT_NEEDED (ALSA, PulseAudio, PipeWire, GBM, …)
 # into distro/version-specific package names.
 mkdir -p "$stage/debian"
-printf 'Source: quikscope\nSection: graphics\nPriority: optional\nMaintainer: quikscope contributors <212748636+qt715@users.noreply.github.com>\n\nPackage: quikscope\nArchitecture: amd64\nDescription: screenshot daemon and annotation editor\n' > "$stage/debian/control"
+printf 'Source: quikscope\nSection: graphics\nPriority: optional\nMaintainer: quikscope contributors <212748636+qt715@users.noreply.github.com>\n\nPackage: quikscope\nArchitecture: amd64\nDescription: screenshot and screen recording daemon with annotation and video editors\n' > "$stage/debian/control"
 debdeps=$(cd "$stage" && dpkg-shlibdeps -O --ignore-missing-info usr/bin/quikscope | cut -d= -f2-)
 # RPM records ELF soname and GLIBC symbol requirements, rather than guessing
 # Fedora/openSUSE package names. The binary is identical to the .deb binary.
@@ -43,7 +43,7 @@ stage, version, debdeps, rpmdeps = sys.argv[1:]
 # opened at run time, so DT_NEEDED does not name them.
 config = dict(name='quikscope', arch='amd64', platform='linux', version=version,
     maintainer='quikscope contributors <212748636+qt715@users.noreply.github.com>',
-    description='Screenshot daemon and GPUI annotation editor', homepage='https://github.com/qt715/quikscope',
+    description='Screenshot and screen recording daemon with GPUI annotation and video editors', homepage='https://github.com/qt715/quikscope',
     license='MIT OR Apache-2.0', section='graphics', priority='optional',
     contents=[dict(src=stage+'/usr/', dst='/usr/', type='tree')],
     overrides=dict(deb=dict(depends=debdeps.split(', ') + ['libxkbcommon0', 'libwayland-client0', 'libvulkan1'],

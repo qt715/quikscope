@@ -93,6 +93,12 @@ impl OutputFile {
         &self.part
     }
 
+    /// Whether this is a new file claimed by [`reserve`](Self::reserve),
+    /// which [`write_in_place`](Self::write_in_place) accepts.
+    pub fn is_reserved(&self) -> bool {
+        self.reserved
+    }
+
     /// Makes the writer write the reserved final file itself, for formats
     /// that are playable at every point they are flushed (fragmented MP4,
     /// Matroska): a crash then leaves a playable file under its real name

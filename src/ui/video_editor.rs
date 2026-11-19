@@ -22,7 +22,7 @@ use gpui::{
 };
 
 use super::clips::{self, Clip, Pin};
-use super::editor::EditorServices;
+use super::editor::{EditorServices, tilde};
 use super::export_job::{self, Export, Finished, Output, Progress};
 use super::playback::{AudioOut, Clock, Filmstrip, Frame, Queue, VideoPlayer};
 use super::theme;
@@ -808,12 +808,26 @@ impl VideoEditor {
             self.show_toast("Clipboard is unavailable".into(), true, cx);
             return;
         }
-        if output == Output::Copy && !self.needs_encode() {
-            if let Some(c) = &services.clipboard {
-                c.set_files(std::slice::from_ref(&self.path));
+        let reencode = self.needs_encode();
+        if !reencode {
+            let record = &services.config.record;
+            match output {
+                Output::Copy => {
+                    if let Some(c) = &services.clipboard {
+                        c.set_files(std::slice::from_ref(&self.path));
+                    }
+                    self.show_toast(format!("Copied {}", self.format.label()), false, cx);
+                    return;
+                }
+                // A recording saved unchanged is already where a save puts
+                // it; a second, identical file helps nobody.
+                Output::Save if same_dir(&self.path, &record.save_dir()) => {
+                    self.show_toast(format!("Already saved as {}", tilde(&self.path)), false, cx);
+                    self.menu_open = false;
+                    return;
+                }
+                Output::Save => {}
             }
-            self.show_toast(format!("Copied {}", self.format.label()), false, cx);
-            return;
         }
         let record = &services.config.record;
         let format = self.format;
@@ -827,18 +841,18 @@ impl VideoEditor {
                 .map_or("clip".into(), |s| s.to_string_lossy()),
             format.extension()
         );
-        let source_fps = self.info.fps.round().max(1.0) as u32;
         let options = ExportOptions {
             format,
             trim: self.trimmed().then_some(self.trim),
             mute: self.muted || !self.info.has_audio,
-            fps: (!format.is_video()).then(|| record.animation_fps.min(source_fps)),
+            // The rate chosen for animations: a variable-rate recording's
+            // average rate understates how fast its frames came.
+            fps: (!format.is_video()).then_some(record.animation_fps),
             fragmented: record.mp4_fragmented,
             max_width: (format == OutputFormat::Gif).then_some(GIF_MAX_WIDTH),
             encoder: EncoderPreference::parse(&record.encoder).unwrap_or_default(),
         };
         let src = self.path.clone();
-        let reencode = self.needs_encode();
         let work = move |progress: Progress<'_>, cancel: &AtomicBool| {
             // The window (and its pin) may close before this finishes.
             let _source = clips::pin(&src);
@@ -1411,6 +1425,15 @@ impl VideoEditor {
                 ),
         )
     }
+}
+
+/// Whether `file` sits directly in `dir`, whichever way either is spelled
+/// (symlinks, `..`).
+fn same_dir(file: &Path, dir: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).ok();
+    file.parent()
+        .and_then(canonical)
+        .is_some_and(|parent| Some(parent) == canonical(dir))
 }
 
 /// Saves an untouched source as it is: no generation loss, no encoder. A

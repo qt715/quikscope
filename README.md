@@ -296,13 +296,20 @@ quikscope capture screen --save
 
 `autostart on|off|status` manages only the current user's `quikscope` value
 under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The daemon has no
-console window; commands attach to the invoking terminal.
+console window; commands attach to the invoking terminal. `quikscope.exe` is
+a GUI program, so PowerShell and `cmd` do not wait for a command run on its
+own; a script that needs its output or exit code captures the output
+(`quikscope version | Out-String`, `quikscope record status > status.txt`)
+or uses `Start-Process -Wait`. The daemon's log is
+`%LOCALAPPDATA%\quikscope\daemon.log`.
 
 The notification-area icon offers region, screen and window capture, the
-latest screenshot, notifications on/off and quit. Default global shortcuts:
-`PrintScreen` = region, `Ctrl+PrintScreen` = screen, `Alt+PrintScreen` =
-foreground window, `Shift+PrintScreen` = open last. Configure or disable them
-in [`[hotkeys]`](docs/configuration.md); Windows or another application can
+latest screenshot, recording controls, notifications on/off and quit. Default
+global shortcuts: `PrintScreen` = region, `Ctrl+PrintScreen` = screen,
+`Alt+PrintScreen` = foreground window, `Shift+PrintScreen` = open last,
+`Ctrl+Shift+PrintScreen` / `Ctrl+Alt+PrintScreen` = start or stop a video /
+animation recording. Enable or disable them in Settings, or configure them in
+[`[hotkeys]`](docs/configuration.md); Windows or another application can
 reserve a shortcut, in which case startup logs the registration error.
 
 If Windows opens Snipping Tool instead, turn off **Settings → Accessibility →
@@ -435,26 +442,39 @@ have none.
 
 `record pause` / `resume` / `toggle-pause` leave the paused time out of the
 file; `record cancel` discards it; `record status` prints the kind, elapsed
-time and state. Defaults (folder, formats, frame rates, audio, outline,
-encoder) live in `[record]` in the [configuration](docs/configuration.md) and
-the Settings window.
+time and state, or `saving 42%` while a stopped recording is still being
+written (a long GIF or AVIF takes a while). Defaults (folder, formats, frame
+rates, audio, outline, encoder) live in `[record]` in the
+[configuration](docs/configuration.md) and the Settings window.
+
+Quitting (`quikscope quit`, the tray's Quit, stopping the service, logging
+out) saves a running recording and waits for saves and exports still
+running. A capture larger than any H.264 encoder on the machine takes (very
+wide areas) is recorded scaled down, with a notification saying so.
 
 **Tray.** On Linux a status-notifier tray icon (Waybar, Noctalia, KDE,
 GNOME with the AppIndicator extension…) offers Record video/animation, the
 audio devices and frame rates; while recording it shows the elapsed time with
-Pause/Resume, Stop and save and Discard, and a click on the icon stops.
-`record.tray = false` hides it. The Windows tray menu has the same items.
+Pause/Resume, Stop and save and Discard, and a click on the icon stops. While
+a stopped recording is saved it shows the percentage and **Cancel saving**,
+which discards a video and keeps an animation's lossless recording to export
+from the annotator. `record.tray = false` hides it. The Windows tray menu has
+the same items.
 
 **Encoding.** quikscope has no FFmpeg dependency: it writes MP4, MOV and MKV
 itself and carries its own encoders. Videos are H.264, encoded on the GPU
 through Vulkan Video (NVIDIA, AMD and Intel with recent drivers) and
 otherwise by the built-in OpenH264 software encoder; `record.encoder =
-"software"` skips the GPU. Sound is Opus in every container. MP4 recordings
-are fragmented by default, so a file stays playable up to its last second
-if quikscope or the machine dies mid-recording;
-`record.mp4_fragmented = false` instead writes a classic MP4 with its index
-at the front when the recording ends. MOV is always written the classic way,
-MKV in one cluster per keyframe.
+"software"` skips the GPU (for decoding too). Sound is Opus in every
+container. MP4 recordings are fragmented by default and written under their
+final name, so a crash or kill leaves a file that plays up to its last
+fragment (about a second); `record.mp4_fragmented = false` instead writes a
+classic MP4 with its index at the front when the recording ends. MOV is
+always written the classic way, MKV in one cluster per keyframe, in place
+like fragmented MP4. A classic MP4 or MOV cut short by a crash, and an
+animation that was never encoded, are recovered the next time the daemon
+starts (see [crash recovery](docs/configuration.md#crash-recovery)). A new
+file never replaces an existing one: a taken name gets `-1`, `-2`, ….
 Animations are recorded losslessly to the cache first and encoded when you
 stop, so annotating them later loses nothing. Every frame keeps its exact
 display time through recording, annotating and re-encoding, including
@@ -473,7 +493,7 @@ stored grant).
 
 `quikscope open FILE...` opens PNG, JPEG, WebP, AVIF, JPEG XL and GIF images
 in the annotator. Animated GIF, WebP, AVIF, JPEG XL and APNG files open in the
-annotator's animation mode. H.264 videos in MP4, MOV, MKV or WebM, with AAC,
+annotator's animation mode. H.264 videos in MP4, MOV or MKV, with AAC,
 Opus or no sound, open in the video editor; HEVC, VP9 and AV1 videos are not
 supported. Without a file it opens the latest capture.
 
@@ -577,16 +597,16 @@ is never changed: every output is a new file.
 | Trim | Drag the handles at either end of the timeline, or `I` / `O` to set the in / out point at the playhead |
 | Mute | `M` or the speaker button (files with audio only); muted exports have no audio track |
 | Format | The format button: MP4, MKV, MOV (video) or GIF, WebP, AVIF, JPEG XL (animation, no sound); starts at the file's own container |
-| Save to the recordings folder | `Ctrl+S` or **Save**: exports the trimmed range in the chosen format |
+| Save to the recordings folder | `Ctrl+S` or **Save**: exports the trimmed range in the chosen format; an untouched file is copied as it is, and one already in the recordings folder is not saved twice |
 | Copy as a file (paste into a chat or file manager) | `Ctrl+C`; an untouched clip is copied as it is, otherwise exported first |
-| Annotate frame | `F`: saves the frame at full size as a screenshot PNG and opens it in the annotator |
+| Annotate frame | `F`: opens the frame at full size in the annotator (saved only when you save it there) |
 | Cancel an export | `Esc` or the × beside the progress bar |
 | Close | `Esc`, `Ctrl+W` |
 
 Audio plays through the default output device, which is opened on the
 first play rather than when the editor opens; picture follows the audio
-clock. Animation exports use the configured animation frame rate (never
-above the source's), and GIFs are scaled to at most 1280 pixels wide.
+clock. Animation exports use the configured animation frame rate
+(`record.animation_fps`), and GIFs are scaled to at most 1280 pixels wide.
 
 ## Performance
 

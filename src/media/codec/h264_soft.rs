@@ -27,9 +27,11 @@ use super::{
     DecodedPicture, EncodedFrame, VideoDecoder, VideoEncoder, VideoEncoderConfig, Yuv420, YuvLayout,
 };
 
-/// OpenH264 rejects larger pictures (level 5.2).
-const MAX_LONG_SIDE: u32 = 3840;
-const MAX_SHORT_SIDE: u32 = 2160;
+/// H.264 level 5.2, the highest OpenH264 encodes: macroblocks per picture,
+/// and per second. Each side may be at most `sqrt(8 * MAX_FRAME_MBS)`
+/// macroblocks, so very thin pictures fail too.
+const MAX_FRAME_MBS: u64 = 36_864;
+const MAX_MBS_PER_SECOND: u64 = 2_073_600;
 /// OpenH264 runs at most this many encoder threads, one per slice.
 const SLICES: u32 = 4;
 /// OpenH264 refuses narrower or shorter pictures; smaller ones are encoded
@@ -105,8 +107,9 @@ impl Encoder {
             "H.264 needs even picture sizes, not {width}x{height}"
         );
         ensure!(
-            width.max(height) <= MAX_LONG_SIDE && width.min(height) <= MAX_SHORT_SIDE,
-            "OpenH264 encodes at most {MAX_LONG_SIDE}x{MAX_SHORT_SIDE}, not {width}x{height}"
+            fits_level(width, height, config.fps),
+            "{width}x{height} at {} fps is beyond H.264 level 5.2, which OpenH264 encodes at most",
+            config.fps
         );
         let coded = (width.max(MIN_SIDE), height.max(MIN_SIDE));
         // Several slices let OpenH264 encode them in parallel. It refuses
@@ -210,6 +213,20 @@ impl Encoder {
         }
         Ok(raw)
     }
+}
+
+/// Whether `width`×`height` pictures at `fps` stay within H.264 level 5.2
+/// (OpenH264's own `InitializeExt` still has the final word).
+pub fn fits_level(width: u32, height: u32, fps: u32) -> bool {
+    let (columns, rows) = (
+        u64::from(width.max(MIN_SIDE).div_ceil(16)),
+        u64::from(height.max(MIN_SIDE).div_ceil(16)),
+    );
+    let frame = columns * rows;
+    frame <= MAX_FRAME_MBS
+        && columns * columns <= 8 * MAX_FRAME_MBS
+        && rows * rows <= 8 * MAX_FRAME_MBS
+        && frame * u64::from(fps.max(1)) <= MAX_MBS_PER_SECOND
 }
 
 impl VideoEncoder for Encoder {

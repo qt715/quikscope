@@ -127,11 +127,8 @@ pub struct WebpEncoder {
 }
 
 impl WebpEncoder {
+    /// The size is within [`super::check_size`] (as `create_encoder` checks).
     pub fn create(path: &Path, width: u32, height: u32) -> Result<Self> {
-        ensure!(
-            width <= 16383 && height <= 16383,
-            "WebP is at most 16383x16383, not {width}x{height}"
-        );
         let options = EncoderOptions {
             anim_params: AnimParams { loop_count: 0 },
             allow_mixed: true,

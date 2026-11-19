@@ -33,6 +33,10 @@ pub(super) struct Update {
     pub desktop: bool,
     /// The hardware pointer moved, appeared, hid or changed shape.
     pub pointer: bool,
+    /// When the new desktop image was presented (QPC ticks; 0 without one).
+    pub desktop_at: i64,
+    /// When the pointer last moved (QPC ticks; 0 if it did not).
+    pub pointer_at: i64,
 }
 
 /// The hardware pointer as DXGI last reported it; desktop coordinates
@@ -172,6 +176,7 @@ impl Duplication {
     ) -> Result<Update> {
         let mut update = Update::default();
         if info.LastMouseUpdateTime != 0 {
+            update.pointer_at = info.LastMouseUpdateTime;
             let visible = info.PointerPosition.Visible.as_bool();
             let position = (
                 info.PointerPosition.Position.x,
@@ -246,6 +251,7 @@ impl Duplication {
         }
         self.image = None;
         update.desktop = true;
+        update.desktop_at = info.LastPresentTime;
         Ok(update)
     }
 

@@ -11,12 +11,12 @@ use anyhow::{Context, Result, bail, ensure};
 use mkv_element::io::blocking_impl::WriteTo;
 use mkv_element::prelude::{
     Audio, Channels, CodecDelay, CodecId, CodecPrivate, CueClusterPosition, CuePoint, CueTime,
-    CueTrack, CueTrackPositions, Cues, DefaultDuration, DocType, DocTypeReadVersion,
-    DocTypeVersion, Ebml, EbmlMaxIdLength, EbmlMaxSizeLength, EbmlReadVersion, EbmlVersion,
-    FlagDefault, FlagEnabled, FlagInterlaced, FlagLacing, Header, Info, Language, MuxingApp,
-    PixelHeight, PixelWidth, SamplingFrequency, Seek, SeekHead, SeekId, SeekPosition, SeekPreRoll,
-    SimpleBlock, Timestamp, TimestampScale, TrackEntry, TrackNumber, TrackType, TrackUid, Tracks,
-    VInt64, Video, WritingApp,
+    CueTrack, CueTrackPositions, Cues, DocType, DocTypeReadVersion, DocTypeVersion, Ebml,
+    EbmlMaxIdLength, EbmlMaxSizeLength, EbmlReadVersion, EbmlVersion, FlagDefault, FlagEnabled,
+    FlagInterlaced, FlagLacing, Header, Info, Language, MuxingApp, PixelHeight, PixelWidth,
+    SamplingFrequency, Seek, SeekHead, SeekId, SeekPosition, SeekPreRoll, SimpleBlock, Timestamp,
+    TimestampScale, TrackEntry, TrackNumber, TrackType, TrackUid, Tracks, VInt64, Video,
+    WritingApp,
 };
 use mkv_element::prelude::{Cluster, Element};
 use mp4_atom::{Atom, Avcc};
@@ -34,6 +34,9 @@ const INFO_SPARE: usize = 24;
 const AUDIO_CLUSTER: Duration = Duration::from_secs(1);
 /// Longest cluster, for long keyframe intervals: bounds what a crash loses.
 const MAX_CLUSTER: Duration = Duration::from_secs(4);
+/// Media time between `sync_data` calls: written clusters survive a power
+/// loss, not only a crash, at the cost of one flush to disk this often.
+const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 /// Opus decoders need this much audio before a seek point (RFC 7845 §4.6).
 const OPUS_SEEK_PRE_ROLL: u64 = 80_000_000;
 const SEGMENT_ID: [u8; 4] = [0x18, 0x53, 0x80, 0x67];
@@ -60,6 +63,8 @@ pub struct MkvMuxer {
     cues: Vec<(u64, u64, u64)>,
     /// Latest presentation end (ns from origin).
     end: u64,
+    /// pts up to which written clusters were last synced to disk.
+    synced: Duration,
 }
 
 struct MkvTrack {
@@ -113,6 +118,7 @@ impl MkvMuxer {
             cluster: None,
             cues: Vec::new(),
             end: 0,
+            synced: Duration::ZERO,
         })
     }
 
@@ -181,6 +187,8 @@ impl MkvMuxer {
         }
         let track = &self.tracks[packet.track];
         let video = track.track.codec == Codec::H264;
+        // Every Opus packet decodes on its own (as in the MP4 muxer).
+        let keyframe = packet.keyframe || !video;
         let data = match &track.avcc {
             Some(avcc) => {
                 let mut sample = Vec::new();
@@ -195,7 +203,7 @@ impl MkvMuxer {
             Some(cluster) => {
                 let span = packet.pts.saturating_sub(cluster.first_pts);
                 let relative = ms as i64 - cluster.timestamp as i64;
-                (video && packet.keyframe)
+                (video && keyframe)
                     || span >= MAX_CLUSTER
                     || (!self.has_video && span >= AUDIO_CLUSTER)
                     || i16::try_from(relative).is_err()
@@ -209,7 +217,7 @@ impl MkvMuxer {
             self.cluster = Some(ClusterBuf {
                 timestamp: ms,
                 first_pts: packet.pts,
-                cue: (packet.keyframe && (video || !self.has_video)).then_some(number),
+                cue: (keyframe && (video || !self.has_video)).then_some(number),
                 body,
             });
         }
@@ -223,7 +231,7 @@ impl MkvMuxer {
         // Track number as a 1-byte vint, time, flags (keyframe), no lacing.
         cluster.body.push(0x80 | number as u8);
         cluster.body.extend_from_slice(&relative.to_be_bytes());
-        cluster.body.push(if packet.keyframe { 0x80 } else { 0 });
+        cluster.body.push(if keyframe { 0x80 } else { 0 });
         cluster.body.extend_from_slice(&data);
 
         let duration = packet
@@ -251,6 +259,12 @@ impl MkvMuxer {
         self.emit(&head)?;
         self.emit(&cluster.body)?;
         self.out.flush()?;
+        if cluster.first_pts.saturating_sub(self.synced) >= SYNC_INTERVAL {
+            self.synced = cluster.first_pts;
+            if let Err(e) = self.out.get_ref().sync_data() {
+                log::warn!("Syncing a Matroska file to disk failed: {e}");
+            }
+        }
         Ok(())
     }
 }
@@ -418,16 +432,15 @@ fn track_entry(number: u64, track: &MkvTrack) -> Result<TrackEntry> {
         ..Default::default()
     };
     match track.track.kind {
-        TrackKind::Video { width, height, fps } => {
+        // No DefaultDuration: recordings skip pictures on a static screen,
+        // and players would take a nominal rate for the real timing.
+        TrackKind::Video { width, height, .. } => {
             let avcc = track.avcc.as_ref().context("H.264 track without avcC")?;
             let mut private = Vec::new();
             avcc.encode_body(&mut private)?;
             entry.track_type = TrackType(1);
             entry.codec_id = CodecId(AVC.into());
             entry.codec_private = Some(CodecPrivate(private.into()));
-            if fps > 0.0 {
-                entry.default_duration = Some(DefaultDuration((1e9 / fps).round() as u64));
-            }
             entry.video = Some(Video {
                 pixel_width: PixelWidth(u64::from(width)),
                 pixel_height: PixelHeight(u64::from(height)),

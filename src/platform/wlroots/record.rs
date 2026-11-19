@@ -24,15 +24,18 @@ use std::{
 };
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
-    globals::{GlobalListContents, registry_queue_init},
+    globals::{GlobalList, GlobalListContents, registry_queue_init},
     protocol::{
         wl_buffer, wl_compositor, wl_output, wl_region, wl_registry, wl_shm, wl_shm_pool,
         wl_surface,
     },
 };
 use wayland_protocols::{
-    wp::linux_dmabuf::zv1::client::{
-        zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
+    wp::{
+        linux_dmabuf::zv1::client::{
+            zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
+        },
+        viewporter::client::{wp_viewport, wp_viewporter},
     },
     xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1},
 };
@@ -512,6 +515,37 @@ struct Output {
     rect: IRect,
     transform: u32,
     scale: i32,
+    /// The current mode in physical pixels, before the transform.
+    mode: (i32, i32),
+}
+
+impl Output {
+    /// Physical pixels per logical pixel along x and y: the current mode,
+    /// turned like the output, over the logical size. Unlike the integer
+    /// `scale`, this is the fractional scale the compositor renders at.
+    fn pixel_scale(&self) -> (f64, f64) {
+        // Odd wl_output transforms turn the output by 90 or 270 degrees.
+        let (w, h) = if self.transform % 2 == 1 {
+            (self.mode.1, self.mode.0)
+        } else {
+            self.mode
+        };
+        if w <= 0 || h <= 0 || self.rect.w <= 0 || self.rect.h <= 0 {
+            let scale = f64::from(self.scale.max(1));
+            return (scale, scale);
+        }
+        (
+            f64::from(w) / f64::from(self.rect.w),
+            f64::from(h) / f64::from(self.rect.h),
+        )
+    }
+}
+
+/// The physical pixels the logical span `start..start + len` covers at
+/// `scale`, rounding both edges as compositors round surface boxes.
+fn physical_span(start: i32, len: i32, scale: f64) -> i32 {
+    let edge = |at: i32| (f64::from(at) * scale).round() as i32;
+    edge(start + len) - edge(start)
 }
 struct State {
     outputs: Vec<Output>,
@@ -536,6 +570,7 @@ struct State {
 }
 struct Client {
     conn: Connection,
+    globals: GlobalList,
     queue: EventQueue<State>,
     state: State,
 }
@@ -597,7 +632,12 @@ impl Client {
         });
         queue.roundtrip(&mut state)?;
         queue.roundtrip(&mut state)?;
-        Ok(Self { conn, queue, state })
+        Ok(Self {
+            conn,
+            globals,
+            queue,
+            state,
+        })
     }
     fn dispatch(&mut self, timeout: Duration) -> Result<()> {
         self.wait([], timeout).map(|_| ())
@@ -723,9 +763,19 @@ impl Dispatch<wl_output::WlOutput, usize> for State {
                 o.rect.y = y;
                 o.transform = t as u32;
             }
-            wl_output::Event::Mode { width, height, .. } => {
+            wl_output::Event::Mode {
+                flags,
+                width,
+                height,
+                ..
+            } => {
                 o.rect.w = width;
                 o.rect.h = height;
+                if let WEnum::Value(flags) = flags
+                    && flags.contains(wl_output::Mode::Current)
+                {
+                    o.mode = (width, height);
+                }
             }
             wl_output::Event::Scale { factor } => o.scale = factor,
             _ => {}
@@ -889,6 +939,8 @@ wayland_client::delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShell
 wayland_client::delegate_noop!(State: ignore zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1);
 wayland_client::delegate_noop!(State: ignore zxdg_output_manager_v1::ZxdgOutputManagerV1);
 wayland_client::delegate_noop!(State: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
+wayland_client::delegate_noop!(State: ignore wp_viewporter::WpViewporter);
+wayland_client::delegate_noop!(State: ignore wp_viewport::WpViewport);
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, usize> for State {
     fn event(
@@ -921,6 +973,55 @@ impl Drop for Outline {
         }
     }
 }
+
+/// The outline's accent colour as ARGB8888 bytes in memory (B, G, R, A).
+const OUTLINE_COLOUR: [u8; 4] = [0xf2, 0x8c, 0x8f, 255];
+/// Outline thickness in logical pixels.
+const OUTLINE_WIDTH: i32 = 2;
+
+/// The outline strips around `region` that fall on `output`, clipped to it
+/// and relative to its top-left corner (logical pixels).
+fn outline_strips(region: IRect, output: IRect) -> Vec<IRect> {
+    let (r, w) = (region, OUTLINE_WIDTH);
+    [
+        IRect::new(r.x - w, r.y - w, r.w + 2 * w, w),
+        IRect::new(r.x - w, r.y + r.h, r.w + 2 * w, w),
+        IRect::new(r.x - w, r.y, w, r.h),
+        IRect::new(r.x + r.w, r.y, w, r.h),
+    ]
+    .into_iter()
+    .filter_map(|strip| strip.intersect(&output))
+    .map(|s| IRect::new(s.x - output.x, s.y - output.y, s.w, s.h))
+    .collect()
+}
+
+/// A `width`×`height` SHM buffer of the outline colour.
+fn solid_buffer(
+    shm: &wl_shm::WlShm,
+    width: u32,
+    height: u32,
+    qh: &QueueHandle<State>,
+) -> Result<(wl_buffer::WlBuffer, Shm)> {
+    let (wl, mut shm) = allocate_shm(shm, width, height, width * 4, wl_shm::Format::Argb8888, qh)?;
+    for pixel in shm.map.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&OUTLINE_COLOUR);
+    }
+    Ok((wl, shm))
+}
+
+/// One strip of the outline: a layer surface the strip's size.
+struct Strip {
+    surface: wl_surface::WlSurface,
+    layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    viewport: Option<wp_viewport::WpViewport>,
+    buffer: (wl_buffer::WlBuffer, Shm),
+}
+
+/// Four strip-sized overlay surfaces rather than one transparent surface
+/// over the whole output: the compositor blends a few thousand pixels, not
+/// a full-screen texture, per frame. Overlay keeps the outline visible over
+/// fullscreen windows; on Hyprland any mapped overlay surface still costs
+/// direct scanout of that output while it is shown.
 fn outline(region: IRect) -> Result<Box<dyn Send>> {
     let (tx, rx) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
@@ -936,96 +1037,105 @@ fn outline(region: IRect) -> Result<Box<dyn Send>> {
                     let _ = tx.send(Ok(()));
                     return Ok(());
                 }
-                let (globals, _) = registry_queue_init::<State>(&c.conn)?;
                 let qh = c.queue.handle();
-                let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=4, ())?;
-                let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ())?;
-                let mut surfaces = Vec::new();
-                let mut layers = Vec::new();
-                let mut buffers = Vec::new();
+                let compositor: wl_compositor::WlCompositor = c.globals.bind(&qh, 1..=4, ())?;
+                let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                    c.globals.bind(&qh, 1..=4, ())?;
+                let viewporter: Option<wp_viewporter::WpViewporter> =
+                    c.globals.bind(&qh, 1..=1, ()).ok();
+                let mut strips = Vec::new();
                 for o in &c.state.outputs {
-                    let r = o.rect;
-                    let strips = [
-                        IRect::new(region.x - 2, region.y - 2, region.w + 4, 2),
-                        IRect::new(region.x - 2, region.y + region.h, region.w + 4, 2),
-                        IRect::new(region.x - 2, region.y, 2, region.h),
-                        IRect::new(region.x + region.w, region.y, 2, region.h),
-                    ];
-                    if !strips.iter().any(|s| {
-                        s.x < r.x + r.w && s.x + s.w > r.x && s.y < r.y + r.h && s.y + s.h > r.y
-                    }) {
-                        continue;
-                    }
-                    let i = surfaces.len();
-                    let surface = compositor.create_surface(&qh, ());
-                    let empty = compositor.create_region(&qh, ());
-                    surface.set_input_region(Some(&empty));
-                    empty.destroy();
-                    let layer = shell.get_layer_surface(
-                        &surface,
-                        o.wl.as_ref(),
-                        zwlr_layer_shell_v1::Layer::Overlay,
-                        "quikscope-outline".into(),
-                        &qh,
-                        i,
-                    );
-                    layer.set_anchor(
-                        zwlr_layer_surface_v1::Anchor::Top
-                            | zwlr_layer_surface_v1::Anchor::Bottom
-                            | zwlr_layer_surface_v1::Anchor::Left
-                            | zwlr_layer_surface_v1::Anchor::Right,
-                    );
-                    layer.set_exclusive_zone(-1);
-                    layer.set_keyboard_interactivity(
-                        zwlr_layer_surface_v1::KeyboardInteractivity::None,
-                    );
-                    layer.set_size(r.w as u32, r.h as u32);
-                    let (wl, mut b) = allocate_shm(
-                        &c.state.shm,
-                        r.w as u32,
-                        r.h as u32,
-                        r.w as u32 * 4,
-                        wl_shm::Format::Argb8888,
-                        &qh,
-                    )?;
-                    for strip in strips {
-                        for y in strip.y.max(r.y)..(strip.y + strip.h).min(r.y + r.h) {
-                            for x in strip.x.max(r.x)..(strip.x + strip.w).min(r.x + r.w) {
-                                let p =
-                                    ((y - r.y) as usize * r.w as usize + (x - r.x) as usize) * 4;
-                                b.map[p..p + 4].copy_from_slice(&[0xf2, 0x8c, 0x8f, 255]);
+                    for strip in outline_strips(region, o.rect) {
+                        let surface = compositor.create_surface(&qh, ());
+                        let empty = compositor.create_region(&qh, ());
+                        surface.set_input_region(Some(&empty));
+                        empty.destroy();
+                        let layer = shell.get_layer_surface(
+                            &surface,
+                            o.wl.as_ref(),
+                            zwlr_layer_shell_v1::Layer::Overlay,
+                            "quikscope-outline".into(),
+                            &qh,
+                            strips.len(),
+                        );
+                        use zwlr_layer_surface_v1::Anchor;
+                        layer.set_anchor(Anchor::Top | Anchor::Left);
+                        layer.set_margin(strip.y, 0, 0, strip.x);
+                        layer.set_size(strip.w as u32, strip.h as u32);
+                        // Placed against the output's edges, not moved aside
+                        // for panels' exclusive zones.
+                        layer.set_exclusive_zone(-1);
+                        layer.set_keyboard_interactivity(
+                            zwlr_layer_surface_v1::KeyboardInteractivity::None,
+                        );
+                        // A buffer of the strip's physical pixels, sized to
+                        // the viewport's destination: drawn 1:1 at any
+                        // (fractional) scale, so the compositor never
+                        // filters a stretched buffer into the recorded
+                        // pixels next to the strip.
+                        let (viewport, width, height) = match &viewporter {
+                            Some(viewporter) => {
+                                let viewport = viewporter.get_viewport(&surface, &qh, ());
+                                viewport.set_destination(strip.w, strip.h);
+                                let (sx, sy) = o.pixel_scale();
+                                (
+                                    Some(viewport),
+                                    physical_span(strip.x, strip.w, sx),
+                                    physical_span(strip.y, strip.h, sy),
+                                )
                             }
-                        }
+                            None => {
+                                // The output's integer scale, which a
+                                // fractional one only reduces.
+                                let scale = if surface.version() >= 3 {
+                                    o.scale.max(1)
+                                } else {
+                                    1
+                                };
+                                if scale > 1 {
+                                    surface.set_buffer_scale(scale);
+                                }
+                                (None, strip.w * scale, strip.h * scale)
+                            }
+                        };
+                        let buffer = solid_buffer(
+                            &c.state.shm,
+                            width.max(1) as u32,
+                            height.max(1) as u32,
+                            &qh,
+                        )?;
+                        surface.commit();
+                        strips.push(Strip {
+                            surface,
+                            layer,
+                            viewport,
+                            buffer,
+                        });
                     }
-                    surface.commit();
-                    surfaces.push(surface);
-                    layers.push(layer);
-                    buffers.push((wl, b));
                 }
-                c.state.configured = vec![false; surfaces.len()];
+                c.state.configured = vec![false; strips.len()];
                 let deadline = Instant::now() + Duration::from_secs(3);
                 while c.state.configured.iter().any(|v| !v) {
                     ensure!(Instant::now() < deadline, "outline configure timed out");
                     c.dispatch(Duration::from_millis(50))?;
                 }
-                for (surface, (wl, _)) in surfaces.iter().zip(&buffers) {
-                    surface.attach(Some(wl), 0, 0);
-                    surface.damage(0, 0, i32::MAX, i32::MAX);
-                    surface.commit();
+                for strip in &strips {
+                    strip.surface.attach(Some(&strip.buffer.0), 0, 0);
+                    strip.surface.damage(0, 0, i32::MAX, i32::MAX);
+                    strip.surface.commit();
                 }
                 c.queue.roundtrip(&mut c.state)?;
                 let _ = tx.send(Ok(()));
                 while !stopping.load(Ordering::Relaxed) && !c.state.closed {
                     c.dispatch(Duration::from_millis(50))?;
                 }
-                for l in layers {
-                    l.destroy();
-                }
-                for s in surfaces {
-                    s.destroy();
-                }
-                for (wl, _) in buffers {
-                    wl.destroy();
+                for strip in strips {
+                    strip.layer.destroy();
+                    if let Some(viewport) = strip.viewport {
+                        viewport.destroy();
+                    }
+                    strip.surface.destroy();
+                    strip.buffer.0.destroy();
                 }
                 c.queue.roundtrip(&mut c.state)?;
                 Ok(())
@@ -1066,5 +1176,69 @@ mod tests {
             height: 1440,
         };
         assert_eq!(spec.to_string(), "2560x1440 XB24");
+    }
+
+    #[test]
+    fn outline_strips_surround_the_region_on_its_output() {
+        let output = IRect::new(1920, 0, 2560, 1440);
+        // Inside: four strips, output-relative, 2 px outside the region.
+        assert_eq!(
+            outline_strips(IRect::new(2020, 100, 400, 300), output),
+            [
+                IRect::new(98, 98, 404, 2),
+                IRect::new(98, 400, 404, 2),
+                IRect::new(98, 100, 2, 300),
+                IRect::new(500, 100, 2, 300),
+            ]
+        );
+        // Touching the output's left and top edges: those strips fall on
+        // the neighbours, the others are clipped to this output.
+        assert_eq!(
+            outline_strips(IRect::new(1920, 0, 400, 300), output),
+            [IRect::new(0, 300, 402, 2), IRect::new(400, 0, 2, 300)]
+        );
+        // The left neighbour gets the corner of the bottom strip and the
+        // whole left strip.
+        assert_eq!(
+            outline_strips(IRect::new(1920, 0, 400, 300), IRect::new(0, 0, 1920, 1080)),
+            [IRect::new(1918, 300, 2, 2), IRect::new(1918, 0, 2, 300)]
+        );
+        // Far from the output: nothing.
+        assert!(outline_strips(IRect::new(0, 0, 100, 100), output).is_empty());
+    }
+
+    #[test]
+    fn strip_buffers_cover_their_physical_pixels() {
+        // 2560x1440 at 1.5: 1707x960 logical (rounded by the compositor).
+        let output = Output {
+            rect: IRect::new(0, 0, 1707, 960),
+            mode: (2560, 1440),
+            scale: 2,
+            ..Default::default()
+        };
+        let (sx, sy) = output.pixel_scale();
+        assert!((sx - 1.5).abs() < 1e-3 && (sy - 1.5).abs() < 1e-3);
+        // A 2 px strip at 78 covers physical rows 117..120.
+        assert_eq!(physical_span(78, 2, sy), 3);
+        assert_eq!(physical_span(98, 304, sx), 456);
+        // At 1.25 the same strip covers 2 or 3 physical pixels depending
+        // on where it starts; the buffer follows the compositor's rounding.
+        assert_eq!(physical_span(0, 2, 1.25), 3);
+        assert_eq!(physical_span(2, 2, 1.25), 2);
+        assert_eq!(physical_span(10, 2, 1.0), 2);
+        // A portrait output: the mode is turned.
+        let portrait = Output {
+            rect: IRect::new(0, 0, 720, 1280),
+            mode: (2560, 1440),
+            transform: 1,
+            ..Default::default()
+        };
+        assert_eq!(portrait.pixel_scale(), (2.0, 2.0));
+        // No mode yet: the integer scale.
+        let unknown = Output {
+            scale: 2,
+            ..Default::default()
+        };
+        assert_eq!(unknown.pixel_scale(), (2.0, 2.0));
     }
 }

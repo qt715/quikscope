@@ -13,11 +13,12 @@
 use std::num::NonZeroU32;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use gpu_video::capabilities::{
-    DecodeH264Capabilities, DeviceType, EncodeProfileCapabilities, VideoAdapterInfo,
+    DecodeH264Capabilities, DeviceType, EncodeH264Capabilities, EncodeProfileCapabilities,
+    VideoAdapterInfo,
 };
 use gpu_video::parameters::{
     ColorRange, ColorSpace, DecoderParameters, EncoderOutputParameters, EncoderParametersH264,
@@ -70,12 +71,48 @@ struct Shared {
     /// Why no adapter can encode / decode H.264, once established: asking
     /// again would only repeat the Vulkan instance setup to fail the same way.
     unsupported: [Option<String>; 2],
+    /// Another failure to open a device (loader, driver or device errors
+    /// can be passing), and until when it stands.
+    failed: [Option<(Instant, String)>; 2],
+    /// Picture sizes the adapter that encoders open on encodes, once listed.
+    encode_sizes: Option<Option<SizeRange>>,
 }
 
 static SHARED: Mutex<Shared> = Mutex::new(Shared {
     gpu: Weak::new(),
     unsupported: [None, None],
+    failed: [None, None],
+    encode_sizes: None,
 });
+
+/// How long a failure other than "no adapter can do it" keeps Vulkan Video
+/// from being tried again.
+const RETRY_AFTER: Duration = Duration::from_secs(30);
+
+impl Shared {
+    /// Why `usage` is not worth trying now, if so.
+    fn refusal(&self, usage: Usage) -> Option<&str> {
+        let index = usage as usize;
+        self.unsupported[index].as_deref().or_else(|| {
+            self.failed[index]
+                .as_ref()
+                .filter(|(until, _)| Instant::now() < *until)
+                .map(|(_, reason)| reason.as_str())
+        })
+    }
+
+    /// Records the outcome of an attempt to use Vulkan Video for `usage`.
+    fn record<T>(&mut self, usage: Usage, outcome: &Result<Result<T, String>>) {
+        let index = usage as usize;
+        match outcome {
+            Ok(Ok(_)) => self.failed[index] = None,
+            Ok(Err(reason)) => self.unsupported[index] = Some(reason.clone()),
+            Err(err) => {
+                self.failed[index] = Some((Instant::now() + RETRY_AFTER, format!("{err:#}")));
+            }
+        }
+    }
+}
 
 /// The shared device if it supports `usage`, else a newly opened one.
 fn gpu(usage: Usage) -> Result<Arc<Gpu>> {
@@ -85,31 +122,29 @@ fn gpu(usage: Usage) -> Result<Arc<Gpu>> {
     {
         return Ok(gpu);
     }
-    if let Some(reason) = &shared.unsupported[usage as usize] {
+    if let Some(reason) = shared.refusal(usage) {
         bail!("{reason}");
     }
-    match open_gpu(usage)? {
+    let opened = open_gpu(usage);
+    shared.record(usage, &opened);
+    match opened? {
         Ok(gpu) => {
             let gpu = Arc::new(gpu);
             shared.gpu = Arc::downgrade(&gpu);
             Ok(gpu)
         }
-        Err(reason) => {
-            shared.unsupported[usage as usize] = Some(reason.clone());
-            bail!("{reason}")
-        }
+        Err(reason) => bail!("{reason}"),
     }
 }
 
-/// Opens the best adapter for `usage`: discrete before integrated GPUs, and
-/// among those one that can also do the other direction, so an editor that
-/// decodes and encodes shares one device. `Ok(Err(reason))` means no
-/// adapter can ever do it in this process.
-fn open_gpu(usage: Usage) -> Result<Result<Gpu, String>> {
-    let instance = match VideoInstance::new(&VideoInstanceDescriptor::default()) {
-        Ok(instance) => instance,
-        Err(err) => return Ok(Err(format!("Vulkan Video unavailable: {err}"))),
-    };
+/// The best adapter for `usage`, with what it can do (encode, decode):
+/// discrete before integrated GPUs, and among those one that can also do
+/// the other direction, so an editor that decodes and encodes shares one
+/// device.
+fn best_adapter(
+    instance: &VideoInstance,
+    usage: Usage,
+) -> Result<Option<([bool; 2], VideoAdapter<'_>)>> {
     let rank = |info: &VideoAdapterInfo| match info.device_type {
         DeviceType::DiscreteGpu => 0u8,
         DeviceType::IntegratedGpu => 1,
@@ -117,10 +152,9 @@ fn open_gpu(usage: Usage) -> Result<Result<Gpu, String>> {
         DeviceType::Other | DeviceType::Cpu => 3,
     };
     let mut best: Option<((u8, bool), [bool; 2], VideoAdapter<'_>)> = None;
-    let adapters = match instance.iter_adapters() {
-        Ok(adapters) => adapters,
-        Err(err) => return Ok(Err(format!("Vulkan Video unavailable: {err}"))),
-    };
+    let adapters = instance
+        .iter_adapters()
+        .context("listing Vulkan Video adapters")?;
     for adapter in adapters {
         let info = adapter.info();
         let can = [encodes_h264(info), decodes_h264(info)];
@@ -139,12 +173,24 @@ fn open_gpu(usage: Usage) -> Result<Result<Gpu, String>> {
             best = Some((key, can, adapter));
         }
     }
-    let Some((_, [can_encode, can_decode], adapter)) = best else {
-        let what = match usage {
-            Usage::Encode => "encode",
-            Usage::Decode => "decode",
-        };
-        return Ok(Err(format!("no Vulkan Video adapter can {what} H.264")));
+    Ok(best.map(|(_, can, adapter)| (can, adapter)))
+}
+
+fn unsupported_reason(usage: Usage) -> String {
+    let what = match usage {
+        Usage::Encode => "encode",
+        Usage::Decode => "decode",
+    };
+    format!("no Vulkan Video adapter can {what} H.264")
+}
+
+/// Opens the [best adapter](best_adapter) for `usage`. `Ok(Err(reason))`
+/// means no adapter can ever do it in this process.
+fn open_gpu(usage: Usage) -> Result<Result<Gpu, String>> {
+    let instance = VideoInstance::new(&VideoInstanceDescriptor::default())
+        .context("Vulkan Video unavailable")?;
+    let Some(([can_encode, can_decode], adapter)) = best_adapter(&instance, usage)? else {
+        return Ok(Err(unsupported_reason(usage)));
     };
     let name = adapter.info().name.clone();
     let device = adapter
@@ -159,6 +205,87 @@ fn open_gpu(usage: Usage) -> Result<Result<Gpu, String>> {
         can_encode,
         can_decode,
     }))
+}
+
+/// Smallest and largest picture an encoder accepts; the largest bounds the
+/// macroblock-aligned coded size.
+#[derive(Clone, Copy, Debug)]
+struct SizeRange {
+    min: (u32, u32),
+    max: (u32, u32),
+}
+
+impl SizeRange {
+    fn of(limits: &EncodeProfileCapabilities) -> Self {
+        SizeRange {
+            min: (limits.min_width, limits.min_height),
+            max: (limits.max_width, limits.max_height),
+        }
+    }
+
+    fn contains(&self, width: u32, height: u32) -> bool {
+        width >= self.min.0
+            && height >= self.min.1
+            && width.next_multiple_of(16) <= self.max.0
+            && height.next_multiple_of(16) <= self.max.1
+    }
+}
+
+/// Whether [`Encoder::open`] can take `width`×`height` pictures, as far
+/// as the adapter's limits tell. Lists the adapters once per process (no
+/// device is opened) unless an encoder's device is open already.
+pub fn encode_size_fits(width: u32, height: u32) -> bool {
+    let mut shared = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(gpu) = shared.gpu.upgrade()
+        && gpu.can_encode
+    {
+        return encode_sizes(&gpu.device.encode_capabilities().h264)
+            .is_some_and(|range| range.contains(width, height));
+    }
+    if shared.encode_sizes.is_none() {
+        if shared.refusal(Usage::Encode).is_some() {
+            return false;
+        }
+        let listed = list_encode_sizes();
+        shared.record(Usage::Encode, &listed);
+        match listed {
+            Ok(Ok(range)) => shared.encode_sizes = Some(Some(range)),
+            Ok(Err(_)) => shared.encode_sizes = Some(None),
+            Err(err) => {
+                log::debug!("Vulkan Video encode sizes unknown: {err:#}");
+                return false;
+            }
+        }
+    }
+    shared
+        .encode_sizes
+        .flatten()
+        .is_some_and(|range| range.contains(width, height))
+}
+
+fn list_encode_sizes() -> Result<Result<SizeRange, String>> {
+    let instance = VideoInstance::new(&VideoInstanceDescriptor::default())
+        .context("Vulkan Video unavailable")?;
+    Ok(best_adapter(&instance, Usage::Encode)?
+        .and_then(|(_, adapter)| encode_sizes(&adapter.info().encode_capabilities.h264))
+        .ok_or_else(|| unsupported_reason(Usage::Encode)))
+}
+
+/// The profile [`Encoder::open`] uses and its limits.
+fn encode_profile(
+    caps: &EncodeH264Capabilities,
+) -> Option<(ProfileH264, EncodeProfileCapabilities)> {
+    [
+        (ProfileH264::High, caps.high_profile),
+        (ProfileH264::Main, caps.main_profile),
+        (ProfileH264::Baseline, caps.baseline_profile),
+    ]
+    .into_iter()
+    .find_map(|(profile, limits)| Some((profile, limits?)))
+}
+
+fn encode_sizes(caps: &Option<EncodeH264Capabilities>) -> Option<SizeRange> {
+    encode_profile(caps.as_ref()?).map(|(_, limits)| SizeRange::of(&limits))
 }
 
 fn encodes_h264(info: &VideoAdapterInfo) -> bool {
@@ -203,14 +330,7 @@ impl Encoder {
             .encode_capabilities()
             .h264
             .context("device lost its H.264 encode support")?;
-        let (profile, limits): (ProfileH264, EncodeProfileCapabilities) = [
-            (ProfileH264::High, caps.high_profile),
-            (ProfileH264::Main, caps.main_profile),
-            (ProfileH264::Baseline, caps.baseline_profile),
-        ]
-        .into_iter()
-        .find_map(|(profile, limits)| Some((profile, limits?)))
-        .context("no H.264 encode profile")?;
+        let (profile, limits) = encode_profile(&caps).context("no H.264 encode profile")?;
         let VideoEncoderConfig {
             width,
             height,
@@ -218,19 +338,15 @@ impl Encoder {
             bitrate,
             keyframe_interval,
         } = *config;
-        // The picture against the minimum, its macroblock-aligned coded size
-        // against the maximum.
+        let sizes = SizeRange::of(&limits);
         ensure!(
-            width >= limits.min_width
-                && height >= limits.min_height
-                && width.next_multiple_of(16) <= limits.max_width
-                && height.next_multiple_of(16) <= limits.max_height,
+            sizes.contains(width, height),
             "{} encodes {}x{} to {}x{} pictures, not {width}x{height}",
             gpu.name,
-            limits.min_width,
-            limits.min_height,
-            limits.max_width,
-            limits.max_height
+            sizes.min.0,
+            sizes.min.1,
+            sizes.max.0,
+            sizes.max.1
         );
         // VBR lets static screens cost almost nothing and bursts (scrolling,
         // video) use up to twice the average; the 2 s buffer allows long
@@ -468,9 +584,18 @@ const _: () = assert!(3 * INVERSE_OF_3 % BITSTREAM_ALIGNMENT == 1);
 /// rounded up to the alignment, over stale bytes from earlier pictures
 /// (`upload_data` in wrappers/mem.rs). NVIDIA decodes those into pictures
 /// with several slices: stale or gray macroblocks, differently each run.
-/// The padding is `00 00 03` triplets (cabac_zero_words): they survive the
-/// zero stripping and read as zero bits after the slice's stop bit. 3 is
-/// invertible modulo a power of two, so whole triplets reach any length.
+///
+/// The padding has to sit inside the last slice: gpu-video uploads nothing
+/// but slice NAL units (a filler-data NAL unit would be dropped) and strips
+/// trailing zero bytes. So it is `00 00 03` triplets, whose `03` is an
+/// emulation prevention byte: the slice's RBSP gains only zero bytes after
+/// its rbsp_stop_one_bit. For CABAC streams those are cabac_zero_words.
+/// CAVLC streams, which need the padding most (their slices end where the
+/// RBSP's last 1 bit is, so stale bytes would read as more macroblocks),
+/// have no such syntax element, but more_rbsp_data() finds that same last
+/// 1 bit before the zeros, so a conforming decoder reads the slice
+/// unchanged. 3 is invertible modulo a power of two, so whole triplets
+/// reach any length.
 fn aligned_access_unit(access_unit: &[u8]) -> Vec<u8> {
     let mut length = 0;
     let mut last_slice_end = None;

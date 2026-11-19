@@ -96,10 +96,7 @@ fn export_video(
         frames.size.0,
         frames.size.1
     );
-    let fps = frames
-        .fps
-        .unwrap_or(frames.source_fps.round().clamp(1.0, 240.0) as u32);
-    let mut video = H264Track::new(VIDEO_TRACK, width, height, fps, options.encoder)?;
+    let mut video = H264Track::new(VIDEO_TRACK, width, height, frames.rate, options.encoder)?;
     let mut audio = if options.mute {
         None
     } else {
@@ -229,7 +226,10 @@ struct Frames<'a> {
     end: Duration,
     /// Output rate; `None` keeps every source frame with its own timing.
     fps: Option<u32>,
-    source_fps: f64,
+    /// Rate a video export's encoder is set up for (bitrate, keyframe
+    /// interval): the output grid, else the source's nominal rate, never its
+    /// average (which a variable-rate recording's static stretches lower).
+    rate: u32,
     size: (u32, u32),
     overlay: Option<Overlay<'a>>,
     /// Grid mode: the prepared frame showing now.
@@ -274,22 +274,44 @@ impl<'a> Frames<'a> {
             source_width > 0 && source_height > 0,
             "The annotations leave an empty picture"
         );
-        let width = if options.format.is_video() {
-            source_width
+        let rate = fps.unwrap_or(if info.fps > 0.0 {
+            info.fps.round().clamp(1.0, 240.0) as u32
         } else {
-            options
+            30
+        });
+        let (width, height) = if options.format.is_video() {
+            let even = (source_width & !1, source_height & !1);
+            let fitted = if even.0 > 0 && even.1 > 0 {
+                encodable_size(even, rate, options.encoder)
+            } else {
+                even
+            };
+            if fitted == even {
+                // Odd sizes are cropped when converting, never scaled.
+                (source_width, source_height)
+            } else {
+                log::warn!(
+                    "exporting {source_width}x{source_height} as {}x{}: no H.264 encoder takes the full size",
+                    fitted.0,
+                    fitted.1
+                );
+                fitted
+            }
+        } else {
+            let width = options
                 .max_width
                 .unwrap_or(source_width)
-                .clamp(1, source_width)
+                .clamp(1, source_width);
+            let height =
+                ((source_height as f64 * width as f64 / source_width as f64).round() as u32).max(1);
+            (width, height)
         };
-        let height =
-            ((source_height as f64 * width as f64 / source_width as f64).round() as u32).max(1);
         Ok(Self {
             decoder,
             start,
             end,
             fps,
-            source_fps: info.fps,
+            rate,
             size: (width, height),
             overlay,
             current: None,
@@ -352,23 +374,29 @@ impl<'a> Frames<'a> {
         if at >= self.end {
             return Ok(None);
         }
+        // Only the newest source frame at or before the tick is shown:
+        // frames it replaces within the tick are never painted or scaled.
+        let mut newest = None;
         if self.current.is_none() {
             let Some(first) = self.next_raw()? else {
                 return Ok(None);
             };
-            self.current = Some(self.prepare(first));
+            newest = Some(first);
         }
         loop {
             if self.upcoming.is_none() {
                 self.upcoming = self.decoder.next_frame()?;
             }
             match self.upcoming.take() {
-                Some(next) if next.pts <= at => self.current = Some(self.prepare(next)),
+                Some(next) if next.pts <= at => newest = Some(next),
                 other => {
                     self.upcoming = other;
                     break;
                 }
             }
+        }
+        if let Some(frame) = newest {
+            self.current = Some(self.prepare(frame));
         }
         self.index += 1;
         let next = Duration::from_nanos(self.index * 1_000_000_000 / u64::from(fps));
@@ -394,6 +422,37 @@ pub(super) fn container_for(format: OutputFormat, fragmented: bool) -> Result<Co
             bail!("{format} is not a video format")
         }
     })
+}
+
+/// The largest size with `size`'s aspect ratio (to rounding, both sides
+/// even) that an H.264 encoder allowed by `preference` takes at `fps`: `size`
+/// itself unless it is beyond every encoder (an ultrawide or multi-monitor
+/// capture past H.264 level 5.2 without a GPU encoder for it). `size` is
+/// even and not empty.
+pub(super) fn encodable_size(
+    (width, height): (u32, u32),
+    fps: u32,
+    preference: EncoderPreference,
+) -> (u32, u32) {
+    let fits = |w: u32, h: u32| codec::h264_fits(w, h, fps, preference);
+    if fits(width, height) {
+        return (width, height);
+    }
+    let height_for = |w: u32| {
+        let h = (u64::from(height) * u64::from(w) + u64::from(width) / 2) / u64::from(width);
+        (h as u32 & !1).max(2)
+    };
+    // Bisects the width in steps of 2; 2 pixels wide always fits.
+    let (mut good, mut bad) = (1, width / 2);
+    while bad - good > 1 {
+        let mid = good + (bad - good) / 2;
+        if fits(mid * 2, height_for(mid * 2)) {
+            good = mid;
+        } else {
+            bad = mid;
+        }
+    }
+    (good * 2, height_for(good * 2))
 }
 
 /// Shortest step between two video timestamps: they are kept in whole
@@ -520,12 +579,17 @@ impl H264Track {
         Ok(())
     }
 
-    /// Drains the encoder; the last picture shows until `end`.
+    /// Drains the encoder; the last picture shows until `end`. A failed
+    /// drain still writes the packet already held, so the file keeps every
+    /// picture encoded before the failure.
     pub(super) fn finish(&mut self, end: Duration, mux: &mut dyn Muxer) -> Result<()> {
-        for frame in self.encoder.finish()? {
-            self.write(frame, mux)?;
-        }
-        self.finish_held(end, mux)
+        let drained = self.encoder.finish().and_then(|frames| {
+            frames
+                .into_iter()
+                .try_for_each(|frame| self.write(frame, mux))
+        });
+        let held = self.finish_held(end, mux);
+        drained.and(held)
     }
 
     /// Writes the packet held back for its duration, without touching the

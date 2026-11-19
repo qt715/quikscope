@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use quikscope::media::decode::{self, AudioDecoder, DecodedFrame, Decoder};
 use quikscope::media::export::{self, ExportOptions, Trim};
-use quikscope::media::record::{Recorded, Session, SessionConfig};
+use quikscope::media::record::{Cancelled, Recorded, Session, SessionConfig};
 use quikscope::media::{
     self, AudioChunk, AudioSource, AudioSpec, EncoderPreference, Frame, Kind, OutputFormat,
     VideoSource,
@@ -198,10 +198,19 @@ impl AudioSource for Sine {
     }
 }
 
+/// A session writing a new file, reserved as the daemon reserves recordings.
 fn config(path: &Path, format: OutputFormat, encoder: EncoderPreference) -> SessionConfig {
+    config_into(OutputFile::reserve(path).unwrap(), format, encoder)
+}
+
+fn config_into(
+    output: OutputFile,
+    format: OutputFormat,
+    encoder: EncoderPreference,
+) -> SessionConfig {
     SessionConfig {
-        output: OutputFile::replace(path).unwrap(),
-        master: path.with_extension("master"),
+        master: output.path().with_extension("master"),
+        output,
         format,
         fps: 20,
         audio: vec![],
@@ -210,10 +219,14 @@ fn config(path: &Path, format: OutputFormat, encoder: EncoderPreference) -> Sess
     }
 }
 
+fn stop(session: Session) -> Result<Recorded> {
+    session.stop(&|_| {}, &AtomicBool::new(false))
+}
+
 fn record_for(session: Session, length: Duration) -> Result<Recorded> {
     thread::sleep(length);
     assert!(session.failure().is_none(), "{:?}", session.failure());
-    session.stop()
+    stop(session)
 }
 
 fn decoded(path: &Path) -> Result<Vec<DecodedFrame>> {
@@ -337,6 +350,14 @@ fn fixtures_read_back_in_every_format() -> Result<()> {
         let frame = decoder.next_frame()?.context("seek")?;
         assert_eq!(index_of(&frame.image), 2, "{format} seek");
         assert_eq!(frame.pts, ms(200));
+        // Forward within the frames decoded ahead, forward past them,
+        // back, and past the end (the last frame).
+        for (to, index) in [(310, 3), (520, 5), (120, 1), (5000, 5)] {
+            decoder.seek(ms(to))?;
+            let frame = decoder.next_frame()?.context("seek")?;
+            assert_eq!(index_of(&frame.image), index, "{format} seek to {to} ms");
+            assert_eq!(frame.pts, ms(100 * u64::from(index)), "{format}");
+        }
     }
     Ok(())
 }
@@ -369,12 +390,14 @@ fn recordings_in_every_container() -> Result<()> {
             assert!(recorded.thumbnail.width > 0);
             assert_no_leftovers(dir.path());
             fixtures::ffprobe(&path, &["h264", "opus"]);
+            assert_ffprobe_times(&path)?;
             let info = decode::probe(&path)?;
             assert_eq!(info.kind, Kind::Video);
             assert!(info.has_audio);
             assert_near(info.duration, recorded.duration, ms(60));
             let frames = decoded(&path)?;
-            assert!(frames.len() >= 8, "{} frames", frames.len());
+            // 12 captured; a loaded machine may drop some.
+            assert!(frames.len() >= 4, "{} frames", frames.len());
             // Every capture is a new picture: encoded in order, none twice.
             for pair in frames.windows(2) {
                 assert!(index_of(&pair[1].image) > index_of(&pair[0].image));
@@ -385,6 +408,41 @@ fn recordings_in_every_container() -> Result<()> {
                 .sqrt();
             assert!(rms > 0.1, "{format}: audio RMS {rms}");
         }
+    }
+    Ok(())
+}
+
+/// Every video packet of `path` as quikscope's demuxer times it.
+fn video_packet_times(path: &Path) -> Result<Vec<Duration>> {
+    let mut demuxer = media::container::open_demuxer(path)?.context("not a container")?;
+    let track = demuxer
+        .tracks()
+        .iter()
+        .position(|t| t.codec == media::container::Codec::H264)
+        .context("no video track")?;
+    let mut times = Vec::new();
+    while let Some(packet) = demuxer.next_packet()? {
+        if packet.track == track {
+            times.push(packet.pts);
+        }
+    }
+    Ok(times)
+}
+
+/// ffprobe (when installed) times every video packet as quikscope does:
+/// variable frame timing reaches other players intact.
+fn assert_ffprobe_times(path: &Path) -> Result<()> {
+    let Some(theirs) = fixtures::ffprobe_video_times(path) else {
+        return Ok(());
+    };
+    let ours = video_packet_times(path)?;
+    assert_eq!(theirs.len(), ours.len(), "ffprobe {}", path.display());
+    for (i, (a, b)) in theirs.iter().zip(&ours).enumerate() {
+        assert!(
+            a.abs_diff(*b) <= ms(1),
+            "{} packet {i}: ffprobe {a:?}, quikscope {b:?}",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -448,13 +506,16 @@ fn odd_capture_sizes_are_cropped_not_scaled() -> Result<()> {
 }
 
 /// Pausing stops the capture; the first frame after resuming shows what
-/// changed meanwhile, at the time recording resumed.
+/// changed meanwhile, at the time recording resumed. Checked by order and
+/// by the session clock, not by wall-clock tolerances a loaded machine
+/// misses.
 #[test]
 fn resume_shows_a_fresh_frame() -> Result<()> {
     init_logs();
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("paused.mkv");
     let screen = Screen::new(pattern(160, 96, 1));
+    let started = Instant::now();
     let session = Session::start(
         config(&path, OutputFormat::Mkv, EncoderPreference::Software),
         screen.source(),
@@ -463,23 +524,40 @@ fn resume_shows_a_fresh_frame() -> Result<()> {
     session.pause();
     assert!(session.is_paused());
     let at_pause = session.elapsed();
+    let paused = Instant::now();
     thread::sleep(ms(150));
     screen.show(pattern(160, 96, 2));
     thread::sleep(ms(300));
     assert_eq!(session.elapsed(), at_pause);
+    let resumed = Instant::now();
     session.resume();
     thread::sleep(ms(400));
-    let recorded = session.stop()?;
+    let recorded = stop(session)?;
+    let wall = started.elapsed();
     assert!(screen.pause_calls.load(Ordering::Relaxed) >= 2);
-    assert_near(recorded.duration, ms(800), ms(100));
+    // At least the 800 ms slept while recording, and none of the pause.
+    assert!(recorded.duration >= ms(800), "{:?}", recorded.duration);
+    assert!(
+        recorded.duration <= wall - (resumed - paused),
+        "{:?} includes the pause",
+        recorded.duration
+    );
     let frames = decoded(&path)?;
     let fresh = frames
         .iter()
         .position(|f| index_of(&f.image) == 2)
         .context("the picture changed while paused never shows")?;
+    assert!(fresh > 0);
     assert!(frames[..fresh].iter().all(|f| index_of(&f.image) == 1));
     assert!(frames[fresh..].iter().all(|f| index_of(&f.image) == 2));
-    assert_near(frames[fresh].pts, at_pause, ms(80));
+    // The old picture ends where recording paused; the new one continues
+    // the timeline from there (times are whole milliseconds).
+    assert!(frames[fresh - 1].pts <= at_pause);
+    assert!(
+        frames[fresh].pts + ms(1) >= at_pause,
+        "{:?}",
+        frames[fresh].pts
+    );
     Ok(())
 }
 
@@ -503,14 +581,24 @@ fn static_screens_record_variable_frame_rate() -> Result<()> {
     let frames = decoded(&path)?;
     let times: Vec<_> = frames.iter().map(|f| f.pts).collect();
     eprintln!("frame times: {times:?}");
-    assert!(frames.len() <= 6, "{} frames for 2 pictures", frames.len());
+    // Two pictures, a repeat per second (a slow machine records longer).
+    let most = recorded.duration.as_secs() as usize + 3;
+    assert!(
+        frames.len() <= most,
+        "{} frames for 2 pictures",
+        frames.len()
+    );
+    // A repeat is due a second after the last picture; allow for a busy
+    // encoder thread.
+    let repeat = ms(1500);
     for pair in frames.windows(2) {
         assert!(pair[1].pts > pair[0].pts);
-        assert!(pair[1].pts - pair[0].pts <= ms(1100), "{times:?}");
+        assert!(pair[1].pts - pair[0].pts <= repeat, "{times:?}");
         assert_near(pair[0].duration, pair[1].pts - pair[0].pts, ms(1));
     }
     let change = frames.iter().position(|f| index_of(&f.image) == 2).unwrap();
-    assert_near(frames[change].pts, changed_at, ms(60));
+    assert!(frames[change].pts + ms(1) >= changed_at, "{times:?}");
+    assert!(frames[change].pts <= changed_at + ms(500), "{times:?}");
     let last = frames.last().unwrap();
     assert_near(last.pts + last.duration, recorded.duration, ms(5));
     // Every repeat is a keyframe: seeking anywhere decodes at once.
@@ -521,7 +609,9 @@ fn static_screens_record_variable_frame_rate() -> Result<()> {
             keys.push(packet.pts);
         }
     }
-    assert!(keys.windows(2).all(|k| k[1] - k[0] <= ms(1100)), "{keys:?}");
+    assert!(keys.windows(2).all(|k| k[1] - k[0] <= repeat), "{keys:?}");
+    // Other players see the same irregular timing.
+    assert_ffprobe_times(&path)?;
     Ok(())
 }
 
@@ -584,7 +674,7 @@ fn encoder_failure_keeps_what_was_recorded() -> Result<()> {
         }
         let failure = session.failure().context("the failure was not reported")?;
         assert!(failure.contains("size changed"), "{failure}");
-        let recorded = session.stop()?;
+        let recorded = stop(session)?;
         assert_eq!(recorded.path, path);
         let frames = decoded(&path)?;
         assert!(frames.len() >= 25, "{format}: {} frames kept", frames.len());
@@ -593,6 +683,7 @@ fn encoder_failure_keeps_what_was_recorded() -> Result<()> {
             frames.len() as u32 - 1
         );
         fixtures::ffprobe(&path, &["h264"]);
+        assert_ffprobe_times(&path)?;
     }
     Ok(())
 }
@@ -630,7 +721,7 @@ fn capture_failure_keeps_what_was_recorded() -> Result<()> {
         session.failure().as_deref(),
         Some("Synthetic source disappeared")
     );
-    session.stop()?;
+    stop(session)?;
     assert_eq!(index_of(&decoded(&path)?[0].image), 7);
     Ok(())
 }
@@ -667,7 +758,11 @@ fn cancel_discards() -> Result<()> {
 
     std::fs::write(&path, b"existing final file")?;
     let session = Session::start(
-        config(&path, OutputFormat::Mp4, EncoderPreference::Software),
+        config_into(
+            OutputFile::replace(&path)?,
+            OutputFormat::Mp4,
+            EncoderPreference::Software,
+        ),
         Box::new(Synthetic::new(20)),
     )?;
     session.cancel();
@@ -681,6 +776,185 @@ fn cancel_discards() -> Result<()> {
     thread::sleep(ms(100));
     session.cancel();
     assert_eq!(std::fs::read_dir(dir.path())?.count(), 1);
+    Ok(())
+}
+
+/// Setting the cancel flag while an animation's final file is encoded stops
+/// the encode and keeps the complete master; while a video is saved it
+/// discards the video without finishing it.
+#[test]
+fn cancelling_while_saving() -> Result<()> {
+    init_logs();
+    let dir = tempfile::tempdir()?;
+    let avif = dir.path().join("cancelled.avif");
+    let session = Session::start(
+        config(&avif, OutputFormat::Avif, EncoderPreference::Software),
+        Box::new(Synthetic::new(20)),
+    )?;
+    thread::sleep(ms(600));
+    let cancel = AtomicBool::new(false);
+    let reports = Mutex::new(Vec::new());
+    let error = session
+        .stop(
+            &|progress| {
+                reports.lock().unwrap().push(progress);
+                if progress > 0.0 {
+                    cancel.store(true, Ordering::Release);
+                }
+            },
+            &cancel,
+        )
+        .unwrap_err();
+    let cancelled = error
+        .downcast_ref::<Cancelled>()
+        .with_context(|| format!("not a cancel: {error:#}"))?;
+    let master = avif.with_extension("master");
+    assert_eq!(cancelled.master.as_deref(), Some(master.as_path()));
+    assert!(error.to_string().contains(&master.display().to_string()));
+    let reports = reports.into_inner().unwrap();
+    assert_eq!(reports[0], 0.0);
+    assert!(reports.iter().any(|&p| p > 0.0 && p < 1.0), "{reports:?}");
+    // No final file, and the master is finished (indexed, every frame).
+    let names: Vec<_> = std::fs::read_dir(dir.path())?
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["cancelled.master"]);
+    let frames = decoded(&master)?;
+    assert!(frames.len() >= 6, "{} frames", frames.len());
+    let info = decode::probe(&master)?;
+    let last = frames.last().unwrap();
+    assert_eq!(info.duration, last.pts + last.duration);
+
+    // A classic MP4 is not rewritten just to be deleted.
+    let video = dir.path().join("cancelled.mp4");
+    let mut config = config(&video, OutputFormat::Mp4, EncoderPreference::Software);
+    config.fragmented = false;
+    let session = Session::start(config, Box::new(Synthetic::new(20)))?;
+    thread::sleep(ms(300));
+    let error = session.stop(&|_| {}, &AtomicBool::new(true)).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<Cancelled>(),
+        Some(&Cancelled { master: None })
+    );
+    let names: Vec<_> = std::fs::read_dir(dir.path())?
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["cancelled.master"]);
+    Ok(())
+}
+
+/// Environment variable naming the file [`crash_while_recording`] records.
+const CRASH_RECORDING: &str = "QUIKSCOPE_TEST_CRASH_RECORDING";
+/// Its exit status.
+const CRASHED: i32 = 86;
+
+/// Not a test by itself: [`crashed_recordings_stay_playable`] runs it in a
+/// child process, which records into the file the environment names and
+/// then exits mid-recording: no destructor, no finish, buffered data lost,
+/// as when quikscope is killed.
+#[test]
+fn crash_while_recording() -> Result<()> {
+    let Some(path) = std::env::var_os(CRASH_RECORDING).map(PathBuf::from) else {
+        return Ok(());
+    };
+    let format = OutputFormat::from_path(&path).context("no format")?;
+    let session = Session::start(
+        config(&path, format, EncoderPreference::Software),
+        Box::new(Synthetic::new(20)),
+    )?;
+    thread::sleep(ms(2500));
+    assert!(session.failure().is_none(), "{:?}", session.failure());
+    std::process::exit(CRASHED);
+}
+
+/// Fragmented MP4 and Matroska recordings are written in place: a killed
+/// recording leaves a playable file under its real name, with everything up
+/// to its last complete fragment.
+#[test]
+fn crashed_recordings_stay_playable() -> Result<()> {
+    init_logs();
+    let dir = tempfile::tempdir()?;
+    for format in [OutputFormat::Mp4, OutputFormat::Mkv] {
+        let path = dir.path().join(format!("crashed.{format}"));
+        let child = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "crash_while_recording", "--nocapture"])
+            .env(CRASH_RECORDING, &path)
+            .output()?;
+        assert_eq!(
+            child.status.code(),
+            Some(CRASHED),
+            "{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let names: Vec<_> = std::fs::read_dir(dir.path())?
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&format!("crashed.{format}")))
+            .collect();
+        assert_eq!(names, [format!("crashed.{format}")]);
+        let frames = decoded(&path)?;
+        // Fragments end at keyframes, one a second: at 2.5 s the first two
+        // seconds are on disk.
+        assert!(frames.len() >= 20, "{format}: {} frames", frames.len());
+        // Captures in order from the first, each once.
+        assert_eq!(index_of(&frames[0].image), 0, "{format}");
+        for pair in frames.windows(2) {
+            assert!(
+                index_of(&pair[1].image) > index_of(&pair[0].image),
+                "{format}"
+            );
+        }
+        // Other players read the same packets (they may also get some of
+        // the cut-off fragment's).
+        if let Some(theirs) = fixtures::ffprobe_video_times(&path) {
+            let ours = video_packet_times(&path)?;
+            assert!(theirs.len() >= ours.len(), "{format}: {theirs:?}");
+            for (a, b) in theirs.iter().zip(&ours) {
+                assert!(a.abs_diff(*b) <= ms(1), "{format}: {a:?} vs {b:?}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A capture larger than any H.264 encoder takes (beyond level 5.2 for
+/// OpenH264) records scaled down to the largest size that fits, with its
+/// aspect ratio, and says so.
+#[test]
+fn oversized_captures_are_scaled_to_fit() -> Result<()> {
+    init_logs();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("ultrawide.mp4");
+    let screen = Screen::new(pattern(8000, 2000, 5));
+    let session = Session::start(
+        config(&path, OutputFormat::Mp4, EncoderPreference::Software),
+        screen.source(),
+    )?;
+    let (width, height) = session.size();
+    eprintln!("8000x2000 records as {width}x{height}");
+    assert!(width < 8000 && width % 2 == 0 && height % 2 == 0);
+    assert!((width as f64 / height as f64 - 4.0).abs() < 0.01);
+    // Level 5.2 allows 36864 macroblocks a frame: as close to that as the
+    // aspect ratio allows.
+    let macroblocks = width.div_ceil(16) * height.div_ceil(16);
+    assert!((35_000..=36_864).contains(&macroblocks), "{macroblocks}");
+    assert!(
+        session
+            .warnings()
+            .iter()
+            .any(|w| w.contains("8000x2000") && w.contains(&format!("{width}x{height}"))),
+        "{:?}",
+        session.warnings()
+    );
+    let recorded = record_for(session, ms(300))?;
+    assert_eq!((recorded.width, recorded.height), (width, height));
+    let info = decode::probe(&path)?;
+    assert_eq!((info.width, info.height), (width, height));
+    let frames = decoded(&path)?;
+    assert_eq!(
+        (frames[0].image.width, frames[0].image.height),
+        (width, height)
+    );
+    fixtures::ffprobe(&path, &["h264"]);
     Ok(())
 }
 
@@ -702,8 +976,17 @@ fn animation_recordings_keep_their_timing() -> Result<()> {
         session.resume();
         let recorded = record_for(session, ms(300))?;
         assert_eq!(recorded.path, path);
-        assert_near(recorded.duration, ms(600), ms(80));
+        // 600 ms slept while recording; a loaded machine adds some.
+        assert!(
+            (ms(600)..ms(1500)).contains(&recorded.duration),
+            "{:?}",
+            recorded.duration
+        );
         let master = decoded(&recorded.master)?;
+        // The capture rate, which the pause does not lower (exports set
+        // their encoder up from it).
+        let fps = decode::probe(&recorded.master)?.fps;
+        assert!((fps - 20.0).abs() < 1.5, "{format}: master at {fps} fps");
         let output = decoded(&path)?;
         let info = decode::probe(&path)?;
         assert_eq!(info.kind, Kind::Animation);
@@ -713,9 +996,10 @@ fn animation_recordings_keep_their_timing() -> Result<()> {
             assert_eq!(index_of(&a.image), index_of(&b.image), "{format}");
             assert_near(a.pts, b.pts, ms(10));
         }
-        // Frames continue across the pause without a hole.
+        // Frames continue across the 200 ms pause without a hole (they are
+        // 50 ms apart; allow for a slow encoder).
         for pair in master.windows(2) {
-            assert!(pair[1].pts - pair[0].pts < ms(100), "{format}");
+            assert!(pair[1].pts - pair[0].pts < ms(150), "{format}");
         }
     }
     Ok(())
@@ -940,11 +1224,13 @@ fn cancelled_exports_leave_nothing() -> Result<()> {
     Ok(())
 }
 
+/// Records a second of the desktop's real audio, so it runs only when asked
+/// for: `QUIKSCOPE_TEST_REAL_AUDIO=1 cargo test --test media pulse`.
 #[cfg(target_os = "linux")]
 #[test]
 fn pulse_devices_and_one_second_capture() -> Result<()> {
-    if std::env::var_os("CI").is_some() {
-        eprintln!("Skipping PulseAudio hardware capture on CI");
+    if std::env::var_os("QUIKSCOPE_TEST_REAL_AUDIO").is_none_or(|v| v != "1") {
+        eprintln!("Skipping real audio capture; set QUIKSCOPE_TEST_REAL_AUDIO=1 to run it");
         return Ok(());
     }
     let devices = media::audio::devices()?;

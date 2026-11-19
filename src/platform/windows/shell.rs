@@ -943,9 +943,15 @@ enum Entry {
 fn menu_entries(state: &TrayState) -> Vec<Entry> {
     let action = |id, text: &str| Entry::Action(id, text.into());
     let mut entries = match &state.recording {
-        // No controls until it is written; stopping again would only
+        // Only a cancel until it is written; stopping again would only
         // report that it is still saving.
-        Some(recording) if recording.saving => vec![Entry::Label("Saving recording…".into())],
+        Some(recording) if recording.saving => {
+            let mut entries = vec![Entry::Label(recording.saving_label())];
+            if recording.save_cancellable() {
+                entries.push(action(13, "Cancel saving"));
+            }
+            entries
+        }
         Some(recording) => vec![
             Entry::Label(elapsed_label(recording)),
             action(11, if recording.paused { "Resume" } else { "Pause" }),
@@ -1007,7 +1013,7 @@ fn menu_entries(state: &TrayState) -> Vec<Entry> {
 
 fn elapsed_label(recording: &crate::platform::RecordingStatus) -> String {
     if recording.saving {
-        return "quikscope — saving recording…".into();
+        return format!("quikscope — {}", recording.saving_label());
     }
     let elapsed = recording.elapsed
         + if recording.paused {
@@ -1127,12 +1133,13 @@ mod tests {
 
     #[test]
     fn tray_recording_controls_come_before_quit() {
-        let status = |paused, saving| crate::platform::RecordingStatus {
+        let status = |paused, saving, progress| crate::platform::RecordingStatus {
             kind: Kind::Video,
             elapsed: std::time::Duration::from_secs(75),
             at: std::time::Instant::now(),
             paused,
             saving,
+            progress,
         };
         let ids = |recording| {
             menu_entries(&TrayState {
@@ -1150,9 +1157,10 @@ mod tests {
         };
         for (recording, controls) in [
             (None, vec![9, 10]),
-            (Some(status(false, false)), vec![11, 12, 13]),
-            (Some(status(true, false)), vec![11, 12, 13]),
-            (Some(status(false, true)), vec![]),
+            (Some(status(false, false, None)), vec![11, 12, 13]),
+            (Some(status(true, false, None)), vec![11, 12, 13]),
+            (Some(status(false, true, None)), vec![]),
+            (Some(status(true, true, Some(42))), vec![13]),
         ] {
             let ids = ids(recording);
             assert_eq!(&ids[..controls.len()], controls.as_slice());
@@ -1160,7 +1168,7 @@ mod tests {
             assert!(!ids[controls.len()..].iter().any(|id| (9..=13).contains(id)));
         }
         let paused = menu_entries(&TrayState {
-            recording: Some(status(true, false)),
+            recording: Some(status(true, false, None)),
             audio: Vec::new(),
             video_fps: 60,
             animation_fps: 30,
@@ -1172,12 +1180,20 @@ mod tests {
             Some(&Entry::Action(6, "Save recording and quit".into()))
         );
         let saving = menu_entries(&TrayState {
-            recording: Some(status(true, true)),
+            recording: Some(status(true, true, None)),
             audio: Vec::new(),
             video_fps: 60,
             animation_fps: 30,
         });
         assert_eq!(saving[0], Entry::Label("Saving recording…".into()));
+        let saving = menu_entries(&TrayState {
+            recording: Some(status(true, true, Some(42))),
+            audio: Vec::new(),
+            video_fps: 60,
+            animation_fps: 30,
+        });
+        assert_eq!(saving[0], Entry::Label("Saving recording… 42%".into()));
+        assert_eq!(saving[1], Entry::Action(13, "Cancel saving".into()));
         let idle = menu_entries(&TrayState {
             recording: None,
             audio: Vec::new(),
@@ -1256,6 +1272,7 @@ mod tests {
                 at: std::time::Instant::now(),
                 paused: false,
                 saving: false,
+                progress: None,
             }),
             audio: Vec::new(),
             video_fps: 60,

@@ -70,7 +70,7 @@ harness = false
 
 [dependencies]
 anyhow = "1"
-env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 fontdb = "0.23"
 futures = "0.3"
 libloading = "0.8"
@@ -96,7 +96,11 @@ unicode-segmentation = "1"
 # Video editor playback. On Linux the PipeWire host (sharing the `pipewire`
 # crate recording uses) is preferred; ALSA is cpal's always-built fallback.
 cpal = "0.18.2"
-gpu-video = { version = "0.5", default-features = false }
+# Pinned exactly: the decoder pads each access unit to fill gpu-video
+# 0.5.0's bitstream upload, whose layout (slices only, 4-byte start codes,
+# length rounded up over stale bytes) is internal and may change in any
+# release (see aligned_access_unit in src/media/codec/h264_vulkan.rs).
+gpu-video = { version = "=0.5.0", default-features = false }
 openh264 = "0.9"
 # Raw encoder parameters (slices, VUI) and decoder timestamps the safe
 # wrapper does not expose.

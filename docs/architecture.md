@@ -351,10 +351,14 @@ Platform sources (`ScreenRecorder::open`) deliver CPU `media::Frame`s
 clock (pauses excluded) with one presentation origin for every track, and
 encodes on its own threads. A tick without a new frame is skipped rather than
 encoded as a duplicate, so the files are variable frame rate. Odd capture
-sizes are cropped to the even rectangle at their top left, never scaled.
-Videos stream through the H.264 encoder and the muxer into the reserved
-output's partial file; animations are written to a lossless master in the
-cache and encoded into the chosen format on stop. The master stays so the
+sizes are cropped to the even rectangle at their top left; a capture larger
+than any H.264 encoder accepts is scaled down instead, with a warning.
+Fragmented MP4 and MKV recordings stream through the H.264 encoder and the
+muxer straight into the reserved output (each fragment leaves a playable
+file), classic MP4 and MOV into its partial file; animations are written to a
+lossless master in the cache and encoded into the chosen format on stop,
+reporting progress, which `record status` and the tray show and a cancel
+stops. The master stays so the
 annotator can re-export without generation loss. The [media engine](#media-engine)
 section describes the codecs and containers.
 
@@ -404,8 +408,18 @@ derive the same name end up with distinct files.
   without decoding. Without it, the newest image in the screenshots folder
   is opened.
 - Saves are atomic and never collide: `output::OutputFile` writes a partial
-  file per writer, renames it into place and reserves new names exclusively.
-- The daemon keeps the last eight shots and their documents in memory.
+  file per writer (`<name>.<pid>.<n>.part`), renames it into place and
+  reserves new names exclusively.
+- `ui::jobs` registers every write in flight (recording saves, exports,
+  editor saves, a recording starting). `quit` refuses new ones and awaits
+  them before the process exits.
+- A master whose final animation was never saved carries a `.pending` mark
+  naming its output. At start-up the daemon moves marked masters of daemons
+  that are gone into its own directory and opens them as shots, publishes
+  dead writers' partial recordings that play, removes empty partials and
+  their placeholders, then deletes the remaining unheld master directories.
+- The daemon keeps the last eight shots and their documents in memory, and
+  the paths of recent videos so a notification click can reopen them.
 
 ## Settings and onboarding
 

@@ -238,16 +238,18 @@ fn check_seek(demuxer: &mut dyn Demuxer, tolerance: Duration) {
     assert!(close(first_of(&after, 0).pts, frame(105), tolerance));
 }
 
-/// When `ffprobe` is installed, it must find both streams.
+/// When `ffprobe` is installed, it must find both streams and the length
+/// the picture and sound span (FFmpeg misreads late-starting fragmented
+/// tracks whose start is not in the edit list).
 fn ffprobe(path: &Path) {
     let Ok(output) = Command::new("ffprobe")
         .args([
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_name",
+            "stream=codec_name:format=duration",
             "-of",
-            "csv=p=0",
+            "default=nw=1",
         ])
         .arg(path)
         .output()
@@ -261,8 +263,18 @@ fn ffprobe(path: &Path) {
         "ffprobe: {stderr}"
     );
     assert!(
-        stdout.contains("h264") && stdout.contains("opus"),
+        stdout.contains("codec_name=h264") && stdout.contains("codec_name=opus"),
         "ffprobe streams: {stdout}"
+    );
+    let duration: f64 = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("duration="))
+        .and_then(|d| d.parse().ok())
+        .expect("ffprobe format duration");
+    let total = (FRAMES * FRAME_NS).max(AUDIO_START.as_nanos() as u64 + AUDIO_PACKETS * AUDIO_NS);
+    assert!(
+        (duration - total as f64 / 1e9).abs() < 0.02,
+        "ffprobe duration {duration} s"
     );
 }
 
@@ -301,8 +313,10 @@ fn fragmented_mp4_round_trip() {
     mux(&fixture, &path, Container::Mp4 { fragmented: true }, true);
     let boxes = top_level_boxes(&path);
     assert_eq!(&boxes[..3], ["ftyp", "moov", "moof"]);
-    // One fragment per keyframe interval.
-    assert!(boxes.iter().filter(|b| *b == "moof").count() >= (FRAMES / GOP) as usize);
+    // A fragment per keyframe interval, except that the init segment waits
+    // for the audio (two seconds in): the five intervals until then share
+    // the first fragment.
+    assert_eq!(boxes.iter().filter(|b| *b == "moof").count(), 4);
     check(&fixture, &path, MP4_TOLERANCE);
     ffprobe(&path);
 }
@@ -481,4 +495,301 @@ fn sniffs_content_not_extension() {
         sniff(&[0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81]),
         Some(Format::Matroska)
     );
+}
+
+/// The fixture with pictures 31..=44 missing (a static screen), as a
+/// recorder that skips unchanged pictures writes it.
+fn variable_rate(fixture: &Fixture) -> Fixture {
+    Fixture {
+        tracks: fixture.tracks.clone(),
+        packets: fixture
+            .packets
+            .iter()
+            .filter(|p| p.track != 0 || !(31..45).contains(&(p.pts.as_nanos() as u64 / FRAME_NS)))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Skipped pictures do not lower the frame rate demuxers report.
+#[test]
+fn variable_rate_video_reports_its_nominal_rate() {
+    let fixture = variable_rate(&fixture());
+    for (name, container) in [
+        ("vfr.mp4", Container::Mp4 { fragmented: true }),
+        ("vfr.mov", Container::Mov),
+        ("vfr.mkv", Container::Mkv),
+    ] {
+        let (_dir, path) = temp(name);
+        mux(&fixture, &path, container, true);
+        let demuxer = open_demuxer(&path).unwrap().unwrap();
+        let TrackKind::Video { fps, .. } = demuxer.tracks()[0].kind else {
+            panic!("{name}: video track expected");
+        };
+        assert!((fps - 30.0).abs() < 0.1, "{name}: {fps} fps");
+    }
+}
+
+/// After a seek past the end of an audio track, nothing of it comes back:
+/// the seek must not reach back for audio that has ended (which re-read the
+/// file from the start).
+#[test]
+fn seeking_past_an_early_audio_end() {
+    let mut fixture = fixture();
+    fixture
+        .packets
+        .retain(|p| p.track == 0 || p.pts < AUDIO_START + Duration::from_millis(500));
+    for (name, container) in [
+        ("short.mp4", Container::Mp4 { fragmented: true }),
+        ("short.mkv", Container::Mkv),
+    ] {
+        let (_dir, path) = temp(name);
+        mux(&fixture, &path, container, true);
+        let mut demuxer = open_demuxer(&path).unwrap().unwrap();
+        demuxer.seek(Duration::from_millis(3550)).unwrap();
+        let after = read_all(demuxer.as_mut());
+        assert!(after.iter().all(|p| p.track == 0), "{name}: stale audio");
+        assert!(after[0].keyframe, "{name}");
+        assert!(
+            close(
+                after[0].pts,
+                Duration::from_nanos(105 * FRAME_NS),
+                MKV_TOLERANCE
+            ),
+            "{name}: {:?}",
+            after[0].pts
+        );
+    }
+}
+
+/// Opens `data` as a file and reads, seeks and reads again, failing the
+/// test on a panic or if that takes longer than a few seconds (an allocation
+/// the size of a forged count aborts the test binary instead).
+fn survives(data: &[u8], what: &str) {
+    let (_dir, path) = temp("hostile");
+    std::fs::write(&path, data).unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let read = std::panic::catch_unwind(|| {
+            if let Ok(Some(mut demuxer)) = open_demuxer(&path) {
+                while let Ok(Some(_)) = demuxer.next_packet() {}
+                let _ = demuxer.seek(Duration::from_millis(1500));
+                while let Ok(Some(_)) = demuxer.next_packet() {}
+            }
+        });
+        let _ = done.send(read.is_ok());
+    });
+    match finished.recv_timeout(Duration::from_secs(20)) {
+        Ok(true) => {}
+        Ok(false) => panic!("{what}: the demuxer panicked"),
+        Err(_) => panic!("{what}: still reading after 20 s"),
+    }
+}
+
+/// Re-encodes the `moov` and every `moof` of an MP4 after `edit`, keeping
+/// the other boxes' bytes.
+fn edit_boxes(data: &[u8], mut edit: impl FnMut(&mut mp4_atom::Any)) -> Vec<u8> {
+    use mp4_atom::{Any, Decode, Encode};
+    let mut reader = std::io::Cursor::new(data);
+    let mut out = Vec::new();
+    while (reader.position() as usize) < data.len() {
+        let start = reader.position() as usize;
+        let mut atom = Any::decode(&mut reader).unwrap();
+        let end = reader.position() as usize;
+        if matches!(atom, Any::Moov(_) | Any::Moof(_)) {
+            edit(&mut atom);
+            atom.encode(&mut out).unwrap();
+        } else {
+            out.extend_from_slice(&data[start..end]);
+        }
+    }
+    out
+}
+
+/// Damaged or crafted MP4s with counts, sizes and offsets far beyond the
+/// file fail or play what is real, quickly, without huge allocations.
+#[test]
+fn hostile_mp4s_fail_quickly() {
+    use mp4_atom::{Any, StscEntry, StszSamples, SttsEntry, TrunSamples};
+    let fixture = fixture();
+    let (dir, classic) = temp("classic.mp4");
+    mux(
+        &fixture,
+        &classic,
+        Container::Mp4 { fragmented: false },
+        true,
+    );
+    let classic = std::fs::read(&classic).unwrap();
+    let fragmented = dir.path().join("fragmented.mp4");
+    mux(
+        &fixture,
+        &fragmented,
+        Container::Mp4 { fragmented: true },
+        true,
+    );
+    let fragmented = std::fs::read(&fragmented).unwrap();
+
+    survives(
+        &edit_boxes(&classic, |atom| {
+            if let Any::Moov(moov) = atom {
+                let stbl = &mut moov.trak[0].mdia.minf.stbl;
+                stbl.stsz.samples = StszSamples::Identical {
+                    count: u32::MAX,
+                    size: 1,
+                };
+                stbl.stsc.entries = vec![StscEntry {
+                    first_chunk: 1,
+                    samples_per_chunk: u32::MAX,
+                    sample_description_index: 1,
+                }];
+            }
+        }),
+        "stsz count of 2³²",
+    );
+    survives(
+        &edit_boxes(&classic, |atom| {
+            if let Any::Moov(moov) = atom {
+                let stbl = &mut moov.trak[1].mdia.minf.stbl;
+                stbl.stts.entries = vec![SttsEntry {
+                    sample_count: u32::MAX,
+                    sample_delta: u32::MAX,
+                }];
+                // Thousands of runs, every chunk at the end of the offsets.
+                stbl.stsc.entries = (1..5000)
+                    .map(|first_chunk| StscEntry {
+                        first_chunk,
+                        samples_per_chunk: 1,
+                        sample_description_index: 1,
+                    })
+                    .collect();
+                stbl.co64 = Some(mp4_atom::Co64 {
+                    entries: vec![u64::MAX - 1; 5000],
+                });
+                stbl.stco = None;
+            }
+        }),
+        "stts count of 2³², chunks at 2⁶⁴",
+    );
+    // A 64-bit box size that wraps the position back to an earlier box.
+    let mut wrap = classic.clone();
+    let ftyp = u32::from_be_bytes(classic[..4].try_into().unwrap()) as usize;
+    let mut free = vec![0, 0, 0, 1, b'f', b'r', b'e', b'e'];
+    free.extend_from_slice(&(u64::MAX - 7).to_be_bytes());
+    wrap.splice(ftyp..ftyp, free);
+    survives(&wrap, "wrapping box size");
+    for size in [0, 1] {
+        survives(
+            &edit_boxes(&fragmented, |atom| {
+                if let Any::Moof(moof) = atom {
+                    for traf in &mut moof.traf {
+                        traf.tfhd.default_sample_size = Some(size);
+                        for trun in &mut traf.trun {
+                            trun.samples = TrunSamples::Inherited {
+                                count: u32::MAX,
+                                first_flags: None,
+                            };
+                        }
+                    }
+                }
+            }),
+            &format!("trun count of 2³² with {size}-byte samples"),
+        );
+    }
+}
+
+/// Seeded byte mutations and truncations of every container we write:
+/// never a panic, a hang or an abort.
+#[test]
+fn mutated_files_never_panic_or_hang() {
+    let fixture = fixture();
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut random = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for (name, container) in [
+        ("fuzz.mp4", Container::Mp4 { fragmented: true }),
+        ("fuzz.mov", Container::Mov),
+        ("fuzz.mkv", Container::Mkv),
+    ] {
+        let (_dir, path) = temp(name);
+        mux(&fixture, &path, container, true);
+        let source = std::fs::read(&path).unwrap();
+        for i in 0..150 {
+            let mut data = source.clone();
+            for _ in 0..1 + random() % 8 {
+                let at = (random() % data.len() as u64) as usize;
+                data[at] = random() as u8;
+            }
+            survives(&data, &format!("{name}: mutation {i}"));
+        }
+        for i in 0..40 {
+            survives(
+                &source[..source.len() * i / 40],
+                &format!("{name}: cut at {i}/40"),
+            );
+        }
+    }
+}
+
+/// Third-party AAC: the encoder's priming, which the MP4 edit list and the
+/// Matroska CodecDelay hide, does not play before the picture.
+#[test]
+fn aac_priming_is_hidden() {
+    let encoders = Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output();
+    if !encoders.is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains("libx264")) {
+        eprintln!("skipping: no ffmpeg CLI with libx264");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["aac.mp4", "aac.mkv"] {
+        let path = dir.path().join(name);
+        let status = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("testsrc2=size=160x120:rate=30")
+            .args(["-f", "lavfi", "-i", "sine=f=440:r=48000", "-t", "2"])
+            .args(["-c:v", "libx264", "-c:a", "aac"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "a", "-show_entries"])
+            .args(["packet=pts", "-of", "csv=p=0"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let stored = String::from_utf8_lossy(&probe.stdout).lines().count();
+
+        let mut demuxer = open_demuxer(&path).unwrap().unwrap();
+        let audio = demuxer
+            .tracks()
+            .iter()
+            .position(|t| t.codec == Codec::Aac)
+            .unwrap();
+        let packets = read_all(demuxer.as_mut());
+        assert_eq!(
+            first_of(&packets, 1 - audio).pts,
+            Duration::ZERO,
+            "{name}: picture"
+        );
+        let sound: Vec<Duration> = packets
+            .iter()
+            .filter(|p| p.track == audio)
+            .map(|p| p.pts)
+            .collect();
+        // One priming frame (1024 samples) is dropped; the first real one
+        // starts with the picture.
+        assert_eq!(sound.len(), stored - 1, "{name}: AAC packets");
+        assert!(
+            sound[0] < Duration::from_millis(1),
+            "{name}: {:?}",
+            sound[0]
+        );
+        assert!(sound.windows(2).all(|w| w[1] > w[0]), "{name}: AAC times");
+    }
 }

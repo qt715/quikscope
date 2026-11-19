@@ -118,6 +118,16 @@ pub fn h264_encoder(
     Ok(Box::new(h264_soft::Encoder::open(config)?))
 }
 
+/// Whether an H.264 encoder that `preference` allows takes `width`×`height`
+/// pictures (even sizes) at `fps`, so a caller can scale down to a size that
+/// does. OpenH264 takes everything within H.264 level 5.2; Vulkan Video
+/// what the GPU's limits allow (adapters are listed once per process, no
+/// device is opened), so calling this repeatedly is cheap.
+pub fn h264_fits(width: u32, height: u32, fps: u32, preference: EncoderPreference) -> bool {
+    h264_soft::fits_level(width, height, fps)
+        || (preference == EncoderPreference::Auto && h264_vulkan::encode_size_fits(width, height))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodedPicture {
     pub picture: Yuv420,

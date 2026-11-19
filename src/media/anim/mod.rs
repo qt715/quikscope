@@ -141,7 +141,7 @@ pub fn create_encoder(
     width: u32,
     height: u32,
 ) -> Result<Box<dyn AnimEncoder>> {
-    ensure!(width > 0 && height > 0, "empty {width}x{height} animation");
+    check_size(format, width, height)?;
     Ok(match format {
         OutputFormat::Gif => Box::new(gif::GifEncoder::create(path, width, height)?),
         OutputFormat::Webp => Box::new(webp::WebpEncoder::create(path, width, height)?),
@@ -151,6 +151,33 @@ pub fn create_encoder(
             bail!("{format:?} is not an animation format")
         }
     })
+}
+
+/// Whether [`create_encoder`] takes a `width`×`height` animation in
+/// `format`, without starting an encoder: a recording checks this before it
+/// starts, so a size the final format cannot hold fails at once instead of
+/// after the whole recording.
+pub fn check_size(format: OutputFormat, width: u32, height: u32) -> Result<()> {
+    let (min, max) = match format {
+        // Sizes are 16-bit fields.
+        OutputFormat::Gif => (1, u32::from(u16::MAX)),
+        // libwebp's limit.
+        OutputFormat::Webp => (1, 16383),
+        // rav1e refuses video (as opposed to still) pictures below 16.
+        OutputFormat::Avif => (16, u32::from(u16::MAX)),
+        // The encoder's group layout needs 2 pixels each way; 2^30 is the
+        // codestream's limit.
+        OutputFormat::Jxl => (2, 1 << 30),
+        OutputFormat::Mp4 | OutputFormat::Mkv | OutputFormat::Mov => {
+            bail!("{format:?} is not an animation format")
+        }
+    };
+    ensure!(
+        (min..=max).contains(&width) && (min..=max).contains(&height),
+        "{} animations are {min} to {max} pixels each way, not {width}x{height}",
+        format.label()
+    );
+    Ok(())
 }
 
 /// Converts encoder input durations to a format's tick rate without letting
