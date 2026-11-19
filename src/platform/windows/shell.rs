@@ -36,6 +36,11 @@ const WAKE: u32 = WM_APP + 1;
 const TRAY: u32 = WM_APP + 2;
 const RECORDING_TIMER: usize = 2;
 const CLIPBOARD_TIMER: usize = 1;
+const SESSION_TIMER: usize = 3;
+/// How long logout or shutdown waits for the daemon to save and quit.
+/// Windows shows the user its "preventing shutdown" screen after a few
+/// seconds anyway; this bounds an unattended one when a save is stuck.
+const SESSION_END_LIMIT_MS: u32 = 60_000;
 const DIB: u32 = 8;
 const UNICODE_TEXT: u32 = 13;
 const DIB_V5: u32 = 17;
@@ -246,8 +251,6 @@ struct State {
     balloon_shot: Cell<Option<u64>>,
     tray: RefCell<TrayState>,
     drop_effect_format: u32,
-    /// Windows is ending the session and `end_session` is running.
-    ending: Cell<bool>,
 }
 
 unsafe fn run(
@@ -294,7 +297,6 @@ unsafe fn run(
             animation_fps: 30,
         }),
         drop_effect_format: unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) },
-        ending: Cell::new(false),
     });
     // A hidden top-level window (not HWND_MESSAGE) receives Explorer restart
     // broadcasts as well as clipboard and tray callbacks. It is never shown.
@@ -381,25 +383,69 @@ impl State {
             .is_some_and(|r| r.saving)
     }
 
-    /// Logout or shutdown. Windows may end the process as soon as
-    /// WM_ENDSESSION returns, so the daemon quits (stopping and saving a
-    /// recording first) inside it, with messages still flowing for its
-    /// notifications, clipboard rendering and final `Command::Quit`.
-    unsafe fn end_session(&self) {
-        if self.ending.replace(true) {
+    /// Logout or shutdown asks to proceed. A recording is saved here rather
+    /// than in WM_ENDSESSION: GPUI's window exits the process as soon as it
+    /// receives WM_ENDSESSION, and Windows sends no WM_ENDSESSION until every
+    /// window has answered WM_QUERYENDSESSION.
+    unsafe fn query_end_session(&self) {
+        // Sent messages overtake posted ones: apply a tray update still
+        // queued behind this message, such as a recording that just started.
+        unsafe {
+            self.drain();
+        }
+        if self.tray.borrow().recording.is_none() {
             return;
         }
+        let hwnd = self.hwnd.get();
+        unsafe {
+            // Shown on Windows' "apps are preventing shutdown" screen while
+            // the save runs, where the user may still end the session.
+            let _ = ShutdownBlockReasonCreate(hwnd, w!("Saving the screen recording"));
+            self.quit_daemon();
+            let _ = ShutdownBlockReasonDestroy(hwnd);
+        }
+    }
+
+    /// Requests the daemon's quit, which stops and saves a recording first,
+    /// and runs this thread's messages (the daemon's notifications, clipboard
+    /// rendering, tray updates and the shell's final `Command::Quit`) until it
+    /// has quit or [`SESSION_END_LIMIT_MS`] passes. A canceled logout leaves
+    /// quikscope quit; keeping the recording running is the worse outcome.
+    unsafe fn quit_daemon(&self) {
+        let hwnd = self.hwnd.get();
         (self.events)(Event::Request(Request::Quit));
+        unsafe {
+            SetTimer(hwnd, SESSION_TIMER, SESSION_END_LIMIT_MS, None);
+        }
         let mut message = MSG::default();
-        while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
-            unsafe {
-                let _ = TranslateMessage(&message);
-                DispatchMessageW(&message);
+        loop {
+            match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
+                0 => {
+                    // This loop consumed WM_QUIT; `run`'s loop must see one too.
+                    unsafe {
+                        PostQuitMessage(0);
+                    }
+                    break;
+                }
+                -1 => break,
+                _ if message.hwnd == hwnd
+                    && message.message == WM_TIMER
+                    && message.wParam.0 == SESSION_TIMER =>
+                {
+                    log::warn!(
+                        "quikscope did not quit within {} s of the session ending",
+                        SESSION_END_LIMIT_MS / 1000
+                    );
+                    break;
+                }
+                _ => unsafe {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                },
             }
         }
-        // That loop consumed WM_QUIT; `run`'s loop must see one as well.
         unsafe {
-            PostQuitMessage(0);
+            let _ = KillTimer(hwnd, SESSION_TIMER);
         }
     }
 
@@ -721,13 +767,12 @@ impl State {
     unsafe fn update_tip(&self) {
         let mut data = self.tray_data();
         data.uFlags = NIF_TIP;
-        let tray = self.tray.borrow();
-        let text = tray
-            .recording
-            .as_ref()
+        let text = (self.tray.borrow().recording.as_ref())
             .map(elapsed_label)
             .unwrap_or_else(|| "quikscope".into());
         wide_copy(&mut data.szTip, &text);
+        // No borrow across the call: waiting on Explorer dispatches sent
+        // messages, and WM_QUERYENDSESSION applies tray updates.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
         }
@@ -815,21 +860,15 @@ unsafe extern "system" fn window_proc(
             PostQuitMessage(0);
         },
         WM_QUERYENDSESSION => {
-            if state.tray.borrow().recording.is_some() {
-                // Shown by Windows' "apps are preventing shutdown" screen
-                // while `end_session` saves the recording.
-                unsafe {
-                    let _ = ShutdownBlockReasonCreate(hwnd, w!("Saving the screen recording"));
-                }
+            unsafe {
+                state.query_end_session();
             }
             return LRESULT(1);
         }
-        WM_ENDSESSION if wparam.0 == 0 => unsafe {
-            // Another application cancelled the shutdown.
-            let _ = ShutdownBlockReasonDestroy(hwnd);
-        },
-        WM_ENDSESSION => unsafe {
-            state.end_session();
+        // Flushes the open-last cache if this window hears it before GPUI's,
+        // which exits the process.
+        WM_ENDSESSION if wparam.0 != 0 => unsafe {
+            state.quit_daemon();
         },
         WM_NCDESTROY => {
             unsafe {
@@ -1188,6 +1227,50 @@ mod tests {
             PostMessageW(HWND(shell.hwnd as _), WM_CANCELMODE, WPARAM(0), LPARAM(0))?;
         }
         std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an interactive Windows session with a tray"]
+    fn session_end_waits_for_the_daemon_to_save_and_quit() -> Result<()> {
+        let (sender, events) = mpsc::channel();
+        let shell = spawn(
+            Arc::new(move |event| {
+                let _ = sender.send(event);
+            }),
+            &Hotkeys::default(),
+        )?;
+        let hwnd = shell.hwnd;
+        // Stands in for Windows asking to end the session.
+        let query = move || {
+            thread::spawn(move || unsafe {
+                SendMessageW(HWND(hwnd as _), WM_QUERYENDSESSION, WPARAM(0), LPARAM(0)).0
+            })
+        };
+        assert_eq!(query().join().unwrap(), 1);
+        assert!(events.try_recv().is_err(), "idle: nothing to save, no quit");
+        shell.update(&TrayState {
+            recording: Some(crate::platform::RecordingStatus {
+                kind: Kind::Video,
+                elapsed: std::time::Duration::ZERO,
+                at: std::time::Instant::now(),
+                paused: false,
+                saving: false,
+            }),
+            audio: Vec::new(),
+            video_fps: 60,
+            animation_fps: 30,
+        });
+        let answer = query();
+        assert_eq!(
+            events.recv_timeout(std::time::Duration::from_secs(5))?,
+            Event::Request(Request::Quit)
+        );
+        thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!answer.is_finished(), "the session waits for the save");
+        // What the daemon's exit does once the recording is saved.
+        drop(shell);
+        assert_eq!(answer.join().unwrap(), 1);
         Ok(())
     }
 

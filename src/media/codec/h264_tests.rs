@@ -315,7 +315,6 @@ fn vulkan_device_lives_only_as_long_as_its_codecs() {
             .output()
             .unwrap();
         let log = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
-        println!("{log}");
         assert!(output.status.success(), "isolated fd check failed:\n{log}");
         assert!(
             log.contains("1 passed"),
