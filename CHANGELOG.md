@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — 2026-11-20
 
 ### Packaging
 
@@ -16,6 +16,9 @@
 - Windows: closing a window no longer occasionally logs
   `[ERROR] Invalid window handle. (0x80070578)`. GPUI kept redrawing a window
   for a moment after destroying it.
+- Windows: a daemon started from the Start menu, at login or by the installer
+  writes `%LOCALAPPDATA%\quikscope\daemon.log` too; only one started by a
+  command logged before.
 
 ## 0.3.0 — 2026-11-19
 
