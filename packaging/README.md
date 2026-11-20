@@ -104,11 +104,25 @@ Arch validation should install the makepkg-produced package with pacman.
 `packaging/windows/installer.nsi` builds with NSIS 3 on Linux (`makensis`) and
 Windows. Pass `-DVERSION=0.3.0 -DSOURCE=/absolute/repo` on Linux; Windows uses
 `/D`. The binary defaults to target/release/quikscope.exe and can be overridden
-with BINARY. OUTPUT can also be overridden. Missing branding ICO/report/binary
+with BINARY. OUTPUT can also be overridden. Missing branding ICO/art/report/binary
 is a build failure, not a silent fallback.
 The Windows runner passes Cargo's reported compiler-artifact executable path,
 so custom target layouts do not rely on a guessed path. NSIS source-file paths
 use Windows separators, which Linux makensis normalizes for its host filesystem.
+
+The wizard uses the quikscope ICO for Setup, Uninstall.exe and their windows,
+and branded art from `assets/branding/installer/`: `sidebar.svg` (welcome and
+finish pages, 164×314 at 96 DPI) and `header.svg` (inner-page header, 150×57).
+After editing either SVG, run `packaging/windows/art.sh` (resvg and ImageMagick 7)
+and commit the regenerated `*-<scale>.bmp` files; Windows builds use the committed
+24-bit BMPs and need neither tool. Setup is DPI-aware (`ManifestDPIAware`) and
+picks the rasterisation for the largest Windows scaling step (100–300 %) not
+above the system DPI, shown unscaled and centred: MUI's stretch modes resample
+with GDI and blur or drop pixels. The art's uniform edge colour absorbs the few
+pixels the bitmap differs from the dialog-unit control, so keep content away
+from the edges, and keep the header background equal to `MUI_BGCOLOR`. NSIS
+gives Uninstall.exe the installer's version resource, so its version strings
+describe both.
 
 The build needs the Visual Studio C++ Build Tools, including CMake (libopus;
 GitHub's runner image has it). The release runner also installs NASM so the
@@ -128,8 +142,13 @@ registers Installed Apps metadata, and delegates optional login startup to
 uninstall invokes `quit` and `autostart off` before deleting installed files.
 Known raw-image/log/socket cache files are removed; the cache directory is
 removed only if empty. User configuration and saved screenshots remain untouched.
-The optional startup section is off by default. `/S` installs/uninstalls
-silently. Test both silent and interactive paths, upgrading over an existing
+The optional startup section is off by default. The finish page's **Start
+quikscope now** (checked by default) starts `quikscope daemon` with Setup's own
+unelevated token; if Setup was run elevated anyway, Explorer opens the Start
+menu entry instead so the daemon is never elevated. `/S` installs/uninstalls
+silently and never starts the daemon (silent runs skip the finish page);
+deployments start it themselves or rely on **Start at login** at the next
+sign-in. Test both silent and interactive paths, upgrading over an existing
 installation, daemon/tray startup, CLI capture, and uninstall cleanup. The
 installer is unsigned; SmartScreen reputation is not bypassed automatically.
 `packaging/windows/smoke.ps1 -Installer <absolute-installer-path>` exercises the

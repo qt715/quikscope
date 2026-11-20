@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="57" viewBox="0 0 150 57">
+<!-- Installer page header (150x57 at 96 DPI). The background must equal MUI_BGCOLOR in packaging/windows/installer.nsi. -->
+<rect width="150" height="57" fill="#f8f7fe"/>
+<g transform="translate(106.5 12.5)" fill="none" stroke="#8f8cf2" stroke-width="3" stroke-linecap="square"><path d="M11 4H4v7m17-7h7v7M4 21v7h7m17-7v7h-7M16 11v10m-5-5h10"/></g>
+</svg>

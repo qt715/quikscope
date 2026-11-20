@@ -1,4 +1,4 @@
-![quikscope — Capture. Annotate. Carry on.](assets/branding/banner.svg)
+![quikscope — Screenshot and screen recording tool](assets/branding/banner.svg)
 
 # quikscope
 
@@ -691,9 +691,11 @@ regenerate the committed PNGs, Linux tray icons and multi-resolution ICO in
 `assets/branding/`. The 16 px PNG and the idle tray icon use the
 pixel-aligned symbolic variant; larger sizes use `icon.svg`, and the
 recording tray icon adds a red dot (`tray-recording.svg`). All icons have
-transparent backgrounds and use the UI accent (`#8f8cf2`). The banner's wordmark and tagline are
+transparent backgrounds and use the UI accent (`#8f8cf2`). The banner's wordmark and description are
 outlines of the bundled Inter variable font (weight 650, optical size 32),
-so rendering needs no installed fonts.
+so rendering needs no installed fonts. The Windows installer's sidebar and
+header art (`assets/branding/installer/`) uses the same outlines; regenerate its
+BMPs with `packaging/windows/art.sh` ([details](packaging/README.md#windows)).
 
 Linux launchers and notifications request the `quikscope` theme icon; notification
 servers choose their normal fallback if it is not installed, and screenshot

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Packaging
+
+- The Windows installer and uninstaller use the quikscope icon and branded
+  artwork that stays sharp at every display scaling, with shorter page texts,
+  component descriptions, a "Start quikscope now" option on the finish page
+  (not in silent installs) and size and project links in Installed Apps.
+- GPUI's Windows backend (`gpui-pre-windows` 0.3.10) is vendored with one fix,
+  described in `vendor/gpui-pre-windows/QUIKSCOPE-PATCH.md`.
+
+### Fixed
+
+- Windows: closing a window no longer occasionally logs
+  `[ERROR] Invalid window handle. (0x80070578)`. GPUI kept redrawing a window
+  for a moment after destroying it.
+
 ## 0.3.0 — 2026-11-19
 
 ### Recording
