@@ -803,11 +803,8 @@ fn exchange(mut stream: UnixStream, req: &Request, timeout: Option<Duration>) ->
 /// Starts a detached daemon and returns the first successful connection to it.
 fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
     let exe = std::env::current_exe().context("locating the quikscope executable")?;
-    let log = crate::config::cache_dir().join("daemon.log");
-    if let Some(dir) = log.parent() {
-        std::fs::create_dir_all(dir).ok();
-    }
-    let log_file = open_daemon_log(&log);
+    let log = daemon_log_path();
+    let log_file = open_daemon_log();
     // Detaching on Windows changes CWD; retain the client's socket location.
     let socket_path = std::path::absolute(socket)?;
     #[cfg(unix)]
@@ -848,21 +845,30 @@ fn spawn_daemon(socket: &Path) -> Result<UnixStream> {
 /// Where an auto-started daemon listens, passed through its environment.
 const SOCKET_VAR: &str = "QUIKSCOPE_SOCKET";
 
-/// Above this size an auto-start moves the old daemon log to `daemon.log.1`
+/// Above this size opening the daemon log moves the old one to `daemon.log.1`
 /// (replacing the one before); below it the new daemon appends, so the log
 /// of a daemon that just failed survives the next start.
 const LOG_ROTATE_BYTES: u64 = 1 << 20;
 
-fn open_daemon_log(log: &Path) -> Option<std::fs::File> {
-    if std::fs::metadata(log).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+pub fn daemon_log_path() -> PathBuf {
+    crate::config::cache_dir().join("daemon.log")
+}
+
+/// Opens the daemon log for appending, rotating it first when too large.
+pub fn open_daemon_log() -> Option<std::fs::File> {
+    let log = daemon_log_path();
+    if let Some(dir) = log.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    if std::fs::metadata(&log).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
         let mut old = log.as_os_str().to_owned();
         old.push(".1");
-        let _ = std::fs::rename(log, old);
+        let _ = std::fs::rename(&log, old);
     }
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log)
+        .open(&log)
         .ok()
 }
 

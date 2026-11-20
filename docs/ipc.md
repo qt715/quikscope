@@ -123,7 +123,9 @@ escaped as `\\`, `\n` and `\r`, so the reply stays on one line.
 - `quikscope` commands other than `daemon`, `version` and `quit` start a detached daemon
   (`setsid`) when nothing listens on the socket, logging to
   `$XDG_CACHE_HOME/quikscope/daemon.log`, and wait up to 5 s for it. The log
-  is appended to; above 1 MiB it moves to `daemon.log.1` first.
+  is appended to; above 1 MiB it moves to `daemon.log.1` first. On Windows a
+  daemon started without standard error (Start menu, login, the installer's
+  finish page) opens the same log itself.
 - A daemon refuses to start while another one answers on the socket; a stale
   socket file left by a crash is replaced.
 - `quit` stops and saves a running recording, waits for every file still

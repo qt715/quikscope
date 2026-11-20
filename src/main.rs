@@ -80,6 +80,10 @@ fn main() -> ExitCode {
             }
         }
     }
+    #[cfg(windows)]
+    if args.first().map(String::as_str) == Some("daemon") {
+        log_to_file_without_stderr();
+    }
     let first = args.first().map(String::as_str);
     let level = if first == Some("daemon") || first == Some(RECORD_HELPER) {
         "quikscope=info,warn"
@@ -110,6 +114,27 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Gives a daemon without standard error (started from the Start menu, at
+/// login or by the installer) the log an auto-starting command passes the
+/// daemon it spawns as stderr. std writes to whatever `GetStdHandle` returns
+/// at the time, so logs and panic messages both land there.
+#[cfg(windows)]
+fn log_to_file_without_stderr() {
+    use std::os::windows::io::IntoRawHandle as _;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, SetStdHandle};
+    // SAFETY: plain console API calls without pointers.
+    if unsafe { GetStdHandle(STD_ERROR_HANDLE) }.is_ok_and(|h| !h.is_invalid()) {
+        return;
+    }
+    let Some(log) = quikscope::ipc::open_daemon_log() else {
+        return;
+    };
+    // The handle stays open for the rest of the process as its stderr.
+    // SAFETY: a valid file handle this process owns from here on.
+    let _ = unsafe { SetStdHandle(STD_ERROR_HANDLE, HANDLE(log.into_raw_handle())) };
 }
 
 fn run(args: Vec<String>) -> anyhow::Result<ExitCode> {
