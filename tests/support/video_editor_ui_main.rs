@@ -12,6 +12,7 @@ main_thread_tests![
     real_video_exports_trimmed_gif_and_mp4,
     export_can_be_cancelled_and_leaves_no_file,
     untouched_save_copies_the_source_exactly,
+    save_as_writes_the_chosen_file_and_ctrl_s_updates_it,
     closing_the_window_lets_the_export_finish,
     annotate_frame_opens_a_full_size_png_from_the_clip_cache,
     audible_playback_opens_output_and_mute_closes_it,

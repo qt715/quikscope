@@ -534,7 +534,8 @@ copy text, copy, **Save**, settings and shortcut help bottom right.
 
 | Action | Keys |
 | --- | --- |
-| Save to `~/Pictures/Screenshots` | `Ctrl+S` (repeat saves update the same file); `Ctrl+Shift+S` always writes a new file |
+| Save to `~/Pictures/Screenshots` | `Ctrl+S` (repeat saves update the same file) |
+| Save as | `Ctrl+Shift+S` or the folder button beside **Save**: the system save dialog picks the folder and name (`.png` is added to a name without it); later `Ctrl+S` saves update that file. The dialog opens in the folder chosen last |
 | Copy annotated image | `Ctrl+C` |
 | Copy text (from the crop, else the whole screenshot; annotations are not read) | `Ctrl+Shift+C` or the scan button; the lines read light up briefly |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
@@ -558,8 +559,10 @@ playback strip at the bottom: `Space` or the play button plays and pauses,
 clicking or dragging the strip scrubs, and the format button picks GIF,
 WebP, AVIF or JPEG XL. Drawings apply to every frame (drawing pauses
 playback). `Ctrl+S` and `Ctrl+C` re-encode the whole animation with the
-drawings, saved to the recordings folder or copied as a file; `Esc` cancels
-a running export, and closing the window lets it finish.
+drawings, saved to the recordings folder or copied as a file; Save as
+(`Ctrl+Shift+S`) writes the format a name's extension gives (`.gif`,
+`.webp`, `.avif`, `.jxl`), else the selected one. `Esc` cancels a running
+export, and closing the window lets it finish.
 
 **Drawing past the edges.** Annotations may extend beyond the screenshot,
 for example a label written beside it. The saved and copied image grows to
@@ -612,6 +615,7 @@ is never changed: every output is a new file.
 | Mute | `M` or the speaker button (files with audio only); muted exports have no audio track |
 | Format | The format button: MP4, MKV, MOV (video) or GIF, WebP, AVIF, JPEG XL (animation, no sound); starts at the file's own container |
 | Save to the recordings folder | `Ctrl+S` or **Save**: exports the trimmed range in the chosen format; an untouched file is copied as it is, and one already in the recordings folder is not saved twice |
+| Save as | `Ctrl+Shift+S` or the folder button beside **Save**: the system save dialog picks the folder and name, and an extension (`.mp4`, `.gif`, …) picks the format; a name without one gets the selected format's. Later `Ctrl+S` saves update that file until the format changes |
 | Copy as a file (paste into a chat or file manager) | `Ctrl+C`; an untouched clip is copied as it is, otherwise exported first |
 | Annotate frame | `F`: opens the frame at full size in the annotator (saved only when you save it there) |
 | Cancel an export | `Esc` or the × beside the progress bar |

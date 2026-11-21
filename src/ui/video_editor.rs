@@ -25,6 +25,7 @@ use super::clips::{self, Clip, Pin};
 use super::editor::{EditorServices, tilde};
 use super::export_job::{self, Export, Finished, Output, Progress};
 use super::playback::{AudioOut, Clock, Filmstrip, Frame, Queue, VideoPlayer};
+use super::save_as::{self, Destination};
 use super::theme;
 use super::toolbar::{self, EDGE, GAP, PAD, Tip, base, button, icon, panel, separator};
 use crate::media::export::{ExportOptions, Trim};
@@ -32,13 +33,14 @@ use crate::media::{EncoderPreference, MediaInfo, OutputFormat};
 use crate::output::OutputFile;
 
 /// Every icon the video editor references (checked against the asset table).
-pub const ICONS: [&str; 9] = [
+pub const ICONS: [&str; 10] = [
     "play",
     "pause",
     "volume-2",
     "volume-x",
     "copy",
     "save",
+    "folder-down",
     "chevron-down",
     "image-plus",
     "x",
@@ -222,6 +224,9 @@ pub struct VideoEditor {
     /// The timeline track as last painted, for hit testing.
     track: Bounds<Pixels>,
     export: Option<Export>,
+    /// The file the last Save as wrote: Ctrl+S updates it until the
+    /// format changes.
+    saved_as: Option<PathBuf>,
     toast: Option<Toast>,
     toast_generation: u64,
     pub probes: Probes,
@@ -297,6 +302,7 @@ impl VideoEditor {
             drag: None,
             track: Bounds::default(),
             export: None,
+            saved_as: None,
             toast: None,
             toast_generation: 0,
             probes: Probes::default(),
@@ -373,8 +379,8 @@ impl VideoEditor {
     }
 
     /// Painted bounds of a control: `play`, `mute`, `copy`, `format`,
-    /// `save`, `frame`, `help`, `cancel`, or `format:<ext>` while the menu
-    /// is open.
+    /// `save`, `save-as`, `frame`, `help`, `cancel`, or `format:<ext>`
+    /// while the menu is open.
     pub fn control_bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
         if let Some(ext) = id.strip_prefix("format:") {
             let format = OutputFormat::parse(ext)?;
@@ -394,8 +400,9 @@ impl VideoEditor {
             "copy" | "cancel" => (&self.probes.outputs, if id == "copy" { 0 } else { 2 }),
             "format" => (&self.probes.outputs, 1),
             "save" => (&self.probes.outputs, 2),
-            "frame" => (&self.probes.outputs, 4),
-            "help" => (&self.probes.outputs, 5),
+            "save-as" => (&self.probes.outputs, 3),
+            "frame" => (&self.probes.outputs, 5),
+            "help" => (&self.probes.outputs, 6),
             _ => return None,
         };
         if (id == "cancel") != self.export.is_some() || (id == "mute" && !self.info.has_audio) {
@@ -752,6 +759,11 @@ impl VideoEditor {
     // ── outputs ──────────────────────────────────────────────────────────
 
     fn set_format(&mut self, format: OutputFormat, cx: &mut Context<Self>) {
+        if self.format != format {
+            // The next save makes a new file rather than replacing the last
+            // one under a now-wrong extension.
+            self.saved_as = None;
+        }
         self.format = format;
         self.menu_open = false;
         cx.notify();
@@ -794,9 +806,56 @@ impl VideoEditor {
     }
 
     /// Ctrl+C / Ctrl+S: exports the trimmed range in the chosen format, then
-    /// puts the file on the clipboard or leaves it in the recordings folder.
+    /// puts the file on the clipboard or leaves it in the recordings folder
+    /// (or updates the file the last Save as wrote).
     /// The export carries on if the window closes (see [`export_job`]).
     fn export(&mut self, output: Output, cx: &mut Context<Self>) {
+        self.export_to(output, None, cx);
+    }
+
+    /// Ctrl+Shift+S: asks where to save, then saves there.
+    fn save_as(&mut self, cx: &mut Context<Self>) {
+        self.menu_open = false;
+        if self.export.is_some() {
+            self.show_toast("An export is already running".into(), false, cx);
+            return;
+        }
+        let Some(services) = cx.try_global::<EditorServices>().cloned() else {
+            self.show_toast("Saving is unavailable".into(), true, cx);
+            return;
+        };
+        let candidate = services
+            .config
+            .record
+            .new_save_path(SystemTime::now(), self.format);
+        let answer = save_as::prompt(&candidate, cx);
+        cx.spawn(async move |this, cx| {
+            let answer = answer.await;
+            let _ = this.update(cx, |e, cx| match answer {
+                Ok(Some(path)) => e.save_as_chosen(path, cx),
+                Ok(None) => {}
+                Err(err) => e.show_toast(format!("Save as failed: {err:#}"), true, cx),
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Saves to `chosen`, the save dialog's answer, in the format its
+    /// extension names (a name without one gets the chosen format's).
+    pub fn save_as_chosen(&mut self, chosen: PathBuf, cx: &mut Context<Self>) {
+        save_as::remember(&chosen, cx);
+        let (destination, format) = save_as::media(chosen, |_| true, self.format);
+        self.set_format(format, cx);
+        self.export_to(Output::Save, Some(destination), cx);
+    }
+
+    fn export_to(
+        &mut self,
+        output: Output,
+        destination: Option<Destination>,
+        cx: &mut Context<Self>,
+    ) {
         if self.export.is_some() {
             self.show_toast("An export is already running".into(), false, cx);
             return;
@@ -809,6 +868,7 @@ impl VideoEditor {
             self.show_toast("Clipboard is unavailable".into(), true, cx);
             return;
         }
+        let destination = destination.or_else(|| self.saved_as.clone().map(Destination::Replace));
         let reencode = self.needs_encode();
         if !reencode {
             let record = &services.config.record;
@@ -822,7 +882,9 @@ impl VideoEditor {
                 }
                 // A recording saved unchanged is already where a save puts
                 // it; a second, identical file helps nobody.
-                Output::Save if same_dir(&self.path, &record.save_dir()) => {
+                Output::Save
+                    if destination.is_none() && same_dir(&self.path, &record.save_dir()) =>
+                {
                     self.show_toast(format!("Already saved as {}", tilde(&self.path)), false, cx);
                     self.menu_open = false;
                     return;
@@ -832,7 +894,11 @@ impl VideoEditor {
         }
         let record = &services.config.record;
         let format = self.format;
-        let save_path = record.new_save_path(SystemTime::now(), format);
+        // Saves to a chosen file keep updating it; the others make new ones.
+        let remember = output == Output::Save && destination.is_some();
+        let destination = destination.unwrap_or_else(|| {
+            Destination::Reserve(record.new_save_path(SystemTime::now(), format))
+        });
         let clips = services.clips.clone();
         // Under the source's name, so a chat app shows a sensible file name.
         let clip_name = format!(
@@ -858,7 +924,7 @@ impl VideoEditor {
             // The window (and its pin) may close before this finishes.
             let _source = clips::pin(&src);
             let (_clip, dst) = match output {
-                Output::Save => (None, OutputFile::reserve(&save_path)?),
+                Output::Save => (None, destination.open()?),
                 Output::Copy => {
                     let (clip, path) = Clip::create(&clips, &clip_name)?;
                     (Some(clip), OutputFile::replace(&path)?)
@@ -870,11 +936,15 @@ impl VideoEditor {
                 copy_file(&src, dst, progress, cancel)
             }
         };
-        let finished = |e: &mut VideoEditor, done: &Finished, cx: &mut Context<VideoEditor>| {
-            e.export = None;
-            let (message, error) = done.message();
-            e.show_toast(message, error, cx);
-        };
+        let finished =
+            move |e: &mut VideoEditor, done: &Finished, cx: &mut Context<VideoEditor>| {
+                e.export = None;
+                if remember && let Ok(path) = &done.result {
+                    e.saved_as = Some(path.clone());
+                }
+                let (message, error) = done.message();
+                e.show_toast(message, error, cx);
+            };
         match export_job::start(output, format, &services, work, finished, cx) {
             Ok(export) => self.export = Some(export),
             Err(e) => self.show_toast(format!("Export failed: {e:#}"), true, cx),
@@ -962,6 +1032,7 @@ impl VideoEditor {
         if m.control || m.platform {
             match ks.key.as_str() {
                 "c" => self.export(Output::Copy, cx),
+                "s" if m.shift => self.save_as(cx),
                 "s" => self.export(Output::Save, cx),
                 // A running export carries on and reports when done.
                 "w" | "q" => super::close_window(window, cx),
@@ -1299,6 +1370,11 @@ impl VideoEditor {
                     .child(icon("save", theme::on_accent()))
                     .child("Save"),
             )
+            .child(
+                button("save-as", "Save as… (Ctrl+Shift+S)", false, true)
+                    .on_click(cx.listener(|e, _, _, cx| e.save_as(cx)))
+                    .child(icon("folder-down", theme::text())),
+            )
             .child(separator())
             .child(
                 button("frame", "Annotate frame (F)", false, true)
@@ -1484,6 +1560,7 @@ const HELP_TRIM: &[&str] = &[
     "I / O: set the in / out point at the playhead",
     "F: annotate the frame on screen",
     "Ctrl+C: copy file · Ctrl+S: save to recordings folder",
+    "Ctrl+Shift+S: save as…",
     "Esc: close menu / cancel export / close editor",
     "Ctrl+W / Ctrl+Q: close (a running export finishes)",
     "? / F1: toggle help",

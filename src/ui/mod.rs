@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod motion;
 pub mod overlay;
 mod playback;
+pub mod save_as;
 pub mod settings;
 pub mod toolbar;
 pub mod video_editor;
@@ -125,6 +126,7 @@ impl AssetSource for Assets {
             "undo-2",
             "redo-2",
             "save",
+            "folder-down",
             "copy",
             "scan-text",
             "paint-bucket",

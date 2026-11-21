@@ -25,6 +25,7 @@ use super::export_job::{self, Export, Finished, Output, Progress};
 use super::font_menu::{self, FontMenu, FontMenuEvent, next_size};
 use super::motion::{Transition, View};
 use super::playback::{Clock, Frame, Queue, VideoPlayer};
+use super::save_as::Destination;
 use super::zoom;
 use super::{PatchCache, Shot, ViewTransform, hsla, paint_prims, paint_tiles, theme, toolbar};
 use crate::config::Config;
@@ -1182,7 +1183,8 @@ impl Editor {
                     });
                     cx.notify();
                 }
-                ("s", shift) => self.save(shift, window, cx),
+                ("s", false) => self.save(window, cx),
+                ("s", true) => self.save_as(window, cx),
                 ("c", false) => self.copy(cx),
                 ("c", true) => self.copy_text(cx),
                 ("z", false) => self.undo(cx),
@@ -1582,10 +1584,12 @@ impl Editor {
 
     /// Ctrl+C / Ctrl+S on an animation: re-encodes every frame with the
     /// drawings. The export carries on if the window closes (see
-    /// [`export_job`]); Esc or the Cancel button stops it.
+    /// [`export_job`]); Esc or the Cancel button stops it. A save writes
+    /// `destination`, else updates the file saved before, else makes a new
+    /// one in the recordings folder.
     fn export_animation(
         &mut self,
-        new_file: bool,
+        destination: Option<Destination>,
         output: Output,
         window: Option<gpui::AnyWindowHandle>,
         cx: &mut Context<Self>,
@@ -1606,17 +1610,14 @@ impl Editor {
             return;
         };
         let format = playback.format;
-        // Repeat saves update the file saved before; everything else is new.
-        let previous = self
-            .saved
-            .as_ref()
-            .filter(|_| !new_file)
-            .map(|(p, _)| p.clone());
-        let save_path = previous.clone().unwrap_or_else(|| {
-            services
-                .config
-                .record
-                .new_save_path(SystemTime::now(), format)
+        let destination = destination.unwrap_or_else(|| match &self.saved {
+            Some((path, _)) => Destination::Replace(path.clone()),
+            None => Destination::Reserve(
+                services
+                    .config
+                    .record
+                    .new_save_path(SystemTime::now(), format),
+            ),
         });
         // Under the opened (or recorded) file's name, for chat apps.
         let clip_name = format!(
@@ -1650,8 +1651,7 @@ impl Editor {
                     let (clip, path) = Clip::create(&clips, &clip_name)?;
                     (Some(clip), OutputFile::replace(&path)?)
                 }
-                Output::Save if previous.is_some() => (None, OutputFile::replace(&save_path)?),
-                Output::Save => (None, OutputFile::reserve(&save_path)?),
+                Output::Save => (None, destination.open()?),
             };
             // The overlay returns the cropped PNG-renderer output before
             // encoding: scaling after composition would move annotation
@@ -1682,12 +1682,67 @@ impl Editor {
     }
 
     /// Ctrl+S: saves a PNG or re-encodes all frames of an animated shot.
-    /// Repeated saves overwrite the same file; Ctrl+Shift+S always makes a
-    /// new one.
-    pub fn save(&mut self, new_file: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Repeated saves overwrite the same file, also one chosen by
+    /// [`Self::save_as`].
+    pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_to(None, window, cx);
+    }
+
+    /// Ctrl+Shift+S: asks where to save, then saves there.
+    pub fn save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.animation_export.is_some() {
+            self.show_toast("An export is already running".into(), false, cx);
+            return;
+        }
+        self.commit_text(cx);
+        let Some(services) = cx.try_global::<EditorServices>().cloned() else {
+            self.show_toast("Saving is unavailable".into(), true, cx);
+            return;
+        };
+        let candidate = match &self.playback {
+            Some(p) => services
+                .config
+                .record
+                .new_save_path(SystemTime::now(), p.format),
+            None => services.config.new_save_path(SystemTime::now()),
+        };
+        let answer = super::save_as::prompt(&candidate, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.await;
+            let _ = this.update_in(cx, |e, window, cx| match answer {
+                Ok(Some(path)) => e.save_as_chosen(path, window, cx),
+                Ok(None) => {}
+                Err(err) => e.show_toast(format!("Save as failed: {err:#}"), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Saves to `chosen`, the save dialog's answer. An animation takes the
+    /// format its extension names; other names get an extension added.
+    pub fn save_as_chosen(&mut self, chosen: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        super::save_as::remember(&chosen, cx);
+        let destination = match self.playback.as_ref().map(|p| p.format) {
+            Some(fallback) => {
+                let (destination, format) =
+                    super::save_as::media(chosen, |f| !f.is_video(), fallback);
+                self.set_animation_format(format, cx);
+                destination
+            }
+            None => super::save_as::png(chosen),
+        };
+        self.save_to(Some(destination), window, cx);
+    }
+
+    fn save_to(
+        &mut self,
+        destination: Option<Destination>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.commit_text(cx);
         if self.playback.is_some() {
-            self.export_animation(new_file, Output::Save, Some(window.window_handle()), cx);
+            self.export_animation(destination, Output::Save, Some(window.window_handle()), cx);
             return;
         }
         let Some(services) = cx.try_global::<EditorServices>().cloned() else {
@@ -1698,15 +1753,13 @@ impl Editor {
             let d = self.doc.read(cx);
             (d.snapshot(), d.revision())
         };
-        // A repeat save updates the file saved before; a first or new-file
-        // save reserves a free name, so it never replaces a screenshot that
+        // A repeat save updates the file saved before; a first save
+        // reserves a free name, so it never replaces a screenshot that
         // already has it (a fixed `filename`, two saves in one second).
-        let previous = self
-            .saved
-            .as_ref()
-            .filter(|_| !new_file)
-            .map(|(p, _)| p.clone());
-        let candidate = services.config.new_save_path(SystemTime::now());
+        let destination = destination.unwrap_or_else(|| match &self.saved {
+            Some((path, _)) => Destination::Replace(path.clone()),
+            None => Destination::Reserve(services.config.new_save_path(SystemTime::now())),
+        });
         let running = match super::jobs::begin() {
             Ok(running) => running,
             Err(err) => {
@@ -1718,10 +1771,7 @@ impl Editor {
         let task = cx.background_spawn(async move {
             let _running = running;
             let image = crate::export::render(&job);
-            let file = match previous {
-                Some(path) => OutputFile::replace(&path)?,
-                None => OutputFile::reserve(&candidate)?,
-            };
+            let file = destination.open()?;
             image.save_png_to(file, Compression::Balanced)
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -1745,7 +1795,7 @@ impl Editor {
     pub fn copy(&mut self, cx: &mut Context<Self>) {
         self.commit_text(cx);
         if self.playback.is_some() {
-            self.export_animation(false, Output::Copy, None, cx);
+            self.export_animation(None, Output::Copy, None, cx);
             return;
         }
         let Some(clipboard) = cx

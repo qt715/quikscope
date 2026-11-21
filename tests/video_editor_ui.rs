@@ -756,6 +756,38 @@ pub(super) fn untouched_save_copies_the_source_exactly() {
     assert_eq!(ui.recordings("mp4"), mp4, "no duplicate");
 }
 
+/// Save as writes the chosen file in the format its name gives (or the
+/// selected one, added to a name without an extension); Ctrl+S then updates
+/// that file rather than adding one to the recordings folder.
+pub(super) fn save_as_writes_the_chosen_file_and_ctrl_s_updates_it() {
+    let (path, info) = fixture();
+    let mut ui = Ui::open(&path, info);
+    let chosen = ui.dir.path().join("elsewhere");
+    std::fs::create_dir(&chosen).unwrap();
+    let clip = chosen.join("clip");
+    let message = ui.export(|ui| ui.editor(|e, cx| e.save_as_chosen(clip.clone(), cx)));
+    assert!(message.ends_with("clip.mp4"), "{message}");
+    let mp4 = chosen.join("clip.mp4");
+    assert_eq!(
+        std::fs::read(&mp4).unwrap(),
+        std::fs::read(&path).unwrap(),
+        "untouched: copied as it is"
+    );
+
+    ui.key("m");
+    let message = ui.export(|ui| ui.ctrl("s"));
+    assert!(message.ends_with("clip.mp4"), "{message}");
+    assert!(!quikscope::media::decode::probe(&mp4).unwrap().has_audio);
+    assert!(ui.recordings("mp4").is_empty());
+
+    let mkv = chosen.join("clip.MKV");
+    ui.export(|ui| ui.editor(|e, cx| e.save_as_chosen(mkv.clone(), cx)));
+    assert_eq!(ui.editor(|e, _| e.format()), OutputFormat::Mkv);
+    let probed = quikscope::media::decode::probe(&mkv).unwrap();
+    assert_eq!(probed.kind, Kind::Video);
+    assert!(!probed.has_audio);
+}
+
 /// Closing the window mid-export lets the export finish; a notification
 /// says so, since no window is left for a toast.
 pub(super) fn closing_the_window_lets_the_export_finish() {

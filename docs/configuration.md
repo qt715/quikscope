@@ -42,7 +42,7 @@ notification_timeout_ms = 8000
 color = "#e03131"
 # Initial size: 0 thin, 1 medium, 2 thick.
 stroke = 1
-# Close the editor after a successful Ctrl+S.
+# Close the editor after a successful save (Ctrl+S or Save as).
 close_on_save = false
 # Starting font for new text: any installed family (unknown families fall
 # back to the bundled "Inter"), weight 1-1000, size 4-512 logical pixels.

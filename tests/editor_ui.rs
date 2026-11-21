@@ -6,6 +6,7 @@
 #![cfg(not(windows))]
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::EntityInputHandler as _;
@@ -576,8 +577,9 @@ fn blank() -> Document {
 }
 
 /// With a fixed `filename`, Ctrl+S never replaces a screenshot already
-/// there: the first save takes a free name, repeat saves update that file
-/// and Ctrl+Shift+S makes another.
+/// there: the first save takes a free name and repeat saves update that
+/// file. Save as writes the chosen file (adding `.png` to a name without
+/// it), which later saves then update.
 pub(super) fn still_save_never_overwrites_an_existing_screenshot() {
     use quikscope::ui::editor::EditorServices;
 
@@ -599,9 +601,12 @@ pub(super) fn still_save_never_overwrites_an_existing_screenshot() {
             clips: no_clips(),
         })
     });
-    let saves = |ui: &mut Ui, shift: bool| {
+    let saves = |ui: &mut Ui, chosen: Option<PathBuf>| {
         let before = ui.editor(|e, _| e.saved_path().cloned());
-        ui.ctrl("s", shift);
+        match chosen {
+            Some(path) => ui.ime(|e, window, cx| e.save_as_chosen(path, window, cx)),
+            None => ui.ctrl("s", false),
+        }
         wait_until(ui, "the save", |ui| {
             ui.editor(|e, _| e.saved_path().cloned()) != before
                 || ui.editor(|e, _| e.toast().is_some_and(|(_, error)| error))
@@ -609,7 +614,7 @@ pub(super) fn still_save_never_overwrites_an_existing_screenshot() {
         ui.editor(|e, _| e.saved_path().cloned())
             .expect("saved without an error")
     };
-    let first = saves(&mut ui, false);
+    let first = saves(&mut ui, None);
     assert_eq!(first, dir.path().join("same-1.png"));
     assert_eq!(std::fs::read(&existing).unwrap(), b"earlier screenshot");
     assert!(Image::load(&first).is_ok());
@@ -631,14 +636,27 @@ pub(super) fn still_save_never_overwrites_an_existing_screenshot() {
         ui.editor(|e, _| e.saved_path().cloned()),
         Some(first.clone())
     );
-    let second = saves(&mut ui, true);
-    assert_eq!(second, dir.path().join("same-2.png"));
+    let picked = saves(&mut ui, Some(dir.path().join("picked")));
+    assert_eq!(picked, dir.path().join("picked.png"));
+    let before = std::fs::read(&picked).unwrap();
+    ui.key("r", Some("r"), Modifiers::default());
+    ui.mouse("down", to);
+    ui.mouse("move", from);
+    ui.mouse("up", from);
+    ui.ctrl("s", false);
+    wait_until(&mut ui, "the save over the chosen file", |_| {
+        std::fs::read(&picked).unwrap() != before
+    });
+    // The dialog already asked before replacing a file it returns.
+    let replaced = saves(&mut ui, Some(existing.clone()));
+    assert_eq!(replaced, existing);
+    assert!(Image::load(&existing).is_ok());
     let mut names: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     names.sort();
-    assert_eq!(names, ["same-1.png", "same-2.png", "same.png"]);
+    assert_eq!(names, ["picked.png", "same-1.png", "same.png"]);
 }
 
 fn text_font(doc: &Document) -> quikscope::fonts::FontSpec {

@@ -17,7 +17,7 @@ use crate::document::{PALETTE, STROKE_WIDTHS};
 use crate::media::OutputFormat;
 
 /// Every icon the toolbar references (checked against the asset table in tests).
-pub const ICONS: [&str; 23] = [
+pub const ICONS: [&str; 24] = [
     "palette",
     "mouse-pointer-2",
     "hand",
@@ -37,6 +37,7 @@ pub const ICONS: [&str; 23] = [
     "copy",
     "scan-text",
     "save",
+    "folder-down",
     "settings",
     "play",
     "pause",
@@ -66,8 +67,8 @@ const FORMAT_W: f32 = 64.0;
 const MENU_W: f32 = 220.0;
 /// Bottom-left cluster: undo, redo | zoom.
 const HISTORY_W: f32 = 2.0 * (PAD + BORDER) + 2.0 * BUTTON + SEPARATOR + ZOOM_W + 3.0 * GAP;
-/// Bottom-right cluster: copy text, copy, save | settings, help.
-const OUTPUT_W: f32 = 2.0 * (PAD + BORDER) + 4.0 * BUTTON + SAVE_W + SEPARATOR + 5.0 * GAP;
+/// Bottom-right cluster: copy text, copy, save, save as | settings, help.
+const OUTPUT_W: f32 = 2.0 * (PAD + BORDER) + 5.0 * BUTTON + SAVE_W + SEPARATOR + 6.0 * GAP;
 /// An image narrower than the window minus this on both sides passes
 /// between the bottom clusters.
 pub const CORNER_SPACE: f32 = EDGE + OUTPUT_W.max(HISTORY_W) + CLEARANCE;
@@ -527,9 +528,14 @@ fn output(editor: &Editor, cx: &mut Context<Editor>) -> impl IntoElement {
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme::on_accent())
-                .on_click(cx.listener(|e, _, window, cx| e.save(false, window, cx)))
+                .on_click(cx.listener(|e, _, window, cx| e.save(window, cx)))
                 .child(icon("save", theme::on_accent()))
                 .child("Save"),
+        )
+        .child(
+            button("save-as", "Save as… (Ctrl+Shift+S)", false, true)
+                .on_click(cx.listener(|e, _, window, cx| e.save_as(window, cx)))
+                .child(icon("folder-down", theme::text())),
         )
         .child(separator())
         .child(
@@ -842,7 +848,7 @@ pub fn shortcut_help(
             &[
                 "Ctrl+C: copy animation · Ctrl+Shift+C: extract text",
                 "Ctrl+S: save to recordings folder",
-                "Ctrl+Shift+S: save a new copy",
+                "Ctrl+Shift+S: save as…",
                 "Ctrl+W / Ctrl+Q: close (a running export finishes)",
             ],
         )
@@ -867,7 +873,7 @@ pub fn shortcut_help(
             ],
             &[
                 "Ctrl+C: copy image · Ctrl+Shift+C: extract text",
-                "Ctrl+S: save · Ctrl+Shift+S: save new copy",
+                "Ctrl+S: save · Ctrl+Shift+S: save as…",
                 "Ctrl+W / Ctrl+Q: close editor",
             ],
         )
