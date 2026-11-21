@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 — 2026-11-21
+
+### Editors
+
+- Save as (`Ctrl+Shift+S`, or the folder button beside **Save**) in the
+  annotator and the video editor: the system save dialog picks the folder
+  and file name, and the name's extension picks the format. Later `Ctrl+S`
+  saves update that file. The dialog opens in the folder chosen last. In
+  the annotator `Ctrl+Shift+S` used to save a new copy; Save as with the
+  suggested name does the same.
+
 ## 0.3.1 — 2026-11-20
 
 ### Packaging
